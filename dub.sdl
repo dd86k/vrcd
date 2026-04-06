@@ -1,0 +1,8 @@
+name "vrcd"
+description "VR Utility"
+authors "dd86k <dd@dax.moe>"
+copyright "Copyright © 2026, dd86k <dd@dax.moe>"
+license "BSD-3-Clause"
+
+subPackage "server"
+subPackage "client"

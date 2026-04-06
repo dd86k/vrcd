@@ -1,0 +1,12 @@
+name "client"
+targetType "executable"
+description "vrcd client - VRChat event viewer and log watcher"
+authors "dd86k <dd@dax.moe>"
+copyright "Copyright © 2026, dd86k <dd@dax.moe>"
+license "BSD-3-Clause"
+
+dependency "ddlogger" repository="git+https://github.com/dd86k/ddlogger.git" version="4ec9bc06bb90c4a7844f62fcfc1429bc7cdb1378"
+dependency "bindbc-sdl" version="~>1.5.2"
+dependency "ddui" repository="git+https://github.com/dd86k/ddui.git" version="22ee5e52c0f34c0bccb6da4aee819b63f8c43946"
+
+versions "SDL" "SDL_2022" "SDL_TTF_2012"
