@@ -1067,6 +1067,39 @@ private void drawSettingsTab(mu_Context* ctx, AppState* state, int scrollDelta)
     if (mu_button(ctx, "Save Settings"))
         state.saveSettingsRequested = true;
 
+    // About this project.
+    sectionHeader(ctx, "About");
+
+    mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
+    mu_label(ctx, "Version");
+    mu_label(ctx, "0.0.0");
+
+    mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
+    mu_label(ctx, "Built");
+    mu_label(ctx, __TIMESTAMP__);
+
+    mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
+    mu_label(ctx, "Author");
+    mu_label(ctx, "dd86k <dd@dax.moe>");
+
+    mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
+    mu_label(ctx, "License");
+    mu_label(ctx, "BSD-3-Clause-Clear");
+
+    mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
+    mu_label(ctx, "Source");
+    mu_label(ctx, "https://github.com/dd86k/vrcd");
+
+    import std.format : format;
+    static immutable string COMPILER = __VENDOR__~format(" %u.%u", __VERSION__ / 1000, __VERSION__ % 1000);
+    mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
+    mu_label(ctx, "Compiler");
+    mu_label(ctx, COMPILER);
+    
+    // BUG: Can't scroll to bottom, so add empty row
+    mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
+    mu_label(ctx, "");
+
     mu_end_panel(ctx);
 }
 
