@@ -565,6 +565,14 @@ private bool passesFilter(ref FeedEntry entry, string query)
         || toLower(entry.eventType).canFind(q);
 }
 
+/// Insert vertical spacing.
+private void spacer(mu_Context* ctx, int height = 20)
+{
+    static immutable int[1] fullCol = [-1];
+    mu_layout_row(ctx, 1, fullCol.ptr, height);
+    mu_layout_next(ctx);
+}
+
 /// Draw a section header: bold-ish label with a horizontal separator line underneath.
 private void sectionHeader(mu_Context* ctx, string label)
 {
@@ -988,6 +996,7 @@ private void drawSettingsTab(mu_Context* ctx, AppState* state, int scrollDelta)
         state.reconnectRequested = true;
 
     // Section: Font settings.
+    spacer(ctx);
     sectionHeader(ctx, "Font");
 
     mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
@@ -1003,6 +1012,7 @@ private void drawSettingsTab(mu_Context* ctx, AppState* state, int scrollDelta)
         state.fontReloadRequested = true;
 
     // Section: Feed settings.
+    spacer(ctx);
     sectionHeader(ctx, "Feed");
 
     mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
@@ -1010,6 +1020,7 @@ private void drawSettingsTab(mu_Context* ctx, AppState* state, int scrollDelta)
     mu_slider_ex(ctx, &state.feedPageSize, 10.0f, 100.0f, 5.0f, "%.0f", MU_OPT_ALIGNCENTER);
 
     // Section: VR notifications.
+    spacer(ctx);
     sectionHeader(ctx, "VR Notifications");
 
     mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
@@ -1051,6 +1062,7 @@ private void drawSettingsTab(mu_Context* ctx, AppState* state, int scrollDelta)
         state.testNotifyRequested = true;
 
     // Per-event-type notification filter.
+    spacer(ctx);
     sectionHeader(ctx, "Notify Events");
 
     foreach (size_t i; 0 .. notifyEventLabels.length)
@@ -1061,6 +1073,7 @@ private void drawSettingsTab(mu_Context* ctx, AppState* state, int scrollDelta)
     }
 
     // Save / load settings.
+    spacer(ctx);
     sectionHeader(ctx, "Persistence");
 
     mu_layout_row(ctx, 1, fullCol.ptr, 60);
@@ -1068,6 +1081,7 @@ private void drawSettingsTab(mu_Context* ctx, AppState* state, int scrollDelta)
         state.saveSettingsRequested = true;
 
     // About this project.
+    spacer(ctx);
     sectionHeader(ctx, "About");
 
     mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
