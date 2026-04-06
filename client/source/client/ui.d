@@ -1072,7 +1072,8 @@ private void drawSettingsTab(mu_Context* ctx, AppState* state, int scrollDelta)
 
     mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
     mu_label(ctx, "Version");
-    mu_label(ctx, "0.0.0");
+    enum APP_VERSION = import("VERSION");
+    mu_label(ctx, APP_VERSION);
 
     mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
     mu_label(ctx, "Built");
@@ -1132,12 +1133,12 @@ private void drawStatusBar(mu_Context* ctx, AppState* state)
     mu_Rect r = mu_layout_next(ctx);
     mu_draw_rect(ctx, r, mu_Color(20, 20, 25, 255));
 
-    char[256] buf;
+    char[256] buf = void;
     int len = snprintf(buf.ptr, buf.length, "  Server: %.*s | VRChat: %.*s",
         cast(int) state.serverStatus.length, state.serverStatus.ptr,
         cast(int) state.vrchatStatus.length, state.vrchatStatus.ptr);
     if (len > 0)
-        mu_draw_control_text(ctx, buf.ptr, r, MU_COLOR_TEXT, 0);
+        mu_draw_control_text(ctx, buf.ptr, r, MU_COLOR_TEXT, 0, len);
 }
 
 /// Apply mouse wheel scroll delta to the current panel container.

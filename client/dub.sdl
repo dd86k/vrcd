@@ -9,4 +9,5 @@ dependency "ddlogger" repository="git+https://github.com/dd86k/ddlogger.git" ver
 dependency "bindbc-sdl" version="~>1.5.2"
 dependency "ddui" repository="git+https://github.com/dd86k/ddui.git" version="22ee5e52c0f34c0bccb6da4aee819b63f8c43946"
 
+stringImportPaths ".."
 versions "SDL" "SDL_2022" "SDL_TTF_2012"
