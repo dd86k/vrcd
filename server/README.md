@@ -12,6 +12,7 @@ vrcd-server [command] [options]
     events    Print recent stored events
 
   Options:
+    -b, --basedir   Base directory for all config/data files
     -c, --config    Path to config file
     -d, --db        Path to SQLite database
     -l, --listen    Listen address (host:port, default: 127.0.0.1:9700)
@@ -24,6 +25,42 @@ vrcd-server [command] [options]
 Config/data paths default to:
 - **Linux:** `~/.config/vrcd` (config), `~/.local/share/vrcd` (data)
 - **Windows:** `%APPDATA%/vrcd`
+
+## Configuration
+
+Configuration is currently set via CLI arguments only. The `--config` flag is accepted but file-based config loading is not yet implemented.
+
+Use `--basedir <path>` to put all files in a single directory (e.g. `--basedir /srv/vrcd`). Individual path flags (`--db`, `--auth`, etc.) override `--basedir` when both are given.
+
+Default paths:
+
+| File | Linux | Windows |
+|------|-------|---------|
+| Config | `~/.config/vrcd/server.conf` | `%APPDATA%/vrcd/server.conf` |
+| Database | `~/.local/share/vrcd/server.db` | `%APPDATA%/vrcd/server.db` |
+| Credentials | `~/.config/vrcd/credentials.json` | `%APPDATA%/vrcd/credentials.json` |
+| Cookie jar | `~/.local/share/vrcd/cookies.txt` | `%APPDATA%/vrcd/cookies.txt` |
+
+### Credentials file (`credentials.json`)
+
+Created automatically during interactive login (`vrcd-server auth`), or can be written manually:
+
+```json
+{
+    "username": "your-vrchat-username",
+    "password": "your-vrchat-password"
+}
+```
+
+If the file doesn't exist, the server will prompt for credentials interactively and save them. The server also persists session cookies in `cookies.txt` so re-authentication is only needed when the session expires.
+
+### Auth flow
+
+1. If `cookies.txt` has a valid session, skip login entirely
+2. Otherwise read `credentials.json` (or prompt interactively)
+3. Login via VRChat Basic Auth
+4. Handle 2FA if required (TOTP, OTP, or email — prompted interactively)
+5. Fetch WebSocket auth token
 
 ## Architecture
 

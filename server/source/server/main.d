@@ -141,6 +141,9 @@ int main(string[] args)
 
     GetoptResult opts = void;
     try opts = getopt(args,
+        "basedir|b", "Base directory for all config/data files", (string _, string val) {
+            config.setBaseDir(val);
+        },
         "config|c", "Path to config file", &config.configPath,
         "db|d",     "Path to SQLite database", &config.dbPath,
         "listen|l", "Listen address (host:port)", (string _, string val) {

@@ -37,11 +37,20 @@ struct Config
             string configHome   = expandTilde("~/.config/vrcd");
             c.configPath        = buildPath(configHome, "server.conf");
             c.credentialsPath   = buildPath(configHome, "credentials.json");
-            
+
             string dataHome     = expandTilde("~/.local/share/vrcd");
             c.dbPath            = buildPath(dataHome, "server.db");
             c.cookieJarPath     = buildPath(dataHome, "cookies.txt");
         }
         return c;
+    }
+
+    /// Override all paths to use the given base directory.
+    void setBaseDir(string base)
+    {
+        configPath    = buildPath(base, "server.conf");
+        dbPath        = buildPath(base, "server.db");
+        credentialsPath = buildPath(base, "credentials.json");
+        cookieJarPath = buildPath(base, "cookies.txt");
     }
 }
