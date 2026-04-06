@@ -28,9 +28,9 @@ Config/data paths default to:
 
 ## Configuration
 
-Configuration is currently set via CLI arguments only. The `--config` flag is accepted but file-based config loading is not yet implemented.
-
 Use `--basedir <path>` to put all files in a single directory (e.g. `--basedir /srv/vrcd`). Individual path flags (`--db`, `--auth`, etc.) override `--basedir` when both are given.
+
+The config file is loaded from the default path (or the path given by `--config`). CLI arguments take precedence over config file values.
 
 Default paths:
 
@@ -40,6 +40,36 @@ Default paths:
 | Database | `~/.local/share/vrcd/server.db` | `%APPDATA%/vrcd/server.db` |
 | Credentials | `~/.config/vrcd/credentials.json` | `%APPDATA%/vrcd/credentials.json` |
 | Cookie jar | `~/.local/share/vrcd/cookies.txt` | `%APPDATA%/vrcd/cookies.txt` |
+
+### Config file (`server.conf`)
+
+Simple `key = value` format. Lines starting with `#` are comments.
+
+```conf
+# vrcd server configuration
+
+# Base directory for all data files (db, credentials, cookies).
+# Individual keys below override specific paths.
+# basedir = /srv/vrcd
+
+# SQLite database path
+# db = /srv/vrcd/server.db
+
+# Listen address and port
+listen = 0.0.0.0:9700
+
+# Shared secret for client authentication (empty = no auth)
+secret = changeme
+
+# Path to credentials.json
+# auth = /srv/vrcd/credentials.json
+
+# Path to cookie jar
+# cookie_jar = /srv/vrcd/cookies.txt
+
+# Enable verbose logging
+# verbose = true
+```
 
 ### Credentials file (`credentials.json`)
 

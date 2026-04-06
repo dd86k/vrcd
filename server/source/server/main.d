@@ -138,28 +138,37 @@ void cliVersion()
 int main(string[] args)
 {
     Config config = Config.defaults();
+    uint cliSet; // Bitmask of fields explicitly set by CLI.
 
     GetoptResult opts = void;
     try opts = getopt(args,
         "basedir|b", "Base directory for all config/data files", (string _, string val) {
             config.setBaseDir(val);
+            cliSet |= Config.SET_DB | Config.SET_AUTH | Config.SET_COOKIE_JAR;
         },
-        "config|c", "Path to config file", &config.configPath,
-        "db|d",     "Path to SQLite database", &config.dbPath,
+        "config|c", "Path to config file", (string _, string val) {
+            config.configPath = val;
+        },
+        "db|d",     "Path to SQLite database", (string _, string val) {
+            config.dbPath = val;
+            cliSet |= Config.SET_DB;
+        },
         "listen|l", "Listen address (host:port)", (string _, string val) {
-            import std.string : lastIndexOf;
-            ptrdiff_t sep = val.lastIndexOf(':');
-            if (sep > 0)
-            {
-                config.listenAddr = val[0 .. sep];
-                import std.conv : to;
-                config.listenPort = val[sep + 1 .. $].to!ushort;
-            }
-            // TODO: should we take hostname as-is otherwise? or throw?
+            config.parseListen(val);
+            cliSet |= Config.SET_LISTEN;
         },
-        "secret",   "Shared secret for client auth", &config.apiSecret,
-        "auth|a",   "Path to credentials file", &config.credentialsPath,
-        "verbose|v","Enable verbose logging", &config.verbose,
+        "secret",   "Shared secret for client auth", (string _, string val) {
+            config.apiSecret = val;
+            cliSet |= Config.SET_SECRET;
+        },
+        "auth|a",   "Path to credentials file", (string _, string val) {
+            config.credentialsPath = val;
+            cliSet |= Config.SET_AUTH;
+        },
+        "verbose|v","Enable verbose logging", () {
+            config.verbose = true;
+            cliSet |= Config.SET_VERBOSE;
+        },
         "version",  "Show version page and exit", &cliVersion,
     );
     catch (Exception ex)
@@ -167,6 +176,10 @@ int main(string[] args)
         stderr.writeln("error: ", ex.msg);
         return 1;
     }
+
+    // Load config file after CLI so we can use --config to set the path.
+    // Fields explicitly set on CLI are preserved; file fills in the rest.
+    config.loadFromFile(config.configPath, cliSet);
 
     if (opts.helpWanted)
     {
