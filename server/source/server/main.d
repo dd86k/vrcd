@@ -120,11 +120,11 @@ void cliVersion()
     import core.stdc.stdlib : exit;
     static immutable string BUILT       = "Built: " ~ __TIMESTAMP__;
     static immutable string COMPILER    = __VENDOR__ ~ " " ~ DVER!__VERSION__;
-    printline("vrcd-server", "0.0.0");
+    printline("vrcd-server",     "0.0.0");
     printline(null,             BUILT);
-    printline("License",        "TBD");
-    printline(null,             "No rights reserved");
-    printline("Homepage",       "TBD");
+    printline("License",        "BSD-3-Clause-Clear");
+    printline(null,             "Copyright 2026 (c) dd86k <dd@dax.moe>");
+    printline("Homepage",       "https://github.com/dd86k/vrcd");
     printline("Compiler",       COMPILER);
     
     import ddcurl.libcurl : curlVersion;
