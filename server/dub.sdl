@@ -1,9 +1,9 @@
 name "server"
 targetType "executable"
-description "vrcd server - VRChat event recorder and broadcaster"
+description "VRChat event recorder and broadcaster"
 authors "dd86k <dd@dax.moe>"
 copyright "Copyright © 2026, dd86k <dd@dax.moe>"
-license "BSD-3-Clause"
+license "BSD-3-Clause-Clear"
 
 dependency "ddlogger" repository="git+https://github.com/dd86k/ddlogger.git" version="4ec9bc06bb90c4a7844f62fcfc1429bc7cdb1378"
 dependency "ddcurl" repository="git+https://github.com/dd86k/ddcurl.git" version="5979cdc381306aa110dc572441ddc8d06b129b01"

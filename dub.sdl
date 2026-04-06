@@ -1,8 +1,8 @@
 name "vrcd"
-description "VR Utility"
+description "VRChat companion suite"
 authors "dd86k <dd@dax.moe>"
 copyright "Copyright © 2026, dd86k <dd@dax.moe>"
-license "BSD-3-Clause"
+license "BSD-3-Clause-Clear"
 
 subPackage "server"
 subPackage "client"
