@@ -82,14 +82,22 @@ struct InstanceGroup
     FriendInfo[] friends;
 }
 
+/// A pending notification action to send to the server.
+struct NotificationAction
+{
+    string notificationId; // VRChat notification ID (not_...)
+    string action;         // "accept" or "hide"
+}
+
 /// A notification entry (friend request, invite, etc.).
 struct NotificationEntry
 {
-    long id;
-    string notificationType;
+    string notificationId;   // VRChat "not_..." ID
+    string notificationType; // "friendRequest", "invite", "requestInvite"
     string senderName;
     string message;
     string receivedAt;
+    bool actionPending;      // true while waiting for server response
 }
 
 /// Application state read by the UI, written only by the main thread.
@@ -129,6 +137,7 @@ struct AppState
 
     // Notifications tab
     NotificationEntry[] notifications;
+    NotificationAction[] pendingActions;
 
     // Current VRChat instance (from local log watcher).
     string currentLocation; // e.g. "wrld_xxx:12345~region(us)"
@@ -156,5 +165,32 @@ struct AppState
         if (feedEntries.length >= 500)
             feedEntries = feedEntries[0 .. 499];
         feedEntries = FeedEntry(id, eventType, user, detail, receivedAt, rawContent) ~ feedEntries;
+    }
+
+    /// Add a notification, deduplicating by notificationId.
+    void addNotification(string notificationId, string notificationType,
+        string senderName, string message, string receivedAt)
+    {
+        // Deduplicate.
+        foreach (ref NotificationEntry n; notifications)
+        {
+            if (n.notificationId == notificationId)
+                return;
+        }
+        // Prepend (newest first).
+        notifications = NotificationEntry(notificationId, notificationType,
+            senderName, message, receivedAt) ~ notifications;
+    }
+
+    /// Remove a notification by its VRChat ID.
+    void removeNotification(string notificationId)
+    {
+        NotificationEntry[] kept;
+        foreach (ref NotificationEntry n; notifications)
+        {
+            if (n.notificationId != notificationId)
+                kept ~= n;
+        }
+        notifications = kept;
     }
 }

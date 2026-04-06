@@ -119,6 +119,16 @@ class ServerConnection
         ]));
     }
 
+    /// Send a notification action (accept/hide) to the server.
+    void sendNotificationAction(string notificationId, string action)
+    {
+        sendMessage(JSONValue([
+            "type": JSONValue("notification_action"),
+            "notification_id": JSONValue(notificationId),
+            "action": JSONValue(action),
+        ]));
+    }
+
     /// Read and dispatch messages until the connection closes.
     /// This blocks the calling thread.
     void run()

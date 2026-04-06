@@ -46,6 +46,7 @@ void cmdRun(ref Config config)
     // World name cache for resolving world IDs via VRChat API.
     WorldCache worldCache = new WorldCache(client);
     apiServer.setWorldCache(worldCache);
+    apiServer.setHTTPClient(client);
 
     // Start WebSocket event listener.
     VRCWebSocket vrcws = new VRCWebSocket(authState.authToken,

@@ -14,6 +14,7 @@ import std.socket;
 import std.string : strip;
 
 import ddlogger;
+import ddcurl;
 
 import server.events;
 import server.friends;
@@ -35,6 +36,8 @@ class APIServer
     private string vrchatLastError;
     private FriendsTracker friendsTracker;
     private WorldCache worldCache;
+    private HTTPClient httpClient;
+    private Mutex apiMutex; // Serializes VRChat API calls
 
     this(string bindAddr, ushort port, string sharedSecret, EventStore store)
     {
@@ -56,6 +59,13 @@ class APIServer
     void setWorldCache(WorldCache wc)
     {
         worldCache = wc;
+    }
+
+    /// Set the HTTP client for proxying VRChat API calls.
+    void setHTTPClient(HTTPClient client)
+    {
+        httpClient = client;
+        apiMutex = new Mutex();
     }
 
     /// Update VRChat connection status and broadcast to all clients.
@@ -294,6 +304,14 @@ private class ClientHandler
                     }
                     handleGetWorld(msg);
                     break;
+                case "notification_action":
+                    if (!authenticated)
+                    {
+                        sendError("Not authenticated");
+                        return;
+                    }
+                    handleNotificationAction(msg);
+                    break;
                 case "pong":
                     break; // Keepalive response, no action.
                 default:
@@ -389,6 +407,70 @@ private class ClientHandler
             "world_name": JSONValue(worldName),
         ]);
         sendLine(resp.toString() ~ "\n");
+    }
+
+    void handleNotificationAction(JSONValue msg)
+    {
+        string notifId = jsonStr(msg, "notification_id");
+        string action = jsonStr(msg, "action");
+
+        if (notifId.length == 0 || action.length == 0)
+        {
+            sendError("Missing notification_id or action");
+            return;
+        }
+
+        if (server.httpClient is null || server.apiMutex is null)
+        {
+            sendError("Server HTTP client not configured");
+            return;
+        }
+
+        // Map action to VRChat API endpoint.
+        string path;
+        switch (action)
+        {
+            case "accept":
+                path = "/auth/user/notifications/" ~ notifId ~ "/accept";
+                break;
+            case "hide":
+                path = "/auth/user/notifications/" ~ notifId ~ "/hide";
+                break;
+            default:
+                sendError("Unknown action: " ~ action);
+                return;
+        }
+
+        // Call VRChat API (serialized via mutex).
+        server.apiMutex.lock();
+        scope(exit) server.apiMutex.unlock();
+
+        try
+        {
+            HTTPResponse resp = server.httpClient.put(path);
+            bool success = resp.code >= 200 && resp.code < 300;
+
+            JSONValue result = JSONValue([
+                "type": JSONValue("notification_action_result"),
+                "notification_id": JSONValue(notifId),
+                "action": JSONValue(action),
+                "success": JSONValue(success),
+            ]);
+            if (success == false)
+                result["error"] = JSONValue("HTTP " ~ resp.code.to!string);
+            sendLine(result.toString() ~ "\n");
+        }
+        catch (Exception e)
+        {
+            JSONValue result = JSONValue([
+                "type": JSONValue("notification_action_result"),
+                "notification_id": JSONValue(notifId),
+                "action": JSONValue(action),
+                "success": JSONValue(false),
+            ]);
+            result["error"] = JSONValue(e.msg);
+            sendLine(result.toString() ~ "\n");
+        }
     }
 
     void sendError(string message)

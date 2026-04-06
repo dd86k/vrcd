@@ -765,24 +765,14 @@ private void drawFriendProfile(mu_Context* ctx, AppState* state, int scrollDelta
 /// Notifications tab: friend requests, invites, etc.
 private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDelta)
 {
-    static immutable int[4] notifCols = [150, 120, 150, -1];
+    static immutable int[4] infoCols = [120, 150, -1, 100];
+    static immutable int[2] btnCols = [100, 100];
     static immutable int[1] fullCol = [-1];
     enum lineColor = mu_Color(50, 50, 60, 255);
 
     mu_begin_panel(ctx, "NotificationsPanel");
 
     applyScroll(ctx, scrollDelta);
-
-    // Column header.
-    mu_layout_row(ctx, 4, notifCols.ptr, 0);
-    gridCell(ctx, "Date", lineColor);
-    gridCell(ctx, "Type", lineColor);
-    gridCell(ctx, "From", lineColor);
-    gridCell(ctx, "Message", lineColor, true);
-
-    // Horizontal separator under header.
-    mu_layout_row(ctx, 1, fullCol.ptr, 1);
-    mu_draw_rect(ctx, mu_layout_next(ctx), lineColor);
 
     if (state.notifications.length == 0)
     {
@@ -793,11 +783,33 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
     {
         foreach (ref NotificationEntry n; state.notifications)
         {
-            mu_layout_row(ctx, 4, notifCols.ptr, 0);
-            gridCell(ctx, n.receivedAt, lineColor);
-            gridCell(ctx, n.notificationType, lineColor);
+            // Info row: Type | From | Message | Date
+            mu_layout_row(ctx, 4, infoCols.ptr, 0);
+            gridCell(ctx, prettyNotifType(n.notificationType), lineColor);
             gridCell(ctx, n.senderName, lineColor);
-            gridCell(ctx, n.message, lineColor, true);
+            gridCell(ctx, n.message, lineColor);
+            gridCell(ctx, n.receivedAt, lineColor, true);
+
+            // Action row.
+            if (n.actionPending)
+            {
+                mu_layout_row(ctx, 1, fullCol.ptr, 30);
+                mu_label(ctx, "Pending...");
+            }
+            else
+            {
+                mu_layout_row(ctx, 2, btnCols.ptr, 30);
+                if (mu_button(ctx, "Accept"))
+                {
+                    n.actionPending = true;
+                    state.pendingActions ~= NotificationAction(n.notificationId, "accept");
+                }
+                if (mu_button(ctx, "Deny"))
+                {
+                    n.actionPending = true;
+                    state.pendingActions ~= NotificationAction(n.notificationId, "hide");
+                }
+            }
 
             // Row separator.
             mu_layout_row(ctx, 1, fullCol.ptr, 1);
@@ -806,6 +818,18 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
     }
 
     mu_end_panel(ctx);
+}
+
+/// Map notification type to display name.
+private string prettyNotifType(string notifType)
+{
+    switch (notifType)
+    {
+        case "friendRequest":  return "Friend Request";
+        case "invite":         return "Invite";
+        case "requestInvite":  return "Request Invite";
+        default:               return notifType;
+    }
 }
 
 /// Tools tab: utility buttons.

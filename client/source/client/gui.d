@@ -421,6 +421,17 @@ int runGui(string host, ushort port, string secret, long sinceId,
                 logError("Failed to load font");
         }
 
+        // Drain pending notification actions.
+        if (appState.pendingActions.length > 0)
+        {
+            if (conn !is null && appState.connected)
+            {
+                foreach (ref NotificationAction act; appState.pendingActions)
+                    conn.sendNotificationAction(act.notificationId, act.action);
+            }
+            appState.pendingActions.length = 0;
+        }
+
         // Handle test notification request from Settings tab.
         if (appState.testNotifyRequested)
         {
@@ -514,6 +525,9 @@ private void drainNetworkMessages()
                     appState.addFeedEntry(id, prettyEventType(eventType), user, detail, receivedAt, rawContent);
                     dispatchNotification(eventType, user, detail, saved);
 
+                    // Store actionable notifications.
+                    storeNotification(eventType, msg, user, receivedAt);
+
                     // Detect "player joining" from friend-location events:
                     // when a friend's location is "traveling" and their
                     // travelingToLocation matches our current instance.
@@ -566,6 +580,27 @@ private void drainNetworkMessages()
                         string logUser = jsonStr(msg, "display_name");
                         appState.addFeedEntry(0, prettyEventType(logEventType), logUser, "", "");
                         dispatchNotification(logEventType, logUser, "", saved);
+                    }
+                    break;
+
+                case "notification_action_result":
+                    string notifId = jsonStr(msg, "notification_id");
+                    bool success = "success" in msg && msg["success"].type == JSONType.true_;
+                    if (success)
+                    {
+                        appState.removeNotification(notifId);
+                    }
+                    else
+                    {
+                        // Re-enable buttons on failure.
+                        foreach (ref NotificationEntry n; appState.notifications)
+                        {
+                            if (n.notificationId == notifId)
+                                n.actionPending = false;
+                        }
+                        string errMsg = jsonStr(msg, "error");
+                        appState.addFeedEntry(0, "error", "",
+                            "Notification action failed: " ~ errMsg, "");
                     }
                     break;
 
@@ -805,6 +840,106 @@ private string prettyNotifType(string notifType)
         case "friendRequest":       return "Friend Request";
         case "votetokick":          return "Vote to Kick";
         default:                    return notifType;
+    }
+}
+
+/// Actionable notification types that get stored in the notifications tab.
+private immutable string[] actionableNotifTypes = [
+    "friendRequest", "invite", "requestInvite",
+];
+
+/// Store an actionable notification or remove on delete/hide events.
+private void storeNotification(string eventType, JSONValue msg, string user, string receivedAt)
+{
+    if ("content" !in msg)
+        return;
+
+    try
+    {
+        switch (eventType)
+        {
+            case "notification":
+            case "notification-v2":
+                JSONValue c = msg["content"];
+                if (c.type == JSONType.string)
+                    c = parseJSON(c.str);
+
+                string notifId = jsonStr(c, "id");
+                string notifType = jsonStr(c, "type");
+                if (notifId.length == 0 || notifType.length == 0)
+                    return;
+
+                // Only store actionable types.
+                bool actionable;
+                foreach (string t; actionableNotifTypes)
+                {
+                    if (t == notifType)
+                    {
+                        actionable = true;
+                        break;
+                    }
+                }
+                if (actionable == false)
+                    return;
+
+                string sender = jsonStr(c, "senderUsername");
+                if (sender.length == 0)
+                    sender = user;
+
+                // Build a message from available details.
+                string notifMessage = jsonStr(c, "message");
+                if (notifMessage.length == 0)
+                {
+                    if ("details" in c && c["details"].type == JSONType.object)
+                    {
+                        JSONValue details = c["details"];
+                        string worldName = jsonStr(details, "worldName");
+                        if (worldName.length > 0)
+                            notifMessage = worldName;
+                    }
+                }
+
+                appState.addNotification(notifId, notifType, sender, notifMessage, receivedAt);
+                return;
+
+            case "notification-v2-delete":
+                JSONValue dc = msg["content"];
+                if (dc.type == JSONType.string)
+                    dc = parseJSON(dc.str);
+                if ("ids" in dc && dc["ids"].type == JSONType.array)
+                {
+                    foreach (JSONValue idVal; dc["ids"].array)
+                    {
+                        if (idVal.type == JSONType.string)
+                            appState.removeNotification(idVal.str);
+                    }
+                }
+                return;
+
+            case "hide-notification":
+            case "see-notification":
+                // Content is a plain string (notification ID).
+                JSONValue hc = msg["content"];
+                if (hc.type == JSONType.string)
+                    appState.removeNotification(hc.str);
+                return;
+
+            case "response-notification":
+                JSONValue rc = msg["content"];
+                if (rc.type == JSONType.string)
+                    rc = parseJSON(rc.str);
+                string respId = jsonStr(rc, "notificationId");
+                if (respId.length > 0)
+                    appState.removeNotification(respId);
+                return;
+
+            default:
+                return;
+        }
+    }
+    catch (Exception e)
+    {
+        logError("Failed to store notification: %s", e.msg);
     }
 }
 
