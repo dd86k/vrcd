@@ -251,6 +251,10 @@ These are pulled by DUB when upgrading and building.
 | `ddcurl` | HTTP client and WebSocket (libcurl wrapper) |
 | `arsd-official:sqlite` | SQLite database access |
 
+Packages:
+- Alpine: `sqlite-dev libcurl-dev`
+- Ubuntu: `libsqlite3-dev libcurl4-openssl-dev` (or build libcurl if <8.11)
+
 ## Building
 
 ```bash
