@@ -89,7 +89,7 @@ If the file doesn't exist, the server will prompt for credentials interactively 
 1. If `cookies.txt` has a valid session, skip login entirely
 2. Otherwise read `credentials.json` (or prompt interactively)
 3. Login via VRChat Basic Auth
-4. Handle 2FA if required (TOTP, OTP, or email — prompted interactively)
+4. Handle 2FA if required (TOTP, OTP, or email — interactive when on a TTY, delegated to a connected client when headless)
 5. Fetch WebSocket auth token
 
 ## Architecture
@@ -229,6 +229,7 @@ VRChat authentication and session management.
 - Full login flow: credentials -> Basic Auth -> 2FA (TOTP/OTP/email) -> session token
 - Cookie jar persistence for session reuse
 - Credential file read/write for unattended operation
+- Headless 2FA delegation: when running without a TTY, 2FA prompts are sent to a connected client; times out after 30 minutes then exits
 
 ### `vrchat/websocket.d`
 Persistent WebSocket connection to `wss://pipeline.vrchat.cloud`.
@@ -261,6 +262,8 @@ Packages:
 dub build :server
 dub test :server
 ```
+
+> **Note:** If you get linking issues on Windows, try with LDC: `--compiler=ldc2`
 
 Requires libcurl 8.11+ for WebSocket support.
 

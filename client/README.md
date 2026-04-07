@@ -141,4 +141,6 @@ dub build :client
 dub test :client
 ```
 
+> **Note:** If you get linking issues on Windows, try with LDC: `--compiler=ldc2`
+
 Requires SDL2 and SDL2_ttf runtime libraries.
