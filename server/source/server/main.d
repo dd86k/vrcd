@@ -183,6 +183,7 @@ int main(string[] args)
 {
     Config config = Config.defaults();
     uint cliSet; // Bitmask of fields explicitly set by CLI.
+    bool helpConfig;
 
     GetoptResult opts = void;
     try opts = getopt(args,
@@ -214,6 +215,7 @@ int main(string[] args)
             cliSet |= Config.SET_VERBOSE;
         },
         "version",  "Show version page and exit", &cliVersion,
+        "help-config", "Show effective config paths and exit", &helpConfig,
     );
     catch (Exception ex)
     {
@@ -240,6 +242,21 @@ int main(string[] args)
             "Options:",
             opts.options,
         );
+        return 0;
+    }
+
+    if (helpConfig)
+    {
+        import std.file : exists;
+        import std.conv : to;
+        printline("Config file", config.configPath ~
+            (exists(config.configPath) ? " (loaded)" : " (not found)"));
+        printline("Database", config.dbPath);
+        printline("Credentials", config.credentialsPath);
+        printline("Cookie jar", config.cookieJarPath);
+        printline("Listen", config.listenAddr ~ ":" ~ to!string(config.listenPort));
+        printline("Secret", config.apiSecret.length > 0 ? "(set)" : "(not set)");
+        printline("Verbose", config.verbose ? "true" : "false");
         return 0;
     }
 
