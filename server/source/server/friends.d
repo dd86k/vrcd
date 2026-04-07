@@ -35,18 +35,26 @@ class FriendsTracker
     {
         foreach (ref JSONValue f; friendObjects)
         {
-            string userId = jsonStr(f, "id");
+            string userId;
+            if (const(JSONValue)* v = "id" in f)
+                userId = v.str;
             if (userId.length == 0)
                 continue;
 
             FriendState state;
             state.userId = userId;
-            state.displayName = jsonStr(f, "displayName");
-            state.status = jsonStr(f, "status");
-            state.statusDescription = jsonStr(f, "statusDescription");
-            string rawLoc = jsonStr(f, "location");
+            if (const(JSONValue)* v = "displayName" in f)
+                state.displayName = v.str;
+            if (const(JSONValue)* v = "status" in f)
+                state.status = v.str;
+            if (const(JSONValue)* v = "statusDescription" in f)
+                state.statusDescription = v.str;
+            string rawLoc;
+            if (const(JSONValue)* v = "location" in f)
+                rawLoc = v.str;
             state.location = rawLoc == "offline:offline" ? "offline" : rawLoc;
-            state.platform = jsonStr(f, "platform");
+            if (const(JSONValue)* v = "platform" in f)
+                state.platform = v.str;
 
             // Determine online state from location/status.
             string loc = state.location;
@@ -54,7 +62,8 @@ class FriendsTracker
 
             // Extract world name if the API included it (it usually doesn't
             // in the friends list, but location is enough for grouping).
-            state.worldName = jsonStr(f, "worldName");
+            if (const(JSONValue)* v = "worldName" in f)
+                state.worldName = v.str;
 
             friends[userId] = state;
         }
@@ -158,11 +167,11 @@ class FriendsTracker
             return;
 
         // Add displayName if missing.
-        if (jsonStr(event.content, "displayName").length == 0 && f.displayName.length > 0)
+        if ("displayName" !in event.content && f.displayName.length > 0)
             event.content["displayName"] = JSONValue(f.displayName);
 
         // Add platform if missing.
-        if (jsonStr(event.content, "platform").length == 0 && f.platform.length > 0)
+        if ("platform" !in event.content && f.platform.length > 0)
             event.content["platform"] = JSONValue(f.platform);
     }
 
@@ -176,11 +185,14 @@ private:
         FriendState* f = getOrCreate(userId);
         f.online = true;
         f.displayName = extractDisplayName(c, f.displayName);
-        f.platform = jsonStr(c, "platform");
+        if (const(JSONValue)* v = "platform" in c)
+            f.platform = v.str;
 
-        string loc = jsonStr(c, "location");
-        if (loc.length > 0)
-            f.location = loc;
+        if (const(JSONValue)* v = "location" in c)
+        {
+            if (v.str.length > 0)
+                f.location = v.str;
+        }
 
         string worldName = extractWorldName(c);
         if (worldName.length > 0)
@@ -212,7 +224,8 @@ private:
         FriendState* f = getOrCreate(userId);
         f.online = true;
         f.displayName = extractDisplayName(c, f.displayName);
-        f.platform = jsonStr(c, "platform");
+        if (const(JSONValue)* v = "platform" in c)
+            f.platform = v.str;
         // friend-active means on the website, no world location.
         f.location = "private";
         f.worldName = "";
@@ -228,7 +241,9 @@ private:
         FriendState* f = getOrCreate(userId);
         f.displayName = extractDisplayName(c, f.displayName);
 
-        string loc = jsonStr(c, "location");
+        string loc;
+        if (const(JSONValue)* v = "location" in c)
+            loc = v.str;
         if (loc.length > 0)
         {
             f.location = loc;
@@ -253,13 +268,13 @@ private:
         FriendState* f = getOrCreate(userId);
         f.displayName = extractDisplayName(c, f.displayName);
 
-        string status = jsonStr(c, "status");
-        if (status.length > 0)
-            f.status = status;
+        if (const(JSONValue)* v = "status" in c)
+            if (v.str.length > 0)
+                f.status = v.str;
 
-        string statusDesc = jsonStr(c, "statusDescription");
-        if (statusDesc.length > 0)
-            f.statusDescription = statusDesc;
+        if (const(JSONValue)* v = "statusDescription" in c)
+            if (v.str.length > 0)
+                f.statusDescription = v.str;
 
         return true;
     }
@@ -295,54 +310,50 @@ private:
     static string extractUserId(JSONValue c)
     {
         // Try top-level "userId" first, then nested "user.id".
-        string id = jsonStr(c, "userId");
-        if (id.length > 0)
-            return id;
+        if (const(JSONValue)* v = "userId" in c)
+            if (v.str.length > 0)
+                return v.str;
 
         // Some events put the ID at the top level as "id".
         // But only if it looks like a user ID.
-        id = jsonStr(c, "id");
-        if (id.length > 4 && id[0 .. 4] == "usr_")
-            return id;
+        if (const(JSONValue)* v = "id" in c)
+            if (v.str.length > 4 && v.str[0 .. 4] == "usr_")
+                return v.str;
 
-        if ("user" in c && c["user"].type == JSONType.object)
-            return jsonStr(c["user"], "id");
+        if (const(JSONValue)* v = "user" in c)
+            if (v.type == JSONType.object)
+                if (const(JSONValue)* uid = "id" in *v)
+                    return uid.str;
 
         return "";
     }
 
     static string extractDisplayName(JSONValue c, string fallback)
     {
-        string name = jsonStr(c, "displayName");
-        if (name.length > 0)
-            return name;
+        if (const(JSONValue)* v = "displayName" in c)
+            if (v.str.length > 0)
+                return v.str;
 
-        if ("user" in c && c["user"].type == JSONType.object)
-        {
-            name = jsonStr(c["user"], "displayName");
-            if (name.length > 0)
-                return name;
-        }
+        if (const(JSONValue)* v = "user" in c)
+            if (v.type == JSONType.object)
+                if (const(JSONValue)* dn = "displayName" in *v)
+                    if (dn.str.length > 0)
+                        return dn.str;
 
         return fallback;
     }
 
     static string extractWorldName(JSONValue c)
     {
-        string name = jsonStr(c, "worldName");
-        if (name.length > 0)
-            return name;
+        if (const(JSONValue)* v = "worldName" in c)
+            if (v.str.length > 0)
+                return v.str;
 
-        if ("world" in c && c["world"].type == JSONType.object)
-            return jsonStr(c["world"], "name");
+        if (const(JSONValue)* v = "world" in c)
+            if (v.type == JSONType.object)
+                if (const(JSONValue)* wn = "name" in *v)
+                    return wn.str;
 
         return "";
     }
-}
-
-private string jsonStr(JSONValue json, string key)
-{
-    if (key in json && json[key].type == JSONType.string)
-        return json[key].str;
-    return "";
 }

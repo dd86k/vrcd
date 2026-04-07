@@ -22,8 +22,12 @@ void cmdStream(string host, ushort port, string secret, long sinceId)
         if ("id" in event && event["id"].type == JSONType.integer)
             id = event["id"].get!long;
 
-        string eventType = jsonStr(event, "event_type");
-        string receivedAt = jsonStr(event, "received_at");
+        string eventType;
+        if (const(JSONValue)* v = "event_type" in event)
+            eventType = v.str;
+        string receivedAt;
+        if (const(JSONValue)* v = "received_at" in event)
+            receivedAt = v.str;
         string content = "";
         if ("content" in event)
             content = event["content"].toString();
@@ -113,9 +117,3 @@ int main(string[] args)
         hostExplicit, portExplicit, secretExplicit);
 }
 
-private string jsonStr(JSONValue json, string key)
-{
-    if (key in json && json[key].type == JSONType.string)
-        return json[key].str;
-    return "";
-}

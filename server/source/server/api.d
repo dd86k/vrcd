@@ -303,7 +303,9 @@ private class ClientHandler
         try
         {
             JSONValue msg = parseJSON(line);
-            string type = jsonStr(msg, "type");
+            string type;
+            if (const(JSONValue)* v = "type" in msg)
+                type = v.str;
 
             switch (type)
             {
@@ -373,7 +375,9 @@ private class ClientHandler
 
     void handleAuth(JSONValue msg)
     {
-        string token = jsonStr(msg, "token");
+        string token;
+        if (const(JSONValue)* v = "token" in msg)
+            token = v.str;
         if (server.sharedSecret.length == 0 || token == server.sharedSecret)
         {
             authenticated = true;
@@ -444,7 +448,9 @@ private class ClientHandler
 
     void handleGetWorld(JSONValue msg)
     {
-        string worldId = jsonStr(msg, "world_id");
+        string worldId;
+        if (const(JSONValue)* v = "world_id" in msg)
+            worldId = v.str;
         if (worldId.length == 0)
         {
             sendError("Missing world_id");
@@ -465,8 +471,12 @@ private class ClientHandler
 
     void handleNotificationAction(JSONValue msg)
     {
-        string notifId = jsonStr(msg, "notification_id");
-        string action = jsonStr(msg, "action");
+        string notifId;
+        if (const(JSONValue)* v = "notification_id" in msg)
+            notifId = v.str;
+        string action;
+        if (const(JSONValue)* v = "action" in msg)
+            action = v.str;
 
         if (notifId.length == 0 || action.length == 0)
         {
@@ -556,16 +566,21 @@ private class ClientHandler
             return;
         }
 
-        string kind = jsonStr(msg, "kind");
+        string kind;
+        if (const(JSONValue)* v = "kind" in msg)
+            kind = v.str;
         AuthResponse resp;
         if (kind == "credentials")
         {
-            resp.username = jsonStr(msg, "username");
-            resp.password = jsonStr(msg, "password");
+            if (const(JSONValue)* v = "username" in msg)
+                resp.username = v.str;
+            if (const(JSONValue)* v = "password" in msg)
+                resp.password = v.str;
         }
         else if (kind == "two_factor")
         {
-            resp.code = jsonStr(msg, "code");
+            if (const(JSONValue)* v = "code" in msg)
+                resp.code = v.str;
         }
         else
         {
@@ -598,12 +613,6 @@ JSONValue buildEventMessage(VRCEvent event, long eventId)
     ]);
 }
 
-private string jsonStr(JSONValue json, string key)
-{
-    if (key in json && json[key].type == JSONType.string)
-        return json[key].str;
-    return "";
-}
 
 private import std.datetime.timezone : UTC;
 private import std.datetime.systime : SysTime;

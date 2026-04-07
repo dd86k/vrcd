@@ -558,17 +558,24 @@ private void drainNetworkMessages()
         try
         {
             JSONValue msg = parseJSON(line);
-            string msgType = jsonStr(msg, "type");
+            string msgType;
+            if (const(JSONValue)* v = "type" in msg)
+                msgType = v.str;
 
             switch (msgType)
             {
                 case "event":
                     long id;
                     if (const(JSONValue) *jid = "id" in msg)
-                        id = (*jid).integer;
+                        id = jid.integer;
 
-                    string eventType = jsonStr(msg, "event_type");
-                    string receivedAt = formatTimestamp(jsonStr(msg, "received_at"));
+                    string eventType;
+                    if (const(JSONValue)* v = "event_type" in msg)
+                        eventType = v.str;
+                    string rawReceivedAt;
+                    if (const(JSONValue)* v = "received_at" in msg)
+                        rawReceivedAt = v.str;
+                    string receivedAt = formatTimestamp(rawReceivedAt);
                     string user;
                     string detail;
                     extractEventFields(eventType, msg, user, detail);
@@ -576,7 +583,7 @@ private void drainNetworkMessages()
                     // Store raw content JSON for the detail view.
                     string rawContent;
                     if (const(JSONValue) *content = "content" in msg)
-                        rawContent = (*content).toString(); // full json
+                        rawContent = content.toString(); // full json
 
                     appState.addFeedEntry(id, prettyEventType(eventType), user, detail, receivedAt, rawContent);
                     dispatchNotification(eventType, user, detail, saved);
@@ -597,15 +604,17 @@ private void drainNetworkMessages()
                 case "caught_up":
                     long lastId;
                     if (const(JSONValue) *last_id = "last_id" in msg)
-                        lastId = (*last_id).integer;
+                        lastId = last_id.integer;
                     appState.addFeedEntry(0, "system", "", "Caught up to event #" ~ lastId.to!string, "");
                     break;
 
                 case "status":
                     if (const(JSONValue) *vrchat_connected = "vrchat_connected" in msg)
                     {
-                        bool vrchatUp = (*vrchat_connected).boolean;
-                        string lastError = jsonStr(msg, "vrchat_last_error");
+                        bool vrchatUp = vrchat_connected.boolean;
+                        string lastError;
+                    if (const(JSONValue)* v = "vrchat_last_error" in msg)
+                        lastError = v.str;
                         if (vrchatUp)
                             appState.vrchatStatus = "Connected";
                         else if (lastError.length > 0)
@@ -614,12 +623,12 @@ private void drainNetworkMessages()
                             appState.vrchatStatus = "Disconnected";
                     }
                     if (const(JSONValue) *ratelimit_remaining = "ratelimit_remaining" in msg)
-                        appState.rateLimitRemaining = (*ratelimit_remaining).integer;
+                        appState.rateLimitRemaining = ratelimit_remaining.integer;
                     if (const(JSONValue) *ratelimit_max = "ratelimit_max" in msg)
-                        appState.rateLimitMax = (*ratelimit_max).integer;
+                        appState.rateLimitMax = ratelimit_max.integer;
                     
                     if (const(JSONValue) *rate_limited = "rate_limited" in msg)
-                        appState.rateLimited = (*rate_limited).boolean;
+                        appState.rateLimited = rate_limited.boolean;
                     break;
 
                 case "friends":
@@ -627,27 +636,36 @@ private void drainNetworkMessages()
                     break;
 
                 case "error":
-                    string errMsg = jsonStr(msg, "message");
+                    string errMsg;
+                    if (const(JSONValue)* v = "message" in msg)
+                        errMsg = v.str;
                     appState.addFeedEntry(0, "error", "", "Server error: " ~ errMsg, "");
                     break;
 
                 case "log-event":
-                    string logEventType = jsonStr(msg, "event_type");
+                    string logEventType;
+                    if (const(JSONValue)* v = "event_type" in msg)
+                        logEventType = v.str;
                     if (logEventType == "location-change")
                     {
                         // Update current instance from local log.
-                        appState.currentLocation = jsonStr(msg, "location");
+                        if (const(JSONValue)* v = "location" in msg)
+                            appState.currentLocation = v.str;
                     }
                     else
                     {
-                        string logUser = jsonStr(msg, "display_name");
+                        string logUser;
+                        if (const(JSONValue)* v = "display_name" in msg)
+                            logUser = v.str;
                         appState.addFeedEntry(0, prettyEventType(logEventType), logUser, "", "");
                         dispatchNotification(logEventType, logUser, "", saved);
                     }
                     break;
 
                 case "notification_action_result":
-                    string notifId = jsonStr(msg, "notification_id");
+                    string notifId;
+                    if (const(JSONValue)* v = "notification_id" in msg)
+                        notifId = v.str;
                     bool success = "success" in msg && msg["success"].type == JSONType.true_;
                     if (success)
                     {
@@ -661,14 +679,18 @@ private void drainNetworkMessages()
                             if (n.notificationId == notifId)
                                 n.actionPending = false;
                         }
-                        string errMsg = jsonStr(msg, "error");
+                        string errMsg;
+                        if (const(JSONValue)* v = "error" in msg)
+                            errMsg = v.str;
                         appState.addFeedEntry(0, "error", "",
                             "Notification action failed: " ~ errMsg, "");
                     }
                     break;
 
                 case "auth_request":
-                    string kind = jsonStr(msg, "kind");
+                    string kind;
+                    if (const(JSONValue)* v = "kind" in msg)
+                        kind = v.str;
                     if (kind == "credentials")
                     {
                         appState.authDialogKind = AppState.AuthDialogKind.credentials;
@@ -676,9 +698,11 @@ private void drainNetworkMessages()
                     else if (kind == "two_factor")
                     {
                         appState.authDialogKind = AppState.AuthDialogKind.twoFactor;
-                        appState.authDialogMethod = jsonStr(msg, "method");
+                        if (const(JSONValue)* v = "method" in msg)
+                            appState.authDialogMethod = v.str;
                     }
-                    appState.authDialogError = jsonStr(msg, "error");
+                    if (const(JSONValue)* v = "error" in msg)
+                        appState.authDialogError = v.str;
                     appState.authDialogVisible = true;
                     // Clear previous input.
                     appState.authUsername[] = '\0';
@@ -710,30 +734,34 @@ private void extractEventFields(string eventType, JSONValue msg, out string user
         if (c.type == JSONType.string)
             c = parseJSON(c.str);
 
-        user = jsonStr(c, "displayName");
+        if (const(JSONValue)* v = "displayName" in c)
+            user = v.str;
 
         // Most events nest the user info inside a "user" sub-object.
-        if (user.length == 0 && "user" in c && c["user"].type == JSONType.object)
-            user = jsonStr(c["user"], "displayName");
+        if (user.length == 0)
+            if (const(JSONValue)* v = "user" in c)
+                if (v.type == JSONType.object)
+                    if (const(JSONValue)* dn = "displayName" in *v)
+                        user = dn.str;
 
         switch (eventType)
         {
             case "friend-online":
-                string platform = jsonStr(c, "platform");
-                if (platform.length > 0)
-                    detail = prettyPlatform(platform);
+                if (const(JSONValue)* v = "platform" in c)
+                    if (v.str.length > 0)
+                        detail = prettyPlatform(v.str);
                 return;
 
             case "friend-active":
-                string activePlatform = jsonStr(c, "platform");
-                if (activePlatform.length > 0)
-                    detail = prettyPlatform(activePlatform);
+                if (const(JSONValue)* v = "platform" in c)
+                    if (v.str.length > 0)
+                        detail = prettyPlatform(v.str);
                 return;
 
             case "friend-offline":
-                string offlinePlatform = jsonStr(c, "platform");
-                if (offlinePlatform.length > 0)
-                    detail = prettyPlatform(offlinePlatform);
+                if (const(JSONValue)* v = "platform" in c)
+                    if (v.str.length > 0)
+                        detail = prettyPlatform(v.str);
                 return;
 
             case "friend-add":
@@ -741,27 +769,36 @@ private void extractEventFields(string eventType, JSONValue msg, out string user
                 return;
 
             case "friend-update":
-                string status = jsonStr(c, "statusDescription");
-                if (status.length > 0)
-                    detail = status;
-                else
+                if (const(JSONValue)* v = "statusDescription" in c)
                 {
-                    string statusEnum = jsonStr(c, "status");
-                    if (statusEnum.length > 0)
-                        detail = prettyStatus(statusEnum);
+                    if (v.str.length > 0)
+                    {
+                        detail = v.str;
+                        return;
+                    }
                 }
+                if (const(JSONValue)* v = "status" in c)
+                    if (v.str.length > 0)
+                        detail = prettyStatus(v.str);
                 return;
 
             case "friend-location":
             case "user-location":
-                string worldName = jsonStr(c, "worldName");
-                if (worldName.length == 0 && "world" in c && c["world"].type == JSONType.object)
-                    worldName = jsonStr(c["world"], "name");
+                string worldName;
+                if (const(JSONValue)* v = "worldName" in c)
+                    worldName = v.str;
+                if (worldName.length == 0)
+                    if (const(JSONValue)* v = "world" in c)
+                        if (v.type == JSONType.object)
+                            if (const(JSONValue)* wn = "name" in *v)
+                                worldName = wn.str;
                 if (worldName.length > 0)
                     detail = worldName;
                 else
                 {
-                    string loc = jsonStr(c, "location");
+                    string loc;
+                    if (const(JSONValue)* v = "location" in c)
+                        loc = v.str;
                     if (loc == "private")
                         detail = "Private World";
                     else if (loc == "offline" || loc.length == 0)
@@ -772,19 +809,19 @@ private void extractEventFields(string eventType, JSONValue msg, out string user
                 return;
 
             case "user-update":
-                string updatedStatus = jsonStr(c, "statusDescription");
-                if (updatedStatus.length > 0)
-                    detail = updatedStatus;
+                if (const(JSONValue)* v = "statusDescription" in c)
+                    if (v.str.length > 0)
+                        detail = v.str;
                 return;
 
             case "notification":
             case "notification-v2":
-                string senderName = jsonStr(c, "senderUsername");
-                if (senderName.length > 0)
-                    user = senderName;
-                string notifType = jsonStr(c, "type");
-                if (notifType.length > 0)
-                    detail = prettyNotifType(notifType);
+                if (const(JSONValue)* v = "senderUsername" in c)
+                    if (v.str.length > 0)
+                        user = v.str;
+                if (const(JSONValue)* v = "type" in c)
+                    if (v.str.length > 0)
+                        detail = prettyNotifType(v.str);
                 return;
 
             case "notification-v2-delete":
@@ -792,39 +829,39 @@ private void extractEventFields(string eventType, JSONValue msg, out string user
             case "see-notification":
             case "hide-notification":
             case "response-notification":
-                string nType = jsonStr(c, "type");
-                if (nType.length > 0)
-                    detail = prettyNotifType(nType);
+                if (const(JSONValue)* v = "type" in c)
+                    if (v.str.length > 0)
+                        detail = prettyNotifType(v.str);
                 return;
 
             case "group-joined":
             case "group-left":
             case "group-role-updated":
             case "group-member-updated":
-                string groupName = jsonStr(c, "groupName");
-                if (groupName.length > 0)
-                    detail = groupName;
+                if (const(JSONValue)* v = "groupName" in c)
+                    if (v.str.length > 0)
+                        detail = v.str;
                 return;
 
             case "instance-queue-position":
-                string position = jsonStr(c, "position");
-                if (position.length > 0)
-                    detail = "Position " ~ position;
+                if (const(JSONValue)* v = "position" in c)
+                    if (v.str.length > 0)
+                        detail = "Position " ~ v.str;
                 return;
 
             case "instance-queue-joined":
             case "instance-queue-ready":
             case "instance-queue-left":
             case "instance-closed":
-                string instanceId = jsonStr(c, "instanceId");
-                if (instanceId.length > 0)
-                    detail = instanceId;
+                if (const(JSONValue)* v = "instanceId" in c)
+                    if (v.str.length > 0)
+                        detail = v.str;
                 return;
 
             case "content-refresh":
-                string contentType = jsonStr(c, "contentType");
-                if (contentType.length > 0)
-                    detail = contentType;
+                if (const(JSONValue)* v = "contentType" in c)
+                    if (v.str.length > 0)
+                        detail = v.str;
                 return;
 
             default:
@@ -846,8 +883,10 @@ private void applyFriendsSnapshot(JSONValue msg)
         foreach (ref JSONValue grp; msg["instances"].array)
         {
             InstanceGroup ig;
-            ig.instanceId = jsonStr(grp, "instance_id");
-            ig.worldName = jsonStr(grp, "world_name");
+            if (const(JSONValue)* v = "instance_id" in grp)
+                ig.instanceId = v.str;
+            if (const(JSONValue)* v = "world_name" in grp)
+                ig.worldName = v.str;
 
             if ("friends" in grp && grp["friends"].type == JSONType.array)
             {
@@ -876,12 +915,18 @@ private void applyFriendsSnapshot(JSONValue msg)
 private FriendInfo parseFriendInfo(JSONValue f)
 {
     FriendInfo fi;
-    fi.userId = jsonStr(f, "id");
-    fi.displayName = jsonStr(f, "displayName");
-    fi.status = jsonStr(f, "status");
-    fi.statusDescription = jsonStr(f, "statusDescription");
-    fi.platform = jsonStr(f, "platform");
-    fi.location = jsonStr(f, "location");
+    if (const(JSONValue)* v = "id" in f)
+        fi.userId = v.str;
+    if (const(JSONValue)* v = "displayName" in f)
+        fi.displayName = v.str;
+    if (const(JSONValue)* v = "status" in f)
+        fi.status = v.str;
+    if (const(JSONValue)* v = "statusDescription" in f)
+        fi.statusDescription = v.str;
+    if (const(JSONValue)* v = "platform" in f)
+        fi.platform = v.str;
+    if (const(JSONValue)* v = "location" in f)
+        fi.location = v.str;
     return fi;
 }
 
@@ -946,8 +991,12 @@ private void storeNotification(string eventType, JSONValue msg, string user, str
                 if (c.type == JSONType.string)
                     c = parseJSON(c.str);
 
-                string notifId = jsonStr(c, "id");
-                string notifType = jsonStr(c, "type");
+                string notifId;
+                if (const(JSONValue)* v = "id" in c)
+                    notifId = v.str;
+                string notifType;
+                if (const(JSONValue)* v = "type" in c)
+                    notifType = v.str;
                 if (notifId.length == 0 || notifType.length == 0)
                     return;
 
@@ -964,18 +1013,24 @@ private void storeNotification(string eventType, JSONValue msg, string user, str
                 if (actionable == false)
                     return;
 
-                string sender = jsonStr(c, "senderUsername");
+                string sender;
+                if (const(JSONValue)* v = "senderUsername" in c)
+                    sender = v.str;
                 if (sender.length == 0)
                     sender = user;
 
                 // Build a message from available details.
-                string notifMessage = jsonStr(c, "message");
+                string notifMessage;
+                if (const(JSONValue)* v = "message" in c)
+                    notifMessage = v.str;
                 if (notifMessage.length == 0)
                 {
                     if ("details" in c && c["details"].type == JSONType.object)
                     {
                         JSONValue details = c["details"];
-                        string worldName = jsonStr(details, "worldName");
+                        string worldName;
+                        if (const(JSONValue)* v = "worldName" in details)
+                            worldName = v.str;
                         if (worldName.length > 0)
                             notifMessage = worldName;
                     }
@@ -1010,7 +1065,9 @@ private void storeNotification(string eventType, JSONValue msg, string user, str
                 JSONValue rc = msg["content"];
                 if (rc.type == JSONType.string)
                     rc = parseJSON(rc.str);
-                string respId = jsonStr(rc, "notificationId");
+                string respId;
+                if (const(JSONValue)* v = "notificationId" in rc)
+                    respId = v.str;
                 if (respId.length > 0)
                     appState.removeNotification(respId);
                 return;
@@ -1038,11 +1095,15 @@ private void checkPlayerJoining(JSONValue msg, string user)
         if (c.type == JSONType.string)
             c = parseJSON(c.str);
 
-        string location = jsonStr(c, "location");
+        string location;
+        if (const(JSONValue)* v = "location" in c)
+            location = v.str;
         if (location != "traveling")
             return;
 
-        string travelingTo = jsonStr(c, "travelingToLocation");
+        string travelingTo;
+        if (const(JSONValue)* v = "travelingToLocation" in c)
+            travelingTo = v.str;
         if (travelingTo.length == 0 || travelingTo != appState.currentLocation)
             return;
 
@@ -1119,12 +1180,6 @@ private string formatTimestamp(string isoTimestamp)
     return isoTimestamp;
 }
 
-private string jsonStr(JSONValue json, string key)
-{
-    if (key in json && json[key].type == JSONType.string)
-        return json[key].str;
-    return "";
-}
 
 private import std.string : fromStringz;
 

@@ -80,7 +80,9 @@ class ServerConnection
             return false;
         }
 
-        string msgType = jsonStr(resp, "type");
+        string msgType;
+        if (const(JSONValue)* v = "type" in resp)
+            msgType = v.str;
         if (msgType == "auth_ok")
         {
             authenticated = true;
@@ -92,7 +94,10 @@ class ServerConnection
         }
         else if (msgType == "auth_error")
         {
-            logError("Auth failed: %s", jsonStr(resp, "message"));
+            string errMessage;
+            if (const(JSONValue)* v = "message" in resp)
+                errMessage = v.str;
+            logError("Auth failed: %s", errMessage);
             return false;
         }
         else
@@ -236,7 +241,9 @@ class ServerConnection
                     try
                     {
                         JSONValue msg = parseJSON(line);
-                        string msgType = jsonStr(msg, "type");
+                        string msgType;
+                        if (const(JSONValue)* v = "type" in msg)
+                            msgType = v.str;
                         if (msgType == "ping")
                         {
                             sendMessage(JSONValue(["type": JSONValue("pong")]));
@@ -300,7 +307,9 @@ private:
         try
         {
             JSONValue msg = parseJSON(line);
-            string msgType = jsonStr(msg, "type");
+            string msgType;
+            if (const(JSONValue)* v = "type" in msg)
+                msgType = v.str;
 
             switch (msgType)
             {
@@ -315,7 +324,9 @@ private:
                     logInfo("Caught up to event #%d", lastId);
                     break;
                 case "error":
-                    string errMsg = jsonStr(msg, "message");
+                    string errMsg;
+                    if (const(JSONValue)* v = "message" in msg)
+                        errMsg = v.str;
                     logError("Server error: %s", errMsg);
                     if (onError !is null)
                         onError(errMsg);
@@ -335,9 +346,3 @@ private:
     }
 }
 
-private string jsonStr(JSONValue json, string key)
-{
-    if (key in json && json[key].type == JSONType.string)
-        return json[key].str;
-    return "";
-}

@@ -79,7 +79,8 @@ VRCEvent parseEvent(const(char)[] rawMessage)
     JSONValue json = parseJSON(rawMessage);
 
     // Extract type.
-    event.typeRaw = jsonStr(json, "type");
+    if (const(JSONValue)* v = "type" in json)
+        event.typeRaw = v.str;
     event.type = toEventType(event.typeRaw);
 
     // Extract and double-decode content.
@@ -115,9 +116,3 @@ EventType toEventType(string typeStr)
     return EventType.unknown;
 }
 
-private string jsonStr(JSONValue json, string key)
-{
-    if (key in json && json[key].type == JSONType.string)
-        return json[key].str;
-    return "";
-}

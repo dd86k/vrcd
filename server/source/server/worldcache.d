@@ -68,13 +68,18 @@ class WorldCache
     void enrichWorldName(ref VRCEvent event)
     {
         // Skip if worldName is already present.
-        if (jsonStr(event.content, "worldName").length > 0)
-            return;
+        if (const(JSONValue)* v = "worldName" in event.content)
+            if (v.str.length > 0)
+                return;
 
-        string worldId = jsonStr(event.content, "worldId");
+        string worldId;
+        if (const(JSONValue)* v = "worldId" in event.content)
+            worldId = v.str;
         if (worldId.length == 0)
         {
-            string location = jsonStr(event.content, "location");
+            string location;
+            if (const(JSONValue)* v = "location" in event.content)
+                location = v.str;
             worldId = extractWorldId(location);
         }
 
@@ -124,7 +129,9 @@ private:
             }
 
             JSONValue json = parseJSON(resp.text);
-            return jsonStr(json, "name");
+            if (const(JSONValue)* v = "name" in json)
+                return v.str;
+            return "";
         }
         catch (Exception e)
         {
@@ -134,9 +141,3 @@ private:
     }
 }
 
-private string jsonStr(JSONValue json, string key)
-{
-    if (key in json && json[key].type == JSONType.string)
-        return json[key].str;
-    return "";
-}

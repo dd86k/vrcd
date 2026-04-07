@@ -47,7 +47,10 @@ AuthState authenticate(ref Config config, HTTPClient client, AuthDelegator deleg
         JSONValue userJson = parseJSON(userResp.text);
         if ("requiresTwoFactorAuth" !in userJson)
         {
-            logInfo("Session valid, logged in as %s", jsonStr(userJson, "displayName"));
+            string displayName;
+            if (const(JSONValue)* v = "displayName" in userJson)
+                displayName = v.str;
+            logInfo("Session valid, logged in as %s", displayName);
             return finishAuth(client, userJson);
         }
         // 2FA required even with existing cookies.
@@ -111,8 +114,10 @@ AuthState fullLogin(ref Config config, HTTPClient client, AuthDelegator delegato
     {
         logInfo("Reading credentials from %s", config.credentialsPath);
         JSONValue creds = parseJSON(readText(config.credentialsPath));
-        username = jsonStr(creds, "username");
-        password = jsonStr(creds, "password");
+        if (const(JSONValue)* v = "username" in creds)
+            username = v.str;
+        if (const(JSONValue)* v = "password" in creds)
+            password = v.str;
     }
     else if (delegator !is null)
     {
@@ -167,7 +172,10 @@ AuthState fullLogin(ref Config config, HTTPClient client, AuthDelegator delegato
         return reAuthUser(client);
     }
 
-    logInfo("Logged in as %s", jsonStr(loginJson, "displayName"));
+    string loginDisplayName;
+    if (const(JSONValue)* v = "displayName" in loginJson)
+        loginDisplayName = v.str;
+    logInfo("Logged in as %s", loginDisplayName);
     return finishAuth(client, loginJson);
 }
 
@@ -245,7 +253,10 @@ AuthState reAuthUser(HTTPClient client)
     if (userResp.code != 200)
         throw new Exception("Failed to get user after 2FA: HTTP " ~ intToStr(userResp.code));
     JSONValue userJson = parseJSON(userResp.text);
-    logInfo("Logged in as %s", jsonStr(userJson, "displayName"));
+    string reAuthDisplayName;
+    if (const(JSONValue)* v = "displayName" in userJson)
+        reAuthDisplayName = v.str;
+    logInfo("Logged in as %s", reAuthDisplayName);
     return finishAuth(client, userJson);
 }
 
@@ -258,25 +269,22 @@ AuthState finishAuth(HTTPClient client, JSONValue userJson)
         throw new Exception("Failed to get auth token: HTTP " ~ intToStr(authResp.code));
 
     JSONValue authJson = parseJSON(authResp.text);
-    string token = jsonStr(authJson, "token");
+    string token;
+    if (const(JSONValue)* v = "token" in authJson)
+        token = v.str;
 
     if (token.length == 0)
         throw new Exception("Empty auth token received");
 
     AuthState state;
     state.authToken = token;
-    state.userId = jsonStr(userJson, "id");
-    state.displayName = jsonStr(userJson, "displayName");
+    if (const(JSONValue)* v = "id" in userJson)
+        state.userId = v.str;
+    if (const(JSONValue)* v = "displayName" in userJson)
+        state.displayName = v.str;
     return state;
 }
 
-/// Helper to safely extract a string from JSON.
-string jsonStr(JSONValue json, string key)
-{
-    if (key in json && json[key].type == JSONType.string)
-        return json[key].str;
-    return "";
-}
 
 void saveCredentials(string path, string username, string password)
 {
