@@ -10,6 +10,7 @@ import ddlogger;
 import ddcurl;
 
 import server.events;
+import server.ratelimit;
 
 /// Caches world names resolved from the VRChat REST API.
 /// Success entries have a 1-day TTL; failure entries have a 1-hour TTL.
@@ -23,10 +24,12 @@ class WorldCache
 
     private CacheEntry[string] cache; // worldId -> entry
     private HTTPClient client;
+    private RateLimitTracker rateLimiter;
 
-    this(HTTPClient client)
+    this(HTTPClient client, RateLimitTracker rateLimiter = null)
     {
         this.client = client;
+        this.rateLimiter = rateLimiter;
     }
 
     /// Resolve a world ID to a human-readable name.
@@ -102,9 +105,18 @@ private:
 
     string fetchWorldName(string worldId)
     {
+        // Skip fetch if rate-limited.
+        if (rateLimiter !is null && rateLimiter.isBlocked())
+        {
+            logWarn("Skipping world fetch for %s: rate limited", worldId);
+            return "";
+        }
+
         try
         {
             HTTPResponse resp = client.get("/worlds/" ~ worldId);
+            if (rateLimiter !is null)
+                rateLimiter.update(resp);
             if (resp.code != 200)
             {
                 logWarn("Failed to fetch world %s: HTTP %d", worldId, resp.code);

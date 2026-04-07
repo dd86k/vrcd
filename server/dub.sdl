@@ -6,7 +6,7 @@ copyright "Copyright © 2026, dd86k <dd@dax.moe>"
 license "BSD-3-Clause-Clear"
 
 dependency "ddlogger" repository="git+https://github.com/dd86k/ddlogger.git" version="4ec9bc06bb90c4a7844f62fcfc1429bc7cdb1378"
-dependency "ddcurl" repository="git+https://github.com/dd86k/ddcurl.git" version="f2f5875288a715ac5f84ca381c5a6629b820b113"
+dependency "ddcurl" repository="git+https://github.com/dd86k/ddcurl.git" version="92a15ecf80ba661a8f0da9d47b0e10e4fc76c874"
 dependency "arsd-official:sqlite" version="~>11.0"
 
 stringImportPaths "." ".."

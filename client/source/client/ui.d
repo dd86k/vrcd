@@ -1172,12 +1172,35 @@ private void openPicturesFolder()
 private void drawStatusBar(mu_Context* ctx, AppState* state)
 {
     mu_Rect r = mu_layout_next(ctx);
+    // NOTE: Consider changing statusbar color
+    //       Worried about constrast
     mu_draw_rect(ctx, r, mu_Color(20, 20, 25, 255));
 
     char[256] buf = void;
-    int len = snprintf(buf.ptr, buf.length, "  Server: %.*s | VRChat: %.*s",
-        cast(int) state.serverStatus.length, state.serverStatus.ptr,
-        cast(int) state.vrchatStatus.length, state.vrchatStatus.ptr);
+    // NOTE: Consider sending a VR notification when rate limited
+    //       Toggle option
+    int len;
+    if (state.rateLimited)
+    {
+        len = snprintf(buf.ptr, buf.length,
+            "  Server: %.*s | VRChat: %.*s | RATE LIMITED",
+            cast(int) state.serverStatus.length, state.serverStatus.ptr,
+            cast(int) state.vrchatStatus.length, state.vrchatStatus.ptr);
+    }
+    else if (state.rateLimitRemaining >= 0 && state.rateLimitMax > 0)
+    {
+        len = snprintf(buf.ptr, buf.length,
+            "  Server: %.*s | VRChat: %.*s | API: %d/%d",
+            cast(int) state.serverStatus.length, state.serverStatus.ptr,
+            cast(int) state.vrchatStatus.length, state.vrchatStatus.ptr,
+            state.rateLimitRemaining, state.rateLimitMax);
+    }
+    else
+    {
+        len = snprintf(buf.ptr, buf.length, "  Server: %.*s | VRChat: %.*s",
+            cast(int) state.serverStatus.length, state.serverStatus.ptr,
+            cast(int) state.vrchatStatus.length, state.vrchatStatus.ptr);
+    }
     if (len > 0)
         mu_draw_control_text(ctx, buf.ptr, r, MU_COLOR_TEXT, 0, len);
 }

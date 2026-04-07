@@ -108,6 +108,11 @@ struct AppState
     string serverStatus = "Disconnected";
     string vrchatStatus = "Unknown";
 
+    // Rate limit state from server
+    long rateLimitRemaining = -1;
+    long rateLimitMax = -1;
+    bool rateLimited;
+
     // Settings (editable via UI)
     char[128] settingsHost = '\0';
     char[8] settingsPort = '\0';

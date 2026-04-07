@@ -15,6 +15,7 @@ import server.authdelegate;
 import server.config;
 import server.events;
 import server.friends;
+import server.ratelimit;
 import server.store;
 import server.worldcache;
 import server.vrchat.auth;
@@ -73,13 +74,17 @@ void cmdRun(ref Config config)
         logInfo("Server started, listening on %s:%d", config.listenAddr, config.listenPort);
     }
 
+    // Rate limit tracker for VRChat API.
+    RateLimitTracker rateLimiter = new RateLimitTracker();
+
     // Seed friends tracker from REST API.
-    fetchAndSeedFriends(client, apiServer.getFriendsTracker());
+    fetchAndSeedFriends(client, apiServer.getFriendsTracker(), rateLimiter);
 
     // World name cache for resolving world IDs via VRChat API.
-    WorldCache worldCache = new WorldCache(client);
+    WorldCache worldCache = new WorldCache(client, rateLimiter);
     apiServer.setWorldCache(worldCache);
     apiServer.setHTTPClient(client);
+    apiServer.setRateLimiter(rateLimiter);
 
     // Start WebSocket event listener.
     VRCWebSocket vrcws = new VRCWebSocket(authState.authToken,
@@ -275,7 +280,7 @@ int main(string[] args)
 
 /// Fetch the full friends list from VRChat REST API and seed the tracker.
 /// Paginates with offset/n until fewer than `n` results are returned.
-void fetchAndSeedFriends(HTTPClient client, FriendsTracker tracker)
+void fetchAndSeedFriends(HTTPClient client, FriendsTracker tracker, RateLimitTracker rateLimiter = null)
 {
     import std.json : JSONValue, JSONType, parseJSON;
     import std.conv : to;
@@ -289,8 +294,13 @@ void fetchAndSeedFriends(HTTPClient client, FriendsTracker tracker)
 
     while (true)
     {
+        if (rateLimiter !is null)
+            rateLimiter.waitIfNeeded();
+
         string path = format!"/auth/user/friends?offset=%d&n=%d&offline=false"(offset, PAGE_SIZE);
         HTTPResponse resp = client.get(path);
+        if (rateLimiter !is null)
+            rateLimiter.update(resp);
 
         if (resp.code != 200)
         {
@@ -321,8 +331,13 @@ void fetchAndSeedFriends(HTTPClient client, FriendsTracker tracker)
     offset = 0;
     while (true)
     {
+        if (rateLimiter !is null)
+            rateLimiter.waitIfNeeded();
+
         string path = format!"/auth/user/friends?offset=%d&n=%d&offline=true"(offset, PAGE_SIZE);
         HTTPResponse resp = client.get(path);
+        if (rateLimiter !is null)
+            rateLimiter.update(resp);
 
         if (resp.code != 200)
         {

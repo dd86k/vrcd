@@ -19,6 +19,7 @@ import ddcurl;
 import server.authdelegate;
 import server.events;
 import server.friends;
+import server.ratelimit;
 import server.store;
 import server.worldcache;
 
@@ -40,6 +41,7 @@ class APIServer
     private HTTPClient httpClient;
     private Mutex apiMutex; // Serializes VRChat API calls
     private AuthDelegator authDelegator;
+    private RateLimitTracker rateLimiter;
 
     this(string bindAddr, ushort port, string sharedSecret, EventStore store)
     {
@@ -68,6 +70,12 @@ class APIServer
     {
         httpClient = client;
         apiMutex = new Mutex();
+    }
+
+    /// Set the rate limit tracker for monitoring VRChat API limits.
+    void setRateLimiter(RateLimitTracker rl)
+    {
+        rateLimiter = rl;
     }
 
     /// Set the auth delegator for headless auth delegation to clients.
@@ -166,6 +174,17 @@ class APIServer
         ]);
         if (vrchatLastError.length > 0)
             msg["vrchat_last_error"] = JSONValue(vrchatLastError);
+        if (rateLimiter)
+        {
+            int remaining = rateLimiter.getRemaining();
+            int max = rateLimiter.getMax();
+            if (remaining >= 0)
+                msg["ratelimit_remaining"] = JSONValue(remaining);
+            if (max > 0)
+                msg["ratelimit_max"] = JSONValue(max);
+            if (rateLimiter.isBlocked())
+                msg["rate_limited"] = JSONValue(true);
+        }
         return msg;
     }
 
@@ -480,9 +499,21 @@ private class ClientHandler
         server.apiMutex.lock();
         scope(exit) server.apiMutex.unlock();
 
+        // Wait out any active rate limit before calling.
+        if (server.rateLimiter && server.rateLimiter.isBlocked())
+        {
+            sendError("Rate limited by VRChat, try again later");
+            return;
+        }
+
         try
         {
             HTTPResponse resp = server.httpClient.put(path);
+            if (server.rateLimiter)
+            {
+                server.rateLimiter.update(resp);
+                server.broadcastStatus();
+            }
             bool success = resp.code >= 200 && resp.code < 300;
 
             JSONValue result = JSONValue([

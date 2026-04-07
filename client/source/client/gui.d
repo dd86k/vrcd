@@ -564,8 +564,8 @@ private void drainNetworkMessages()
             {
                 case "event":
                     long id;
-                    if ("id" in msg && msg["id"].type == JSONType.integer)
-                        id = msg["id"].get!long;
+                    if (const(JSONValue) *jid = "id" in msg)
+                        id = (*jid).integer;
 
                     string eventType = jsonStr(msg, "event_type");
                     string receivedAt = formatTimestamp(jsonStr(msg, "received_at"));
@@ -575,8 +575,8 @@ private void drainNetworkMessages()
 
                     // Store raw content JSON for the detail view.
                     string rawContent;
-                    if ("content" in msg)
-                        rawContent = msg["content"].toString();
+                    if (const(JSONValue) *content = "content" in msg)
+                        rawContent = (*content).toString(); // full json
 
                     appState.addFeedEntry(id, prettyEventType(eventType), user, detail, receivedAt, rawContent);
                     dispatchNotification(eventType, user, detail, saved);
@@ -596,15 +596,15 @@ private void drainNetworkMessages()
 
                 case "caught_up":
                     long lastId;
-                    if ("last_id" in msg && msg["last_id"].type == JSONType.integer)
-                        lastId = msg["last_id"].get!long;
+                    if (const(JSONValue) *last_id = "last_id" in msg)
+                        lastId = (*last_id).integer;
                     appState.addFeedEntry(0, "system", "", "Caught up to event #" ~ lastId.to!string, "");
                     break;
 
                 case "status":
-                    if ("vrchat_connected" in msg)
+                    if (const(JSONValue) *vrchat_connected = "vrchat_connected" in msg)
                     {
-                        bool vrchatUp = msg["vrchat_connected"].type == JSONType.true_;
+                        bool vrchatUp = (*vrchat_connected).boolean;
                         string lastError = jsonStr(msg, "vrchat_last_error");
                         if (vrchatUp)
                             appState.vrchatStatus = "Connected";
@@ -613,6 +613,13 @@ private void drainNetworkMessages()
                         else
                             appState.vrchatStatus = "Disconnected";
                     }
+                    if (const(JSONValue) *ratelimit_remaining = "ratelimit_remaining" in msg)
+                        appState.rateLimitRemaining = (*ratelimit_remaining).integer;
+                    if (const(JSONValue) *ratelimit_max = "ratelimit_max" in msg)
+                        appState.rateLimitMax = (*ratelimit_max).integer;
+                    
+                    if (const(JSONValue) *rate_limited = "rate_limited" in msg)
+                        appState.rateLimited = (*rate_limited).boolean;
                     break;
 
                 case "friends":
