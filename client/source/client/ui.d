@@ -4,10 +4,10 @@
 /// License: BSD-3-Clause-Clear
 module client.ui;
 
-import core.stdc.stdio : snprintf;
 import core.stdc.string : strlen, memchr;
 import std.string : toStringz;
 import std.uni : toLower;
+import std.format : sformat;
 
 import ddui;
 
@@ -496,13 +496,13 @@ private void drawFeedPagination(mu_Context* ctx, AppState* state)
     foreach (int i; 0 .. maxPageButtons)
     {
         int page = pageStart + i;
-        int len = snprintf(pageBuf.ptr, pageBuf.length, "%d", page + 1);
+        string s = cast(string) sformat(pageBuf, "%d", page + 1);
         if (page == feedPage)
         {
             // Highlight current page.
             mu_Rect r = mu_layout_next(ctx);
             mu_draw_rect(ctx, r, mu_Color(60, 80, 120, 255));
-            mu_draw_control_text(ctx, pageBuf.ptr, r, MU_COLOR_TEXT, MU_OPT_ALIGNCENTER);
+            mu_draw_control_text(ctx, pageBuf.ptr, r, MU_COLOR_TEXT, MU_OPT_ALIGNCENTER, cast(int) s.length);
             mu_Id id = mu_get_id(ctx, &page, page.sizeof);
             mu_update_control(ctx, id, r, 0);
             if (ctx.mouse_pressed == MU_MOUSE_LEFT && ctx.focus == id)
@@ -510,7 +510,7 @@ private void drawFeedPagination(mu_Context* ctx, AppState* state)
         }
         else
         {
-            if (mu_button(ctx, pageBuf.ptr))
+            if (mu_button(ctx, s))
                 feedPage = page;
         }
     }
@@ -1179,30 +1179,24 @@ private void drawStatusBar(mu_Context* ctx, AppState* state)
     char[256] buf = void;
     // NOTE: Consider sending a VR notification when rate limited
     //       Toggle option
-    int len;
+    const(char)[] s;
     if (state.rateLimited)
     {
-        len = snprintf(buf.ptr, buf.length,
-            "  Server: %.*s | VRChat: %.*s | RATE LIMITED",
-            cast(int) state.serverStatus.length, state.serverStatus.ptr,
-            cast(int) state.vrchatStatus.length, state.vrchatStatus.ptr);
+        s = sformat(buf, "  Server: %s | VRChat: %s | RATE LIMITED",
+            state.serverStatus, state.serverStatus);
     }
     else if (state.rateLimitRemaining >= 0 && state.rateLimitMax > 0)
     {
-        len = snprintf(buf.ptr, buf.length,
-            "  Server: %.*s | VRChat: %.*s | API: %d/%d",
-            cast(int) state.serverStatus.length, state.serverStatus.ptr,
-            cast(int) state.vrchatStatus.length, state.vrchatStatus.ptr,
+        s = sformat(buf, "  Server: %s | VRChat: %s | API: %d/%d",
+            state.serverStatus, state.serverStatus,
             state.rateLimitRemaining, state.rateLimitMax);
     }
     else
     {
-        len = snprintf(buf.ptr, buf.length, "  Server: %.*s | VRChat: %.*s",
-            cast(int) state.serverStatus.length, state.serverStatus.ptr,
-            cast(int) state.vrchatStatus.length, state.vrchatStatus.ptr);
+        s = sformat(buf, "  Server: %s | VRChat: %s",
+            state.serverStatus, state.serverStatus);
     }
-    if (len > 0)
-        mu_draw_control_text(ctx, buf.ptr, r, MU_COLOR_TEXT, 0, len);
+    if (s) mu_draw_control_text(ctx, s.ptr, r, MU_COLOR_TEXT, 0, cast(int) s.length);
 }
 
 /// Apply mouse wheel scroll delta to the current panel container.
