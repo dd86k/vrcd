@@ -44,7 +44,8 @@ class FriendsTracker
             state.displayName = jsonStr(f, "displayName");
             state.status = jsonStr(f, "status");
             state.statusDescription = jsonStr(f, "statusDescription");
-            state.location = jsonStr(f, "location");
+            string rawLoc = jsonStr(f, "location");
+            state.location = rawLoc == "offline:offline" ? "offline" : rawLoc;
             state.platform = jsonStr(f, "platform");
 
             // Determine online state from location/status.

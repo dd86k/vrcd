@@ -752,7 +752,7 @@ private void drawFriendProfile(mu_Context* ctx, AppState* state, int scrollDelta
     {
         mu_layout_row(ctx, 2, labelValCols.ptr, 0);
         mu_label(ctx, "Location");
-        clickableValue(ctx, f.location);
+        clickableValue(ctx, f.location == "offline" ? "Offline" : f.location);
     }
 
     if (f.userId.length > 0)
