@@ -1153,7 +1153,8 @@ private void openPicturesFolder()
 
     version (Windows)
     {
-        string userprofile = std.process.environment.get("USERPROFILE", "");
+        import std.process : environment;
+        string userprofile = environment.get("USERPROFILE", "");
         string picturesPath = buildPath(userprofile, "Pictures", "VRChat");
         try spawnProcess(["explorer", picturesPath]);
         catch (Exception) {}
