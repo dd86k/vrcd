@@ -172,9 +172,10 @@ int runGui(string host, ushort port, string secret, long sinceId,
     if (!initFont())
         logError("No system font found — text will not render");
 
-    // Init UI context.
-    mu_Context uictx;
-    mu_init(&uictx);
+    // Init UI context (heap-allocated — mu_Context is ~4 MB, far too
+    // large for the stack and triggers __chkstk failures on Windows).
+    mu_Context* uictx = new mu_Context();
+    mu_init(uictx);
     uictx.text_width  = &text_width;
     uictx.text_height = &text_height;
 
@@ -220,7 +221,19 @@ int runGui(string host, ushort port, string secret, long sinceId,
     logWatcher = new LogWatcher(msgQueue, networkEventType);
     logWatcher.start();
 
-    // Main event loop.
+    // Run main event loop and clean up.
+    eventLoop(uictx);
+    guiCleanup();
+
+    return 0;
+}
+
+/// Main event loop — split out to keep stack frames small (avoids
+/// __chkstk failures on Windows when a single function is too large).
+private void eventLoop(mu_Context* uictx)
+{
+    import std.string : fromStringz;
+
     bool running = true;
     SDL_Event e;
 
@@ -257,7 +270,7 @@ int runGui(string host, ushort port, string secret, long sinceId,
 
                 case SDL_MOUSEMOTION:
                     // Always pass motion to ddui for hover states.
-                    mu_input_mousemove(&uictx, e.motion.x, e.motion.y);
+                    mu_input_mousemove(uictx, e.motion.x, e.motion.y);
 
                     if (dragState == DragState.pending)
                     {
@@ -285,7 +298,7 @@ int runGui(string host, ushort port, string secret, long sinceId,
                     break;
 
                 case SDL_TEXTINPUT:
-                    mu_input_text(&uictx, e.text.text.ptr);
+                    mu_input_text(uictx, e.text.text.ptr);
                     break;
 
                 case SDL_MOUSEBUTTONDOWN:
@@ -294,7 +307,7 @@ int runGui(string host, ushort port, string secret, long sinceId,
                         if (filterPopupOpen)
                         {
                             // Pass directly to ddui — no drag in popup mode.
-                            mu_input_mousedown(&uictx, e.button.x, e.button.y, MU_MOUSE_LEFT);
+                            mu_input_mousedown(uictx, e.button.x, e.button.y, MU_MOUSE_LEFT);
                         }
                         else
                         {
@@ -304,14 +317,14 @@ int runGui(string host, ushort port, string secret, long sinceId,
                             dragStartX = e.button.x;
                             dragStartY = e.button.y;
                             momentumVY = 0.0f;  // Stop any active momentum.
-                            mu_input_mousedown(&uictx, e.button.x, e.button.y, MU_MOUSE_LEFT);
+                            mu_input_mousedown(uictx, e.button.x, e.button.y, MU_MOUSE_LEFT);
                         }
                     }
                     else
                     {
                         int b = buttonMap[e.button.button & 0xff];
                         if (b)
-                            mu_input_mousedown(&uictx, e.button.x, e.button.y, b);
+                            mu_input_mousedown(uictx, e.button.x, e.button.y, b);
                     }
                     break;
 
@@ -321,18 +334,18 @@ int runGui(string host, ushort port, string secret, long sinceId,
                         if (filterPopupOpen)
                         {
                             // Pass directly to ddui — no drag in popup mode.
-                            mu_input_mouseup(&uictx, e.button.x, e.button.y, MU_MOUSE_LEFT);
+                            mu_input_mouseup(uictx, e.button.x, e.button.y, MU_MOUSE_LEFT);
                         }
                         else if (dragState == DragState.pending)
                         {
                             // Was a click, not a drag — mousedown already sent.
-                            mu_input_mouseup(&uictx, e.button.x, e.button.y, MU_MOUSE_LEFT);
+                            mu_input_mouseup(uictx, e.button.x, e.button.y, MU_MOUSE_LEFT);
                             wasClick = true;
                         }
                         else if (dragState == DragState.dragging)
                         {
                             // Scroll-drag ended — release ddui control.
-                            mu_input_mouseup(&uictx, e.button.x, e.button.y, MU_MOUSE_LEFT);
+                            mu_input_mouseup(uictx, e.button.x, e.button.y, MU_MOUSE_LEFT);
                         }
                         dragState = DragState.idle;
                     }
@@ -340,7 +353,7 @@ int runGui(string host, ushort port, string secret, long sinceId,
                     {
                         int b = buttonMap[e.button.button & 0xff];
                         if (b)
-                            mu_input_mouseup(&uictx, e.button.x, e.button.y, b);
+                            mu_input_mouseup(uictx, e.button.x, e.button.y, b);
                     }
                     break;
 
@@ -354,7 +367,7 @@ int runGui(string host, ushort port, string secret, long sinceId,
                         char* clip = SDL_GetClipboardText();
                         if (clip !is null)
                         {
-                            mu_input_text(&uictx, clip);
+                            mu_input_text(uictx, clip);
                             SDL_free(clip);
                         }
                         break;
@@ -363,14 +376,13 @@ int runGui(string host, ushort port, string secret, long sinceId,
                     if (k)
                     {
                         if (e.type == SDL_KEYDOWN)
-                            mu_input_keydown(&uictx, k);
+                            mu_input_keydown(uictx, k);
                         else
-                            mu_input_keyup(&uictx, k);
+                            mu_input_keyup(uictx, k);
                     }
                     break;
 
                 case SDL_DROPFILE:
-                    import std.string : fromStringz;
                     string path = cast(string) fromStringz(e.drop.file).idup;
                     SDL_free(e.drop.file);
                     appState.droppedFilePath = path;
@@ -427,7 +439,7 @@ int runGui(string host, ushort port, string secret, long sinceId,
             appState.fontReloadRequested = false;
             import core.stdc.string : memchr;
             const(char)[] fontPath;
-            auto nul = cast(const(char)*) memchr(appState.settingsFontPath.ptr, 0, appState.settingsFontPath.length);
+            const(char)* nul = cast(const(char)*) memchr(appState.settingsFontPath.ptr, 0, appState.settingsFontPath.length);
             if (nul !is null)
                 fontPath = appState.settingsFontPath[0 .. nul - appState.settingsFontPath.ptr];
             if (!initFont(fontPath, cast(int) appState.settingsFontSize))
@@ -503,13 +515,13 @@ int runGui(string host, ushort port, string secret, long sinceId,
         }
 
         // Build and render UI.
-        mu_begin(&uictx);
-        drawFullWindow(&uictx, &appState, pendingScrollY);
+        mu_begin(uictx);
+        drawFullWindow(uictx, &appState, pendingScrollY);
         pendingScrollY = 0;
-        mu_end(&uictx);
+        mu_end(uictx);
 
         r_clear(mu_Color(30, 30, 35, 255));
-        foreach (ref mu_Command cmd; mu_command_range(&uictx))
+        foreach (ref mu_Command cmd; mu_command_range(uictx))
         {
             switch (cmd.type)
             {
@@ -522,9 +534,11 @@ int runGui(string host, ushort port, string secret, long sinceId,
         }
         r_present();
     }
+}
 
-    // Cleanup: stop log watcher, timer, then close socket to unblock
-    // the network thread, join it, and only then tear down SDL.
+/// Tear down resources in correct order: log watcher, timer, network, SDL.
+private void guiCleanup()
+{
     if (logWatcher)
     {
         logWatcher.stop();
@@ -545,8 +559,6 @@ int runGui(string host, ushort port, string secret, long sinceId,
     SDL_DestroyWindow(window);
     TTF_Quit();
     SDL_Quit();
-
-    return 0;
 }
 
 /// Drain queued messages from the network thread and update app state.

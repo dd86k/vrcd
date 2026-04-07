@@ -97,14 +97,14 @@ int main(string[] args)
     logAddAppender(logAppender);
 
     // Detect which args were explicitly provided on the CLI.
-    bool hostExplicit = host.length > 0;
-    bool portExplicit = port != 0;
-    bool secretExplicit = secret.length > 0;
+    bool hostSet = host.length > 0;
+    bool postSet = port != 0;
+    bool secretSet = secret.length > 0;
 
     // Apply defaults for unset CLI args.
-    if (!hostExplicit)
+    if (hostSet == false)
         host = "127.0.0.1";
-    if (!portExplicit)
+    if (postSet == false)
         port = 9700;
 
     if (cliMode)
@@ -112,8 +112,7 @@ int main(string[] args)
         cmdStream(host, port, secret, sinceId);
         return 0;
     }
-
-    return runGui(host, port, secret, sinceId,
-        hostExplicit, portExplicit, secretExplicit);
+    
+    return runGui(host, port, secret, sinceId, hostSet, postSet, secretSet);
 }
 
