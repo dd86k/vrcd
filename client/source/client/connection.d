@@ -129,6 +129,12 @@ class ServerConnection
         ]));
     }
 
+    /// Send an auth response (credentials or 2FA code) to the server.
+    void sendAuthResponse(JSONValue msg)
+    {
+        sendMessage(msg);
+    }
+
     /// Read and dispatch messages until the connection closes.
     /// This blocks the calling thread.
     void run()

@@ -11,6 +11,7 @@ import ddlogger;
 import ddcurl;
 
 import server.api;
+import server.authdelegate;
 import server.config;
 import server.events;
 import server.friends;
@@ -21,24 +22,56 @@ import server.vrchat.websocket;
 
 void cmdRun(ref Config config)
 {
+    import core.stdc.stdlib : exit;
+    import core.thread : Thread;
+    import core.time : dur;
+
     // Initialize database.
     EventStore store = new EventStore(config.dbPath);
     logInfo("Database loaded from '%s'", config.dbPath);
 
-    // Auth VRChat
     scope HTTPClient client = new HTTPClient();
-    AuthState authState = authenticate(config, client);
-    logInfo("Authenticated as %s (%s)", authState.displayName, authState.userId);
+    bool headless = isHeadless();
+    AuthDelegator delegator;
+    APIServer apiServer;
 
-    // Create per-user VRCX-compatible tables from VRC user-id
-    store.initUserTables(authState.userId);
-
-    // Start TCP API server.
     if (config.apiSecret.length == 0)
         logWarn("No --secret set, clients can connect without authentication");
-    APIServer apiServer = new APIServer(config.listenAddr, config.listenPort, config.apiSecret, store);
-    apiServer.start();
-    logInfo("Server started, listening on %s:%d", config.listenAddr, config.listenPort);
+
+    if (headless)
+    {
+        logInfo("Running in headless mode (no TTY), auth will be delegated to clients");
+
+        // In headless mode, start API server first so clients can connect
+        // and provide credentials/2FA codes if needed.
+        delegator = new AuthDelegator();
+        apiServer = new APIServer(config.listenAddr, config.listenPort, config.apiSecret, store);
+        apiServer.setAuthDelegator(delegator);
+        apiServer.start();
+        logInfo("Server started, listening on %s:%d", config.listenAddr, config.listenPort);
+    }
+
+    // Auth VRChat (may block waiting for client in headless mode).
+    AuthState authState;
+    try
+        authState = authenticate(config, client, delegator);
+    catch (Exception e)
+    {
+        logError("Authentication failed: %s", e.msg);
+        exit(1);
+    }
+    logInfo("Authenticated as %s (%s)", authState.displayName, authState.userId);
+
+    // Create per-user VRCX-compatible tables from VRC user-id.
+    store.initUserTables(authState.userId);
+
+    if (apiServer is null)
+    {
+        // Interactive mode: start API server after auth.
+        apiServer = new APIServer(config.listenAddr, config.listenPort, config.apiSecret, store);
+        apiServer.start();
+        logInfo("Server started, listening on %s:%d", config.listenAddr, config.listenPort);
+    }
 
     // Seed friends tracker from REST API.
     fetchAndSeedFriends(client, apiServer.getFriendsTracker());
@@ -64,13 +97,17 @@ void cmdRun(ref Config config)
         apiServer.setVRChatStatus(connected, lastError);
         store.logConnection(connected ? "connected" : "disconnected");
     });
+    vrcws.setReAuthCallback({
+        logInfo("Re-authenticating with VRChat...");
+        AuthState newState = authenticate(config, client, delegator);
+        vrcws.setToken(newState.authToken);
+        logInfo("Re-authenticated as %s", newState.displayName);
+    });
     vrcws.start();
 
     logInfo("Server running. Press Ctrl+C to stop.");
 
     // Keep main thread alive.
-    import core.thread : Thread;
-    import core.time : dur;
     while (true)
         Thread.sleep(dur!"seconds"(1));
 }

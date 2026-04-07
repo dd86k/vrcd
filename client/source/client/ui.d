@@ -95,6 +95,9 @@ void drawFullWindow(mu_Context* ctx, AppState* state, int scrollDelta)
 
     // Filter popup must be outside the main window to render on top.
     drawFeedFilterPopup(ctx);
+
+    // Auth delegation dialog (modal, on top of everything).
+    drawAuthDialog(ctx, state);
 }
 
 /// Draw the tab bar with large VR-friendly buttons.
@@ -1219,5 +1222,74 @@ private string prettyPlatform(string platform)
         case "android":          return "Quest";
         case "ios":              return "iOS";
         default:                 return platform;
+    }
+}
+
+/// Draw the auth delegation dialog (modal popup).
+private void drawAuthDialog(mu_Context* ctx, AppState* state)
+{
+    if (state.authDialogVisible == false)
+        return;
+
+    // Center the dialog on screen.
+    enum WIDTH = 400;
+    enum HEIGHT = 300;
+    int x = (window_width - WIDTH) / 2;
+    int y = (window_height - HEIGHT) / 2;
+
+    if (mu_begin_window_ex(ctx, "VRChat Authentication",
+        mu_Rect(x, y, WIDTH, HEIGHT),
+        MU_OPT_NORESIZE | MU_OPT_NOCLOSE | MU_OPT_NOSCROLL))
+    {
+        mu_bring_to_front(ctx, mu_get_current_container(ctx));
+        static immutable int[1] fullCol = [-1];
+        static immutable int[2] btnCols = [190, 190];
+
+        if (state.authDialogKind == AppState.AuthDialogKind.credentials)
+        {
+            mu_layout_row(ctx, 1, fullCol.ptr, 0);
+            mu_label(ctx, "Server needs VRChat credentials");
+
+            mu_layout_row(ctx, 1, fullCol.ptr, 0);
+            mu_label(ctx, "Username:");
+            mu_layout_row(ctx, 1, fullCol.ptr, 30);
+            mu_textbox(ctx, state.authUsername.ptr, cast(int) state.authUsername.length);
+
+            mu_layout_row(ctx, 1, fullCol.ptr, 0);
+            mu_label(ctx, "Password:");
+            mu_layout_row(ctx, 1, fullCol.ptr, 30);
+            mu_textbox(ctx, state.authPassword.ptr, cast(int) state.authPassword.length);
+        }
+        else if (state.authDialogKind == AppState.AuthDialogKind.twoFactor)
+        {
+            mu_layout_row(ctx, 1, fullCol.ptr, 0);
+            string methodLabel = void;
+            switch (state.authDialogMethod) {
+            case "totp":     methodLabel = "Enter authenticator code (TOTP)"; break;
+            case "emailOtp": methodLabel = "Enter email verification code"; break;
+            case "otp":      methodLabel = "Enter OTP code"; break;
+            default:         methodLabel = "Enter 2FA code"; break;
+            }
+            mu_label(ctx, methodLabel);
+
+            mu_layout_row(ctx, 1, fullCol.ptr, 30);
+            mu_textbox(ctx, state.authCode.ptr, cast(int) state.authCode.length);
+        }
+
+        // Show error from previous attempt.
+        if (state.authDialogError.length > 0)
+        {
+            mu_layout_row(ctx, 1, fullCol.ptr, 0);
+            mu_label(ctx, state.authDialogError);
+        }
+
+        // Buttons row.
+        mu_layout_row(ctx, 2, btnCols.ptr, 40);
+        if (mu_button(ctx, "Submit"))
+            state.authDialogSubmit = true;
+        if (mu_button(ctx, "Cancel"))
+            state.authDialogCancel = true;
+
+        mu_end_window(ctx);
     }
 }

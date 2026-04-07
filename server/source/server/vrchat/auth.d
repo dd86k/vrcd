@@ -15,6 +15,7 @@ import std.path : dirName;
 import ddlogger;
 import ddcurl;
 
+import server.authdelegate;
 import server.config;
 import server.vrchat.vrcconfig : USER_AGENT;
 
@@ -30,7 +31,10 @@ struct AuthState
 ///
 /// Uses cookie jar for session persistence. If cookies are still valid,
 /// skips login. Otherwise performs full login + optional 2FA.
-AuthState authenticate(ref Config config, HTTPClient client)
+///
+/// When `delegator` is non-null, interactive prompts are delegated to
+/// a connected client instead of reading from stdin.
+AuthState authenticate(ref Config config, HTTPClient client, AuthDelegator delegator = null)
 {
     setupClient(client, config);
 
@@ -47,19 +51,40 @@ AuthState authenticate(ref Config config, HTTPClient client)
             return finishAuth(client, userJson);
         }
         // 2FA required even with existing cookies.
-        handle2FA(client, userJson);
+        handle2FA(client, userJson, delegator);
         return reAuthUser(client);
     }
 
     // No valid session — do full login.
-    return fullLogin(config, client);
+    return fullLogin(config, client, delegator);
 }
 
 /// Interactive login flow (for `auth` subcommand).
 AuthState interactiveLogin(ref Config config, HTTPClient client)
 {
     setupClient(client, config);
-    return fullLogin(config, client);
+    return fullLogin(config, client, null);
+}
+
+/// Returns true if stdin is not a terminal (server running as a service).
+bool isHeadless()
+{
+    version (Posix)
+    {
+        import core.sys.posix.unistd : isatty;
+        import core.stdc.stdio : fileno;
+        return isatty(fileno(stdin.getFP())) == 0;
+    }
+    else version (Windows)
+    {
+        import core.sys.windows.winbase : GetStdHandle, STD_INPUT_HANDLE;
+        import core.sys.windows.wincon : GetConsoleMode;
+        auto handle = GetStdHandle(STD_INPUT_HANDLE);
+        uint mode;
+        return GetConsoleMode(handle, &mode) == 0;
+    }
+    else
+        return false;
 }
 
 private:
@@ -78,7 +103,7 @@ void setupClient(HTTPClient client, ref Config config)
     client.setCookieJar(cookiePath);
 }
 
-AuthState fullLogin(ref Config config, HTTPClient client)
+AuthState fullLogin(ref Config config, HTTPClient client, AuthDelegator delegator)
 {
     // Read credentials.
     string username, password;
@@ -88,6 +113,17 @@ AuthState fullLogin(ref Config config, HTTPClient client)
         JSONValue creds = parseJSON(readText(config.credentialsPath));
         username = jsonStr(creds, "username");
         password = jsonStr(creds, "password");
+    }
+    else if (delegator !is null)
+    {
+        logInfo("No credentials file found. Requesting credentials from client...");
+        AuthResponse resp = delegator.requestFromClient(
+            AuthRequest(AuthRequestKind.credentials));
+        if (resp.cancelled)
+            throw new Exception("Auth delegation timed out or was cancelled");
+        username = resp.username;
+        password = resp.password;
+        saveCredentials(config.credentialsPath, username, password);
     }
     else
     {
@@ -127,7 +163,7 @@ AuthState fullLogin(ref Config config, HTTPClient client)
     // Step 3: Handle 2FA if required.
     if ("requiresTwoFactorAuth" in loginJson)
     {
-        handle2FA(client, loginJson);
+        handle2FA(client, loginJson, delegator);
         return reAuthUser(client);
     }
 
@@ -135,7 +171,7 @@ AuthState fullLogin(ref Config config, HTTPClient client)
     return finishAuth(client, loginJson);
 }
 
-void handle2FA(HTTPClient client, JSONValue loginJson)
+void handle2FA(HTTPClient client, JSONValue loginJson, AuthDelegator delegator)
 {
     const(JSONValue)[] methods = loginJson["requiresTwoFactorAuth"].array;
     string method;
@@ -152,11 +188,6 @@ void handle2FA(HTTPClient client, JSONValue loginJson)
     if (method.length == 0)
         throw new Exception("No supported 2FA method found");
 
-    logInfo("2FA required (method: %s)", method);
-    stderr.write("Enter 2FA code: ");
-    string code = readln().strip();
-
-    // NOTE: Move this earlier in function and assert pre-emptively if method not supported
     string endpoint;
     if (method == "totp")
         endpoint = "/auth/twofactorauth/totp/verify";
@@ -165,13 +196,47 @@ void handle2FA(HTTPClient client, JSONValue loginJson)
     else
         endpoint = "/auth/twofactorauth/emailotp/verify";
 
-    JSONValue payload = JSONValue(["code": JSONValue(code)]);
-    HTTPResponse resp = client.post(endpoint, payload.toString());
+    logInfo("2FA required (method: %s)", method);
 
-    if (resp.code != 200)
-        throw new Exception("2FA verification failed: HTTP " ~ intToStr(resp.code));
+    // Allow up to 3 attempts for wrong codes.
+    enum MAX_ATTEMPTS = 3;
+    string retryError;
+    foreach (attempt; 0 .. MAX_ATTEMPTS)
+    {
+        string code;
+        if (delegator !is null)
+        {
+            logInfo("Requesting 2FA code from client (attempt %d/%d)...",
+                attempt + 1, MAX_ATTEMPTS);
+            AuthResponse dresp = delegator.requestFromClient(
+                AuthRequest(AuthRequestKind.twoFactor, method, retryError));
+            if (dresp.cancelled)
+                throw new Exception("Auth delegation timed out or was cancelled");
+            code = dresp.code;
+        }
+        else
+        {
+            if (attempt > 0)
+                stderr.write("Invalid code, try again. ");
+            stderr.write("Enter 2FA code: ");
+            code = readln().strip();
+        }
 
-    logInfo("2FA verified");
+        JSONValue payload = JSONValue(["code": JSONValue(code)]);
+        HTTPResponse resp = client.post(endpoint, payload.toString());
+
+        if (resp.code == 200)
+        {
+            logInfo("2FA verified");
+            return;
+        }
+
+        retryError = "Invalid 2FA code, please try again";
+        logWarn("2FA verification failed (HTTP %d), attempt %d/%d",
+            resp.code, attempt + 1, MAX_ATTEMPTS);
+    }
+
+    throw new Exception("2FA verification failed after " ~ intToStr(MAX_ATTEMPTS) ~ " attempts");
 }
 
 AuthState reAuthUser(HTTPClient client)

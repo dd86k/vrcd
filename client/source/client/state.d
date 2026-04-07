@@ -158,6 +158,18 @@ struct AppState
     string droppedFilePath;
     string stripStatus;
 
+    // Auth delegation dialog
+    enum AuthDialogKind { none, credentials, twoFactor }
+    AuthDialogKind authDialogKind;
+    bool authDialogVisible;
+    string authDialogMethod;  // "totp", "otp", "emailOtp"
+    string authDialogError;   // Error from previous attempt (e.g., "Invalid code")
+    char[128] authUsername = '\0';
+    char[128] authPassword = '\0';
+    char[16] authCode = '\0';
+    bool authDialogSubmit;
+    bool authDialogCancel;
+
     void addFeedEntry(long id, string eventType, string user, string detail, string receivedAt,
         string rawContent = "")
     {

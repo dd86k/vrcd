@@ -16,6 +16,7 @@ import std.string : strip;
 import ddlogger;
 import ddcurl;
 
+import server.authdelegate;
 import server.events;
 import server.friends;
 import server.store;
@@ -38,6 +39,7 @@ class APIServer
     private WorldCache worldCache;
     private HTTPClient httpClient;
     private Mutex apiMutex; // Serializes VRChat API calls
+    private AuthDelegator authDelegator;
 
     this(string bindAddr, ushort port, string sharedSecret, EventStore store)
     {
@@ -66,6 +68,23 @@ class APIServer
     {
         httpClient = client;
         apiMutex = new Mutex();
+    }
+
+    /// Set the auth delegator for headless auth delegation to clients.
+    void setAuthDelegator(AuthDelegator d)
+    {
+        authDelegator = d;
+        // When the auth thread needs input, broadcast to all authenticated clients.
+        d.setBroadcastCallback((JSONValue msg) {
+            string line = msg.toString() ~ "\n";
+            clientsMutex.lock();
+            scope(exit) clientsMutex.unlock();
+            foreach (client; clients)
+            {
+                if (client.authenticated)
+                    client.sendLine(line);
+            }
+        });
     }
 
     /// Update VRChat connection status and broadcast to all clients.
@@ -312,6 +331,14 @@ private class ClientHandler
                     }
                     handleNotificationAction(msg);
                     break;
+                case "auth_response":
+                    if (!authenticated)
+                    {
+                        sendError("Not authenticated");
+                        return;
+                    }
+                    handleAuthResponse(msg);
+                    break;
                 case "pong":
                     break; // Keepalive response, no action.
                 default:
@@ -339,6 +366,14 @@ private class ClientHandler
             // Send current status immediately after auth.
             sendLine(server.buildStatusMessage().toString() ~ "\n");
             logInfo("Client authenticated");
+
+            // If there is a pending VRChat auth request, send it to this client.
+            if (server.authDelegator !is null && server.authDelegator.hasPendingRequest())
+            {
+                JSONValue authReq = server.authDelegator.getPendingRequestMessage();
+                if (authReq.type != JSONType.null_)
+                    sendLine(authReq.toString() ~ "\n");
+            }
         }
         else
         {
@@ -471,6 +506,43 @@ private class ClientHandler
             result["error"] = JSONValue(e.msg);
             sendLine(result.toString() ~ "\n");
         }
+    }
+
+    void handleAuthResponse(JSONValue msg)
+    {
+        if (server.authDelegator is null)
+        {
+            sendError("No auth delegation active");
+            return;
+        }
+
+        // Check for cancellation.
+        if ("cancelled" in msg && msg["cancelled"].type == JSONType.true_)
+        {
+            AuthResponse resp;
+            resp.cancelled = true;
+            server.authDelegator.submitResponse(resp);
+            return;
+        }
+
+        string kind = jsonStr(msg, "kind");
+        AuthResponse resp;
+        if (kind == "credentials")
+        {
+            resp.username = jsonStr(msg, "username");
+            resp.password = jsonStr(msg, "password");
+        }
+        else if (kind == "two_factor")
+        {
+            resp.code = jsonStr(msg, "code");
+        }
+        else
+        {
+            sendError("Unknown auth_response kind: " ~ kind);
+            return;
+        }
+
+        server.authDelegator.submitResponse(resp);
     }
 
     void sendError(string message)

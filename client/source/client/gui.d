@@ -432,6 +432,49 @@ int runGui(string host, ushort port, string secret, long sinceId,
             appState.pendingActions.length = 0;
         }
 
+        // Handle auth delegation responses.
+        if (appState.authDialogSubmit)
+        {
+            appState.authDialogSubmit = false;
+            appState.authDialogVisible = false;
+            if (conn !is null)
+            {
+                if (appState.authDialogKind == AppState.AuthDialogKind.credentials)
+                {
+                    conn.sendAuthResponse(JSONValue([
+                        "type": JSONValue("auth_response"),
+                        "kind": JSONValue("credentials"),
+                        "username": JSONValue(cast(string) fromStringz(appState.authUsername.ptr)),
+                        "password": JSONValue(cast(string) fromStringz(appState.authPassword.ptr)),
+                    ]));
+                }
+                else if (appState.authDialogKind == AppState.AuthDialogKind.twoFactor)
+                {
+                    conn.sendAuthResponse(JSONValue([
+                        "type": JSONValue("auth_response"),
+                        "kind": JSONValue("two_factor"),
+                        "code": JSONValue(cast(string) fromStringz(appState.authCode.ptr)),
+                    ]));
+                }
+            }
+            // Clear sensitive buffers.
+            appState.authUsername[] = '\0';
+            appState.authPassword[] = '\0';
+            appState.authCode[] = '\0';
+        }
+        if (appState.authDialogCancel)
+        {
+            appState.authDialogCancel = false;
+            appState.authDialogVisible = false;
+            if (conn !is null)
+            {
+                conn.sendAuthResponse(JSONValue([
+                    "type": JSONValue("auth_response"),
+                    "cancelled": JSONValue(true),
+                ]));
+            }
+        }
+
         // Handle test notification request from Settings tab.
         if (appState.testNotifyRequested)
         {
@@ -602,6 +645,25 @@ private void drainNetworkMessages()
                         appState.addFeedEntry(0, "error", "",
                             "Notification action failed: " ~ errMsg, "");
                     }
+                    break;
+
+                case "auth_request":
+                    string kind = jsonStr(msg, "kind");
+                    if (kind == "credentials")
+                    {
+                        appState.authDialogKind = AppState.AuthDialogKind.credentials;
+                    }
+                    else if (kind == "two_factor")
+                    {
+                        appState.authDialogKind = AppState.AuthDialogKind.twoFactor;
+                        appState.authDialogMethod = jsonStr(msg, "method");
+                    }
+                    appState.authDialogError = jsonStr(msg, "error");
+                    appState.authDialogVisible = true;
+                    // Clear previous input.
+                    appState.authUsername[] = '\0';
+                    appState.authPassword[] = '\0';
+                    appState.authCode[] = '\0';
                     break;
 
                 default:
@@ -1043,6 +1105,8 @@ private string jsonStr(JSONValue json, string key)
         return json[key].str;
     return "";
 }
+
+private import std.string : fromStringz;
 
 private import std.conv : to;
 

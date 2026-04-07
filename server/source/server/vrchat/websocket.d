@@ -21,6 +21,9 @@ alias EventCallback = void delegate(VRCEvent event);
 /// Params: connected, lastError (empty on successful connect).
 alias StatusCallback = void delegate(bool connected, string lastError);
 
+/// Callback for re-authentication when the auth token expires.
+alias ReAuthCallback = void delegate();
+
 /// Manages the VRChat WebSocket connection with automatic reconnection.
 class VRCWebSocket
 {
@@ -37,6 +40,12 @@ class VRCWebSocket
     void setStatusCallback(StatusCallback cb)
     {
         onStatusChange = cb;
+    }
+
+    /// Set callback for re-authentication on 401/403.
+    void setReAuthCallback(ReAuthCallback cb)
+    {
+        onReAuth = cb;
     }
 
     /// Update the auth token (e.g., after re-authentication).
@@ -77,6 +86,7 @@ private:
     string authToken;
     EventCallback onEvent;
     StatusCallback onStatusChange;
+    ReAuthCallback onReAuth;
     Thread recvThread;
     bool running;
     WebSocket ws;
@@ -120,14 +130,38 @@ private:
             catch (CurlException e)
             {
                 logError("WebSocket error: %s", e.msg);
-                string error = e.msg;
+                connected = false;
+
                 if (e.statusCode == 401 || e.statusCode == 403)
                 {
-                    error = "Auth token invalid or expired";
-                    logError("  Re-run 'auth' to refresh.");
+                    notifyStatus(false, "Auth token invalid or expired");
+
+                    if (onReAuth !is null)
+                    {
+                        try
+                        {
+                            onReAuth();
+                            logInfo("Re-auth succeeded, reconnecting...");
+                            Thread.sleep(dur!"seconds"(2));
+                            continue; // Reconnect with new token.
+                        }
+                        catch (Exception reAuthEx)
+                        {
+                            import core.stdc.stdlib : exit;
+                            logError("Re-authentication failed: %s", reAuthEx.msg);
+                            logError("Exiting to avoid spamming VRChat API.");
+                            exit(2);
+                        }
+                    }
+                    else
+                    {
+                        logError("Auth token expired. Re-run 'auth' to refresh.");
+                    }
                 }
-                connected = false;
-                notifyStatus(false, error);
+                else
+                {
+                    notifyStatus(false, e.msg);
+                }
             }
             catch (Exception e)
             {
