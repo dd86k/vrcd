@@ -1243,7 +1243,7 @@ private void drawAuthDialog(mu_Context* ctx, AppState* state)
     {
         mu_bring_to_front(ctx, mu_get_current_container(ctx));
         static immutable int[1] fullCol = [-1];
-        static immutable int[2] btnCols = [190, 190];
+        static immutable int[2] btnCols = [190, -1];
 
         if (state.authDialogKind == AppState.AuthDialogKind.credentials)
         {
