@@ -346,6 +346,19 @@ int runGui(string host, ushort port, string secret, long sinceId,
 
                 case SDL_KEYDOWN:
                 case SDL_KEYUP:
+                    // Ctrl+V paste
+                    if (e.type == SDL_KEYDOWN &&
+                        (e.key.keysym.mod & KMOD_CTRL) &&
+                        e.key.keysym.sym == SDLK_v)
+                    {
+                        char* clip = SDL_GetClipboardText();
+                        if (clip !is null)
+                        {
+                            mu_input_text(&uictx, clip);
+                            SDL_free(clip);
+                        }
+                        break;
+                    }
                     int k = keyMap[e.key.keysym.sym & 0xff];
                     if (k)
                     {
