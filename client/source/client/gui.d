@@ -690,6 +690,9 @@ private void drainNetworkMessages()
                     string notifId;
                     if (const(JSONValue)* v = "notification_id" in msg)
                         notifId = v.str;
+                    string resultAction;
+                    if (const(JSONValue)* v = "action" in msg)
+                        resultAction = v.str;
                     bool success = "success" in msg && msg["success"].type == JSONType.true_;
                     if (success)
                     {
@@ -697,17 +700,30 @@ private void drainNetworkMessages()
                     }
                     else
                     {
-                        // Re-enable buttons on failure.
+                        // Check whether the notification is still in state.
+                        // For fire-and-forget "hide", it was already removed
+                        // optimistically — suppress the error to avoid noise.
+                        bool stillPresent;
                         foreach (ref NotificationEntry n; appState.notifications)
                         {
                             if (n.notificationId == notifId)
+                            {
                                 n.actionPending = false;
+                                stillPresent = true;
+                            }
                         }
-                        string errMsg;
-                        if (const(JSONValue)* v = "error" in msg)
-                            errMsg = v.str;
-                        appState.addFeedEntry(0, "error", "",
-                            "Notification action failed: " ~ errMsg, "");
+                        if (stillPresent)
+                        {
+                            string errMsg;
+                            if (const(JSONValue)* v = "error" in msg)
+                                errMsg = v.str;
+                            appState.addFeedEntry(0, "error", "",
+                                "Notification action failed: " ~ errMsg, "");
+                        }
+                        else if (resultAction == "hide")
+                        {
+                            logDebugging("notification_action_result: hide for already-removed id=%s, suppressing", notifId);
+                        }
                     }
                     break;
 

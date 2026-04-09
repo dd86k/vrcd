@@ -784,6 +784,10 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
     }
     else
     {
+        // Collect IDs to remove optimistically after the foreach, so we don't
+        // mutate state.notifications while iterating it.
+        string[] dismissedIds;
+
         foreach (ref NotificationEntry n; state.notifications)
         {
             // Info row: Type | From | Message | Date
@@ -807,29 +811,32 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
                 mu_layout_row(ctx, 3, btnCols.ptr, 30);
                 if (mu_button(ctx, "Accept"))
                 {
+                    // Keep pending-confirmation flow for Accept: the user
+                    // wants to know whether the friendship was actually made.
                     n.actionPending = true;
                     state.pendingActions ~= NotificationAction(n.notificationId, "accept");
                 }
                 if (mu_button(ctx, "Deny"))
                 {
-                    n.actionPending = true;
+                    // Fire-and-forget: remove locally, send "hide" to server.
                     state.pendingActions ~= NotificationAction(n.notificationId, "hide");
+                    dismissedIds ~= n.notificationId;
                 }
                 if (mu_button(ctx, "Dismiss"))
                 {
-                    n.actionPending = true;
                     state.pendingActions ~= NotificationAction(n.notificationId, "hide");
+                    dismissedIds ~= n.notificationId;
                 }
             }
             else
             {
                 // Other notification types (invite, requestInvite, message, ...)
-                // can only be dismissed (hide).
+                // can only be dismissed (hide). Fire-and-forget.
                 mu_layout_row(ctx, 1, dismissCol.ptr, 30);
                 if (mu_button(ctx, "Dismiss"))
                 {
-                    n.actionPending = true;
                     state.pendingActions ~= NotificationAction(n.notificationId, "hide");
+                    dismissedIds ~= n.notificationId;
                 }
             }
 
@@ -837,6 +844,10 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
             mu_layout_row(ctx, 1, fullCol.ptr, 1);
             mu_draw_rect(ctx, mu_layout_next(ctx), lineColor);
         }
+
+        // Apply optimistic removals.
+        foreach (string id; dismissedIds)
+            state.removeNotification(id);
     }
 
     mu_end_panel(ctx);
