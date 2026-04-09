@@ -50,6 +50,9 @@ class EventStore
     /// Store a raw WebSocket event. Returns the assigned event ID.
     long storeEvent(VRCEvent event)
     {
+        logTrace("storeEvent: type=%s contentLen=%d rawLen=%d",
+            event.typeRaw, event.content.toString().length, event.rawJson.length);
+
         // Use query for parameterized statements.
         foreach (_; db.query(
             "INSERT INTO ws_events (received_at, event_type, content_json, raw_json) VALUES (?, ?, ?, ?)",
@@ -61,13 +64,18 @@ class EventStore
 
         // Get last insert rowid.
         foreach (row; db.query("SELECT last_insert_rowid()"))
-            return row[0].to!long;
+        {
+            long id = row[0].to!long;
+            logDebugging("storeEvent: assigned id=%d type=%s", id, event.typeRaw);
+            return id;
+        }
         return -1;
     }
 
     /// Query events after a given ID (for client catch-up).
     auto queryEventsAfter(long afterId, int limit = 1000)
     {
+        logDebugging("queryEventsAfter: afterId=%d limit=%d", afterId, limit);
         return db.query(
             "SELECT id, received_at, event_type, content_json FROM ws_events WHERE id > ? ORDER BY id ASC LIMIT ?",
             afterId.to!string,
@@ -99,6 +107,7 @@ class EventStore
     /// Log a WebSocket connection event.
     void logConnection(string eventType)
     {
+        logDebugging("logConnection: %s", eventType);
         foreach (_; db.query(
             "INSERT INTO ws_connection_log (timestamp, event) VALUES (datetime('now'), ?)",
             eventType,
@@ -198,6 +207,7 @@ private:
         import std.string : replace;
         // VRCX uses the user ID as prefix, sanitized.
         string prefix = userId.replace("-", "_");
+        logDebugging("initUserTables: userId=%s prefix=%s", userId, prefix);
 
         db.exec(
             "CREATE TABLE IF NOT EXISTS " ~ prefix ~ "_feed_gps (" ~

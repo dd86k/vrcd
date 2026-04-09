@@ -139,6 +139,7 @@ class APIServer
         clientsMutex.lock();
         scope(exit) clientsMutex.unlock();
 
+        size_t delivered;
         foreach (client; clients)
         {
             if (client.authenticated)
@@ -146,8 +147,12 @@ class APIServer
                 client.sendLine(line);
                 if (friendsChanged)
                     client.sendLine(friendsLine);
+                ++delivered;
             }
         }
+
+        logDebugging("broadcast: id=%d type=%s clients=%d/%d friendsChanged=%s",
+            eventId, event.typeRaw, delivered, clients.length, friendsChanged);
     }
 
     /// Broadcast current status to all authenticated clients.
@@ -158,11 +163,17 @@ class APIServer
         clientsMutex.lock();
         scope(exit) clientsMutex.unlock();
 
+        size_t delivered;
         foreach (client; clients)
         {
             if (client.authenticated)
+            {
                 client.sendLine(line);
+                ++delivered;
+            }
         }
+        logDebugging("broadcastStatus: vrchatConnected=%s clients=%d/%d",
+            vrchatConnected, delivered, clients.length);
     }
 
     /// Build a status JSON message.
@@ -205,12 +216,15 @@ private:
             if (clientSock is null)
                 continue;
 
-            logInfo("Client connected from %s", clientSock.remoteAddress().toString());
+            string remote = clientSock.remoteAddress().toString();
+            logInfo("Client connected from %s", remote);
             ClientHandler handler = new ClientHandler(clientSock, this);
 
             clientsMutex.lock();
             clients ~= handler;
+            size_t total = clients.length;
             clientsMutex.unlock();
+            logDebugging("acceptLoop: new client %s; total=%d", remote, total);
 
             Thread t = new Thread(&handler.run);
             t.isDaemon = true;
@@ -218,6 +232,7 @@ private:
         }
 
         listener.close();
+        logDebugging("acceptLoop: listener closed");
     }
 
     void removeClient(ClientHandler handler)
@@ -253,10 +268,13 @@ private class ClientHandler
         sendMutex.lock();
         scope(exit) sendMutex.unlock();
 
+        logTrace("sendLine: len=%d", line.length);
         try
             sock.send(cast(const(void)[]) line);
-        catch (Exception)
-            {} // Client disconnected; will be cleaned up.
+        catch (Exception e)
+        {
+            logDebugging("sendLine: send failed, client will be cleaned up: %s", e.msg);
+        } // Client disconnected; will be cleaned up.
     }
 
     void run()
@@ -306,6 +324,9 @@ private class ClientHandler
             string type;
             if (const(JSONValue)* v = "type" in msg)
                 type = v.str;
+
+            logDebugging("processMessage: type=%s authenticated=%s len=%d",
+                type, authenticated, line.length);
 
             switch (type)
             {
@@ -424,6 +445,7 @@ private class ClientHandler
         logInfo("Client catching up from event #%d", sinceId);
 
         long lastId = sinceId;
+        long sent;
         foreach (row; server.store.queryEventsAfter(sinceId))
         {
             long id = row[0].to!long;
@@ -436,6 +458,7 @@ private class ClientHandler
             ]);
             sendLine(eventMsg.toString() ~ "\n");
             lastId = id;
+            ++sent;
         }
 
         JSONValue doneMsg = JSONValue([
@@ -443,6 +466,7 @@ private class ClientHandler
             "last_id": JSONValue(lastId),
         ]);
         sendLine(doneMsg.toString() ~ "\n");
+        logDebugging("handleCatchUp: sent %d events, lastId=%d", sent, lastId);
         logInfo("Client caught up to event #%d", lastId);
     }
 
@@ -460,6 +484,8 @@ private class ClientHandler
         string worldName = worldId;
         if (server.worldCache !is null)
             worldName = server.worldCache.resolve(worldId);
+
+        logDebugging("handleGetWorld: worldId=%s resolved=%s", worldId, worldName);
 
         JSONValue resp = JSONValue([
             "type": JSONValue("world"),
@@ -505,6 +531,9 @@ private class ClientHandler
                 return;
         }
 
+        logDebugging("handleNotificationAction: action=%s notifId=%s path=%s",
+            action, notifId, path);
+
         // Call VRChat API (serialized via mutex).
         server.apiMutex.lock();
         scope(exit) server.apiMutex.unlock();
@@ -519,6 +548,7 @@ private class ClientHandler
         try
         {
             HTTPResponse resp = server.httpClient.put(path);
+            logDebugging("handleNotificationAction: VRC PUT %s -> HTTP %d", path, resp.code);
             if (server.rateLimiter)
             {
                 server.rateLimiter.update(resp);
@@ -576,11 +606,14 @@ private class ClientHandler
                 resp.username = v.str;
             if (const(JSONValue)* v = "password" in msg)
                 resp.password = v.str;
+            logDebugging("handleAuthResponse: credentials for user=%s", resp.username);
         }
         else if (kind == "two_factor")
         {
             if (const(JSONValue)* v = "code" in msg)
                 resp.code = v.str;
+            logDebugging("handleAuthResponse: two_factor code received (len=%d)",
+                resp.code.length);
         }
         else
         {

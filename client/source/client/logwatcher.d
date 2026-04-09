@@ -80,11 +80,13 @@ class LogWatcher
     private void run()
     {
         string logDir = vrchatLogDir();
+        logDebugging("LogWatcher: resolved log dir=%s", logDir);
         if (logDir.length == 0 || exists(logDir) == false)
         {
             logInfo("VRChat log directory not found, log watcher disabled");
             return;
         }
+        logInfo("LogWatcher: watching %s", logDir);
 
         // Track position per file.
         long[string] filePositions;
@@ -129,6 +131,8 @@ class LogWatcher
             // First time seeing this file: skip to end so we only see new events.
             pos = latest.size;
             filePositions[latest.name] = pos;
+            logDebugging("LogWatcher: tracking new file %s from offset %d",
+                latest.name, pos);
             return;
         }
 
@@ -136,6 +140,7 @@ class LogWatcher
         if (latest.size <= pos)
             return;
 
+        logTrace("LogWatcher: %s grew from %d to %d", latest.name, pos, latest.size);
         try
         {
             File f = File(latest.name, "r");
@@ -146,8 +151,10 @@ class LogWatcher
                 string line = cast(string) buf;
                 parseLine(line);
             }
-            filePositions[latest.name] = f.tell();
+            long newPos = f.tell();
+            filePositions[latest.name] = newPos;
             f.close();
+            logTrace("LogWatcher: advanced position to %d", newPos);
         }
         catch (Exception e)
         {
@@ -187,6 +194,7 @@ class LogWatcher
                     string location = stripRight(line[locStart .. $]);
                     if (location.length > 0)
                     {
+                        logDebugging("LogWatcher: joining instance %s", location);
                         currentLocation = location;
                         currentPlayers = null;
                         pushLocationEvent(location);
@@ -219,6 +227,8 @@ class LogWatcher
 
             if (displayName.length > 0)
             {
+                logDebugging("LogWatcher: player joined '%s' (id=%s) now=%d players",
+                    displayName, userId, currentPlayers.length + 1);
                 addPlayer(displayName, userId);
                 pushEvent(LogEvent.playerJoined, displayName);
             }
@@ -248,6 +258,8 @@ class LogWatcher
 
             if (displayName.length > 0)
             {
+                logDebugging("LogWatcher: player left '%s' (id=%s)",
+                    displayName, userId);
                 removePlayer(displayName);
                 pushEvent(LogEvent.playerLeft, displayName);
             }
@@ -271,6 +283,8 @@ class LogWatcher
 
             string localPath = translateVRChatPath(logPath);
             string metaJson = buildMetadataJson();
+            logDebugging("LogWatcher: photo-taken logPath=%s localPath=%s metaLen=%d",
+                logPath, localPath, metaJson.length);
 
             // Write metadata in a background thread so the log watcher keeps up
             // with events while we wait for VRChat to release the file lock.
@@ -308,7 +322,7 @@ class LogWatcher
     private string buildMetadataJson()
     {
         JSONValue msg = JSONValue(string[string].init);
-        msg["application"] = "vrcddlogger";
+        msg["application"] = "vrcd";
         msg["version"] = 1;
 
         if (currentLocation.length > 0)
@@ -340,6 +354,7 @@ class LogWatcher
     private static void startMetadataWrite(string path, string jsonText)
     {
         Thread t = new Thread({
+            logDebugging("startMetadataWrite: spawning writer for %s", path);
             // Retry for ~10 seconds while VRChat holds the file.
             foreach (int i; 0 .. 20)
             {
@@ -351,6 +366,8 @@ class LogWatcher
                 }
                 catch (Exception e)
                 {
+                    logTrace("startMetadataWrite: attempt %d failed for %s: %s",
+                        i + 1, path, e.msg);
                     Thread.sleep(500.msecs);
                 }
             }

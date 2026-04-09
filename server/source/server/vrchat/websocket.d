@@ -114,11 +114,13 @@ private:
                     }
 
                     const(char)[] message = cast(const(char)[]) data;
-                    logDebugging("WS recv: %s", message);
+                    logTrace("WS recv: %s", message);
 
                     try
                     {
                         VRCEvent event = parseEvent(message);
+                        logDebugging("WS parsed event: type=%s contentLen=%d",
+                            event.typeRaw, event.content.toString().length);
                         onEvent(event);
                     }
                     catch (Exception e)

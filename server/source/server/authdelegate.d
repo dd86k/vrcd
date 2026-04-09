@@ -123,6 +123,8 @@ class AuthDelegator
             return;
         }
 
+        logDebugging("submitResponse: cancelled=%s usernameLen=%d codeLen=%d",
+            resp.cancelled, resp.username.length, resp.code.length);
         response = new AuthResponse(resp.username, resp.password, resp.code, resp.cancelled);
         cond.notify();
     }

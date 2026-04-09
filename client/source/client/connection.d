@@ -53,6 +53,7 @@ class ServerConnection
     /// Returns true on success.
     bool connect()
     {
+        logDebugging("connect: attempting %s:%d (secretLen=%d)", host, port, secret.length);
         sock = new TcpSocket();
         try
         {
@@ -110,6 +111,7 @@ class ServerConnection
     /// Request catch-up from a given event ID (0 = all events).
     void catchUp(long sinceId = 0)
     {
+        logDebugging("catchUp: sinceId=%d", sinceId);
         sendMessage(JSONValue([
             "type": JSONValue("catch_up"),
             "since_id": JSONValue(sinceId),
@@ -119,6 +121,7 @@ class ServerConnection
     /// Request the current friends state from the server.
     void requestFriends()
     {
+        logDebugging("requestFriends");
         sendMessage(JSONValue([
             "type": JSONValue("get_friends"),
         ]));
@@ -127,6 +130,7 @@ class ServerConnection
     /// Send a notification action (accept/hide) to the server.
     void sendNotificationAction(string notificationId, string action)
     {
+        logDebugging("sendNotificationAction: id=%s action=%s", notificationId, action);
         sendMessage(JSONValue([
             "type": JSONValue("notification_action"),
             "notification_id": JSONValue(notificationId),
@@ -220,8 +224,11 @@ class ServerConnection
                 return;
             }
 
+            logTrace("runThreadedImpl: received %d bytes", received);
+
             recvBuffer ~= cast(string) buf[0 .. received];
             bool pushed;
+            size_t queuedHere;
 
             while (true)
             {
@@ -246,6 +253,7 @@ class ServerConnection
                             msgType = v.str;
                         if (msgType == "ping")
                         {
+                            logTrace("runThreadedImpl: ping -> pong");
                             sendMessage(JSONValue(["type": JSONValue("pong")]));
                             continue;
                         }
@@ -255,10 +263,15 @@ class ServerConnection
 
                 queue.pushMessage(line);
                 pushed = true;
+                ++queuedHere;
             }
 
             if (pushed)
+            {
+                logTrace("runThreadedImpl: queued %d messages, waking main thread",
+                    queuedHere);
                 pushWakeEvent(sdlEventType);
+            }
         }
     }
 
@@ -274,6 +287,7 @@ private:
     void sendMessage(JSONValue msg)
     {
         string line = msg.toString() ~ "\n";
+        logTrace("sendMessage: len=%d", line.length);
         sock.send(cast(const(void)[]) line);
     }
 
@@ -310,6 +324,8 @@ private:
             string msgType;
             if (const(JSONValue)* v = "type" in msg)
                 msgType = v.str;
+
+            logTrace("processLine: type=%s len=%d", msgType, line.length);
 
             switch (msgType)
             {

@@ -75,25 +75,30 @@ class FriendsTracker
     /// Returns true if the friends state changed.
     bool processEvent(VRCEvent event)
     {
+        bool changed;
         switch (event.type)
         {
             case EventType.friendOnline:
-                return handleFriendOnline(event.content);
+                changed = handleFriendOnline(event.content); break;
             case EventType.friendOffline:
-                return handleFriendOffline(event.content);
+                changed = handleFriendOffline(event.content); break;
             case EventType.friendActive:
-                return handleFriendActive(event.content);
+                changed = handleFriendActive(event.content); break;
             case EventType.friendLocation:
-                return handleFriendLocation(event.content);
+                changed = handleFriendLocation(event.content); break;
             case EventType.friendUpdate:
-                return handleFriendUpdate(event.content);
+                changed = handleFriendUpdate(event.content); break;
             case EventType.friendDelete:
-                return handleFriendDelete(event.content);
+                changed = handleFriendDelete(event.content); break;
             case EventType.friendAdd:
-                return handleFriendAdd(event.content);
+                changed = handleFriendAdd(event.content); break;
             default:
+                logTrace("processEvent: ignoring type=%s", event.typeRaw);
                 return false;
         }
+        logDebugging("processEvent: type=%s changed=%s friends=%d",
+            event.typeRaw, changed, friends.length);
+        return changed;
     }
 
     /// Build a JSON message with the full friends snapshot.
@@ -164,11 +169,18 @@ class FriendsTracker
 
         FriendState* f = userId in friends;
         if (f is null)
+        {
+            logTrace("enrichContent: no cached friend for %s", userId);
             return;
+        }
 
         // Add displayName if missing.
         if ("displayName" !in event.content && f.displayName.length > 0)
+        {
             event.content["displayName"] = JSONValue(f.displayName);
+            logTrace("enrichContent: added displayName=%s for %s",
+                f.displayName, userId);
+        }
 
         // Add platform if missing.
         if ("platform" !in event.content && f.platform.length > 0)

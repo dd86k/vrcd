@@ -41,6 +41,8 @@ AuthState authenticate(ref Config config, HTTPClient client, AuthDelegator deleg
     // Try existing session first.
     logInfo("Checking existing session...");
     HTTPResponse userResp = client.get("/auth/user");
+    logDebugging("GET /auth/user -> HTTP %d (bodyLen=%d)",
+        userResp.code, userResp.text.length);
 
     if (userResp.code == 200)
     {
@@ -145,6 +147,7 @@ AuthState fullLogin(ref Config config, HTTPClient client, AuthDelegator delegato
     // Step 1: GET config (validate API).
     logInfo("Fetching API config...");
     HTTPResponse configResp = client.get("/config");
+    logDebugging("GET /config -> HTTP %d", configResp.code);
     if (configResp.code != 200)
         throw new Exception("Failed to fetch API config: HTTP " ~ intToStr(configResp.code));
 
@@ -157,6 +160,7 @@ AuthState fullLogin(ref Config config, HTTPClient client, AuthDelegator delegato
 
     HTTPResponse loginResp = client.get("/auth/user");
     client.removeHeader("Authorization"); // Don't send basic auth on subsequent requests.
+    logDebugging("login GET /auth/user -> HTTP %d", loginResp.code);
 
     if (loginResp.code == 401)
         throw new Exception("Login failed: invalid credentials");
@@ -232,6 +236,7 @@ void handle2FA(HTTPClient client, JSONValue loginJson, AuthDelegator delegator)
 
         JSONValue payload = JSONValue(["code": JSONValue(code)]);
         HTTPResponse resp = client.post(endpoint, payload.toString());
+        logDebugging("POST %s -> HTTP %d", endpoint, resp.code);
 
         if (resp.code == 200)
         {
@@ -265,6 +270,7 @@ AuthState finishAuth(HTTPClient client, JSONValue userJson)
     // Get WebSocket auth token.
     logInfo("Fetching WebSocket token...");
     HTTPResponse authResp = client.get("/auth");
+    logDebugging("GET /auth -> HTTP %d", authResp.code);
     if (authResp.code != 200)
         throw new Exception("Failed to get auth token: HTTP " ~ intToStr(authResp.code));
 

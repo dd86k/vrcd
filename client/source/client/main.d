@@ -107,6 +107,9 @@ int main(string[] args)
     if (postSet == false)
         port = 9700;
 
+    logDebugging("main: host=%s port=%d sinceId=%d cliMode=%s verbose=%s",
+        host, port, sinceId, cliMode, verbose);
+
     if (cliMode)
     {
         cmdStream(host, port, secret, sinceId);

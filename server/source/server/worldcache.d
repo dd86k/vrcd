@@ -43,8 +43,12 @@ class WorldCache
         // Check cache.
         CacheEntry* entry = worldId in cache;
         if (entry !is null && entry.expiresAt > now)
+        {
+            logTrace("resolve: cache hit for %s -> %s", worldId, entry.name);
             return entry.name;
+        }
 
+        logDebugging("resolve: cache miss for %s, fetching", worldId);
         // Fetch from API.
         string name = fetchWorldName(worldId);
         long ttl;
@@ -60,6 +64,8 @@ class WorldCache
         }
 
         cache[worldId] = CacheEntry(name, now + ttl);
+        logDebugging("resolve: cached %s -> %s (ttl=%ds, entries=%d)",
+            worldId, name, ttl, cache.length);
         return name;
     }
 
@@ -86,6 +92,7 @@ class WorldCache
         if (worldId.length == 0)
             return;
 
+        logTrace("enrichWorldName: resolving %s", worldId);
         string name = resolve(worldId);
         if (name.length > 0)
             event.content["worldName"] = JSONValue(name);
@@ -117,9 +124,11 @@ private:
             return "";
         }
 
+        logDebugging("fetchWorldName: GET /worlds/%s", worldId);
         try
         {
             HTTPResponse resp = client.get("/worlds/" ~ worldId);
+            logDebugging("fetchWorldName: %s -> HTTP %d", worldId, resp.code);
             if (rateLimiter !is null)
                 rateLimiter.update(resp);
             if (resp.code != 200)

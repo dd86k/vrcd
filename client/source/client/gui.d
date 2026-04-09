@@ -565,6 +565,8 @@ private void guiCleanup()
 private void drainNetworkMessages()
 {
     string[] messages = msgQueue.drain();
+    if (messages.length > 0)
+        logTrace("drainNetworkMessages: %d messages", messages.length);
     foreach (string line; messages)
     {
         try
@@ -573,6 +575,8 @@ private void drainNetworkMessages()
             string msgType;
             if (const(JSONValue)* v = "type" in msg)
                 msgType = v.str;
+
+            logTrace("drainNetworkMessages: type=%s", msgType);
 
             switch (msgType)
             {
@@ -658,6 +662,7 @@ private void drainNetworkMessages()
                     string logEventType;
                     if (const(JSONValue)* v = "event_type" in msg)
                         logEventType = v.str;
+                    logDebugging("log-event received: %s", logEventType);
                     if (logEventType == "location-change")
                     {
                         // Update current instance from local log.
@@ -710,6 +715,7 @@ private void drainNetworkMessages()
                     string kind;
                     if (const(JSONValue)* v = "kind" in msg)
                         kind = v.str;
+                    logDebugging("auth_request: kind=%s", kind);
                     if (kind == "credentials")
                     {
                         appState.authDialogKind = AppState.AuthDialogKind.credentials;
@@ -1235,6 +1241,8 @@ private void doReconnect()
     import core.stdc.string : strlen;
     import std.conv : to;
 
+    logDebugging("doReconnect: tearing down existing connection");
+
     // Close existing connection and wait for network thread.
     if (conn !is null)
         conn.close();
@@ -1261,6 +1269,7 @@ private void doReconnect()
     // Reset queue state for the new connection.
     msgQueue = new MessageQueue();
 
+    logDebugging("doReconnect: connecting to %s:%d", host, port);
     appState.serverStatus = "Connecting...";
     appState.connected = false;
     conn = new ServerConnection(host, port, secret);

@@ -47,6 +47,9 @@ class RateLimitTracker
             catch (Exception) {}
         }
 
+        logTrace("ratelimit update: code=%d remaining=%d/%d reset=%d",
+            resp.code, rateLimitRemaining, rateLimitMax, rateLimitReset);
+
         if (resp.code == 429)
         {
             long retryAfter = 60; // Default: wait 60s if no header.

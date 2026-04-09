@@ -118,15 +118,25 @@ void dispatchNotification(string eventType, string user, string detail, Settings
     formatNotification(eventType, user, detail, title, body_);
 
     if (title.length == 0)
+    {
+        logTrace("dispatchNotification: no title for event=%s, skipping", eventType);
         return;
+    }
 
     // Check per-event-type filter.
     int idx = filterIndex(eventType);
     if (idx >= 0 && idx < cast(int) settings.notifyEventFilter.length)
     {
         if (settings.notifyEventFilter[idx] == false)
+        {
+            logTrace("dispatchNotification: event=%s filtered out", eventType);
             return;
+        }
     }
+
+    logDebugging("dispatchNotification: event=%s title=\"%s\" xs=%s ovrt=%s desktop=%s",
+        eventType, title, settings.notifyXSOverlay,
+        settings.notifyOVRToolkit, settings.notifyDesktop);
 
     if (settings.notifyXSOverlay)
         sendXSOverlay(title, body_, settings);

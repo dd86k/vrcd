@@ -27,6 +27,10 @@ void cmdRun(ref Config config)
     import core.thread : Thread;
     import core.time : dur;
 
+    logDebugging("cmdRun: dbPath=%s listen=%s:%d credsPath=%s cookiePath=%s",
+        config.dbPath, config.listenAddr, config.listenPort,
+        config.credentialsPath, config.cookieJarPath);
+
     // Initialize database.
     EventStore store = new EventStore(config.dbPath);
     logInfo("Database loaded from '%s'", config.dbPath);
@@ -90,6 +94,7 @@ void cmdRun(ref Config config)
     VRCWebSocket vrcws = new VRCWebSocket(authState.authToken,
     (VRCEvent event)
     {
+        logDebugging("event callback: type=%s", event.typeRaw);
         apiServer.getFriendsTracker().enrichContent(event);
         worldCache.enrichWorldName(event);
         long eventId = store.storeEvent(event);

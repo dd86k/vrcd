@@ -57,8 +57,12 @@ Settings loadSettings()
     string path = settingsFilePath();
 
     if (!exists(path))
+    {
+        logDebugging("loadSettings: no settings file at %s, using defaults", path);
         return s;
+    }
 
+    logDebugging("loadSettings: reading %s", path);
     try
     {
         string text = readText(path);
@@ -121,6 +125,8 @@ Settings loadSettings()
         logError("Failed to load settings from %s: %s", path, e.msg);
     }
 
+    logDebugging("loadSettings: host=%s port=%d fontSize=%.1f feedPageSize=%.0f",
+        s.host, s.port, s.fontSize, s.feedPageSize);
     return s;
 }
 
