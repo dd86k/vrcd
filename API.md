@@ -25,7 +25,7 @@ The client has two receive modes:
 - **Blocking (`run`)**: A single-threaded receive loop that processes messages inline via callbacks. Used for CLI mode.
 - **Threaded (`runThreaded`)**: A dedicated network thread pushes received JSON lines into a thread-safe `MessageQueue`. The main SDL thread is woken via `SDL_PushEvent` to drain the queue. Ping/pong is handled directly in the network thread to avoid queuing delay.
 
-In both modes the client sends requests (auth, catch_up, get_friends, etc.) by writing to the same socket. Sends are not mutex-protected on the client because only one thread writes (the main thread sends requests; the network thread only sends `pong`).
+In both modes the client sends requests (`auth`, `catch_up`, `get_friends`, etc.) by writing to the same socket. Sends are not mutex-protected on the client because only one thread writes (the main thread sends requests; the network thread only sends `pong`).
 
 ## Authentication
 
@@ -269,8 +269,8 @@ Client                          Server
   |<- {"type":"status",...} -------|
   |<- {"type":"friends",...} ------|
   |                                |
-  |-- {"type":"catch_up",         |
-  |    "since_id": 0} ----------->|
+  |-- {"type":"catch_up",          |
+  |    "since_id": 0} ------------>|
   |                                |
   |<- {"type":"event",...} --------|  (up to 1000 events)
   |<- {"type":"event",...} --------|
@@ -280,8 +280,8 @@ Client                          Server
   |<- {"type":"event",...} --------|
   |<- {"type":"friends",...} ------|
   |                                |
-  |<- {"type":"ping"} ------------|
-  |-- {"type":"pong"} ----------->|
+  |<- {"type":"ping"} -------------|
+  |-- {"type":"pong"} ------------>|
   |                                |
 ```
 
@@ -312,7 +312,7 @@ CREATE INDEX idx_ws_events_type ON ws_events (event_type);
 
 | Setting           | Default         | Description                    |
 |-------------------|-----------------|--------------------------------|
-| Listen address    | `127.0.0.1`    | TCP bind address               |
+| Listen address    | `127.0.0.1`     | TCP bind address               |
 | Listen port       | `9700`          | TCP port                       |
 | API secret        | (empty)         | Shared auth token; empty = no auth |
 | Config directory  | `~/.config/vrcd/` (Linux), `%APPDATA%\vrcd\` (Windows) | |
