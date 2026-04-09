@@ -768,7 +768,8 @@ private void drawFriendProfile(mu_Context* ctx, AppState* state, int scrollDelta
 private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDelta)
 {
     static immutable int[4] infoCols = [120, 150, -1, 100];
-    static immutable int[2] btnCols = [100, 100];
+    static immutable int[3] btnCols = [100, 100, 100];
+    static immutable int[1] dismissCol = [-1];
     static immutable int[1] fullCol = [-1];
     enum lineColor = mu_Color(50, 50, 60, 255);
 
@@ -798,15 +799,34 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
                 mu_layout_row(ctx, 1, fullCol.ptr, 30);
                 mu_label(ctx, "Pending...");
             }
-            else
+            else if (n.notificationType == "friendRequest")
             {
-                mu_layout_row(ctx, 2, btnCols.ptr, 30);
+                // Friend requests can be accepted, denied, or dismissed.
+                // Deny and Dismiss both send "hide"; Dismiss is the clearer
+                // label for stale requests already accepted on another client.
+                mu_layout_row(ctx, 3, btnCols.ptr, 30);
                 if (mu_button(ctx, "Accept"))
                 {
                     n.actionPending = true;
                     state.pendingActions ~= NotificationAction(n.notificationId, "accept");
                 }
                 if (mu_button(ctx, "Deny"))
+                {
+                    n.actionPending = true;
+                    state.pendingActions ~= NotificationAction(n.notificationId, "hide");
+                }
+                if (mu_button(ctx, "Dismiss"))
+                {
+                    n.actionPending = true;
+                    state.pendingActions ~= NotificationAction(n.notificationId, "hide");
+                }
+            }
+            else
+            {
+                // Other notification types (invite, requestInvite, message, ...)
+                // can only be dismissed (hide).
+                mu_layout_row(ctx, 1, dismissCol.ptr, 30);
+                if (mu_button(ctx, "Dismiss"))
                 {
                     n.actionPending = true;
                     state.pendingActions ~= NotificationAction(n.notificationId, "hide");

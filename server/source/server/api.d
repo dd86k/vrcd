@@ -555,6 +555,11 @@ private class ClientHandler
                 server.broadcastStatus();
             }
             bool success = resp.code >= 200 && resp.code < 300;
+            // For hide, treat 404 as success: the notification is already
+            // gone from VRChat (e.g. the friend request was accepted on
+            // another client), which is the desired end state.
+            if (success == false && action == "hide" && resp.code == 404)
+                success = true;
 
             JSONValue result = JSONValue([
                 "type": JSONValue("notification_action_result"),
