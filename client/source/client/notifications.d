@@ -21,6 +21,7 @@ immutable string[] notifyEventLabels = [
     "Player Joining",
     "Player Joined",
     "Player Left",
+    "Photo Taken",
 ];
 
 /// Raw event type strings corresponding to each notifyEventLabels entry.
@@ -33,6 +34,7 @@ private immutable string[][] notifyEventTypes = [
     ["player-joining"],
     ["player-joined"],
     ["player-left"],
+    ["photo-taken"],
 ];
 
 /// Format a VR notification from event fields.
@@ -82,6 +84,12 @@ private void formatNotification(string eventType, string user, string detail,
         case "player-left":
             title = "Player Left";
             body_ = user;
+            return;
+        case "photo-taken":
+            import std.path : baseName;
+            title = "Photo Taken";
+            // detail holds the screenshot path; show just the file name.
+            body_ = baseName(detail);
             return;
         default:
             return;

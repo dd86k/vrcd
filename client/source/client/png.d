@@ -7,6 +7,9 @@ module client.png;
 
 import std.stdio;
 import core.bitop : bswap;
+import std.digest.crc : crc32Of;
+import std.file : read, write;
+import std.array : Appender;
 
 struct PNGMetadata
 {
@@ -188,6 +191,118 @@ private
 
         return chunk;
     }
+}
+
+/// Write (or replace) a VRCX-style "Description" iTXt chunk in the given PNG.
+/// The file is rewritten in place. Existing "Description" iTXt chunks are
+/// dropped so the writer is idempotent.
+void writeDescriptionChunk(string path, string jsonText)
+{
+    ubyte[] data = cast(ubyte[]) read(path);
+    if (data.length < pngmagic.length || data[0 .. pngmagic.length] != pngmagic)
+        throw new Exception("not a PNG");
+
+    Appender!(ubyte[]) output;
+    output.put(data[0 .. pngmagic.length]);
+
+    static immutable string descKeyword = "Description";
+
+    size_t offset = pngmagic.length;
+    bool injected;
+
+    while (offset + 12 <= data.length) // 8 header + 4 crc minimum
+    {
+        uint length =
+            (cast(uint) data[offset    ]) << 24 |
+            (cast(uint) data[offset + 1]) << 16 |
+            (cast(uint) data[offset + 2]) <<  8 |
+            (cast(uint) data[offset + 3]);
+        char[4] chunkType = [
+            cast(char) data[offset + 4],
+            cast(char) data[offset + 5],
+            cast(char) data[offset + 6],
+            cast(char) data[offset + 7],
+        ];
+        size_t chunkEnd = offset + 8 + length + 4; // header + data + crc
+        if (chunkEnd > data.length)
+            throw new Exception("truncated PNG chunk");
+
+        if (chunkType == "IEND")
+        {
+            // Inject our chunk before IEND.
+            output.put(buildDescriptionChunk(jsonText));
+            output.put(data[offset .. chunkEnd]);
+            injected = true;
+            break;
+        }
+
+        // Drop existing Description iTXt chunks for idempotence.
+        bool dropChunk;
+        if (chunkType == "iTXt" && length > descKeyword.length)
+        {
+            size_t dataStart = offset + 8;
+            if (cast(string) data[dataStart .. dataStart + descKeyword.length] == descKeyword &&
+                data[dataStart + descKeyword.length] == 0)
+            {
+                dropChunk = true;
+            }
+        }
+
+        if (dropChunk == false)
+            output.put(data[offset .. chunkEnd]);
+
+        offset = chunkEnd;
+    }
+
+    if (injected == false)
+        throw new Exception("PNG has no IEND chunk");
+
+    write(path, output.data);
+}
+
+/// Build a complete iTXt chunk (length + type + data + CRC) for a VRCX-style
+/// "Description" text chunk containing the given UTF-8 JSON text.
+private ubyte[] buildDescriptionChunk(string jsonText)
+{
+    // iTXt data layout:
+    //   keyword (1-79 bytes) + \0
+    //   compression flag (1 byte)
+    //   compression method (1 byte)
+    //   language tag (0+ bytes) + \0
+    //   translated keyword (0+ bytes) + \0
+    //   text (UTF-8)
+    Appender!(ubyte[]) data;
+    data.put(cast(const(ubyte)[]) "Description");
+    data.put(cast(ubyte) 0); // keyword null terminator
+    data.put(cast(ubyte) 0); // compression flag: uncompressed
+    data.put(cast(ubyte) 0); // compression method
+    data.put(cast(ubyte) 0); // empty language tag
+    data.put(cast(ubyte) 0); // empty translated keyword
+    data.put(cast(const(ubyte)[]) jsonText);
+
+    ubyte[] payload = data.data;
+    uint length = cast(uint) payload.length;
+
+    Appender!(ubyte[]) chunk;
+    // Length (big-endian)
+    chunk.put(cast(ubyte)((length >> 24) & 0xFF));
+    chunk.put(cast(ubyte)((length >> 16) & 0xFF));
+    chunk.put(cast(ubyte)((length >>  8) & 0xFF));
+    chunk.put(cast(ubyte)( length        & 0xFF));
+    // Chunk type
+    chunk.put(cast(const(ubyte)[]) "iTXt");
+    // Data
+    chunk.put(payload);
+
+    // CRC32 is computed over chunk type + data. crc32Of returns bytes in
+    // little-endian order; PNG stores the value big-endian.
+    ubyte[4] crc = crc32Of(chunk.data[4 .. $]);
+    chunk.put(crc[3]);
+    chunk.put(crc[2]);
+    chunk.put(crc[1]);
+    chunk.put(crc[0]);
+
+    return chunk.data;
 }
 
 private:

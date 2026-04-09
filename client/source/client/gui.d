@@ -664,6 +664,13 @@ private void drainNetworkMessages()
                         if (const(JSONValue)* v = "location" in msg)
                             appState.currentLocation = v.str;
                     }
+                    else if (logEventType == "photo-taken")
+                    {
+                        string photoPath;
+                        if (const(JSONValue)* v = "path" in msg)
+                            photoPath = v.str;
+                        dispatchNotification(logEventType, "", photoPath, saved);
+                    }
                     else
                     {
                         string logUser;
@@ -1165,6 +1172,7 @@ private string prettyEventType(string eventType)
         case "player-joining":  return "Player Joining";
         case "player-joined":   return "Player Joined";
         case "player-left":     return "Player Left";
+        case "photo-taken":     return "Photo Taken";
         case "system":          return "System";
         case "error":           return "Error";
         default:                return eventType;
