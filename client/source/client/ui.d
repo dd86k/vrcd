@@ -862,6 +862,11 @@ private void drawToolsTab(mu_Context* ctx, AppState* state)
         state.stripStatus = null;
     }
 
+    if (mu_button(ctx, "Open Logs Folder"))
+    {
+        openLogsFolder();
+    }
+
     mu_end_panel(ctx);
 }
 
@@ -1163,6 +1168,30 @@ private void openPicturesFolder()
     {
         string picturesPath = expandTilde(
             "~/.local/share/Steam/steamapps/compatdata/438100/pfx/drive_c/users/steamuser/Pictures/VRChat"
+        );
+        try spawnProcess(["xdg-open", picturesPath]);
+        catch (Exception) {}
+    }
+}
+
+/// Open the VRChat logs folder in the system file manager.
+private void openLogsFolder()
+{
+    import std.process : spawnProcess;
+    import std.path : buildPath, expandTilde;
+
+    version (Windows)
+    {
+        import std.process : environment;
+        string userprofile = environment.get("LOCALAPPDATA", "");
+        string picturesPath = buildPath(userprofile, "VRChat", "VRChat");
+        try spawnProcess(["explorer", picturesPath]);
+        catch (Exception) {}
+    }
+    else
+    {
+        string picturesPath = expandTilde(
+            "~/.local/share/Steam/steamapps/compatdata/438100/pfx/drive_c/users/steamuser/AppData/LocalLow/VRChat/VRChat"
         );
         try spawnProcess(["xdg-open", picturesPath]);
         catch (Exception) {}
