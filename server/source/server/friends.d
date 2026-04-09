@@ -115,7 +115,7 @@ class FriendsTracker
         {
             JSONValue fObj = friendToJSON(f);
 
-            if (!f.online || f.location.length == 0 || f.location == "offline")
+            if (f.online == false || f.location.length == 0 || f.location == "offline")
             {
                 offlineList ~= fObj;
                 continue;

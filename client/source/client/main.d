@@ -40,7 +40,7 @@ void cmdStream(string host, ushort port, string secret, long sinceId)
         logError("Server: %s", msg);
     });
 
-    if (!conn.connect())
+    if (conn.connect() == false)
     {
         logError("Could not connect to server");
         return;

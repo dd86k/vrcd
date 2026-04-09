@@ -334,7 +334,7 @@ private class ClientHandler
                     handleAuth(msg);
                     break;
                 case "catch_up":
-                    if (!authenticated)
+                    if (authenticated == false)
                     {
                         sendError("Not authenticated");
                         return;
@@ -342,7 +342,7 @@ private class ClientHandler
                     handleCatchUp(msg);
                     break;
                 case "status":
-                    if (!authenticated)
+                    if (authenticated == false)
                     {
                         sendError("Not authenticated");
                         return;
@@ -350,7 +350,7 @@ private class ClientHandler
                     sendLine(server.buildStatusMessage().toString() ~ "\n");
                     break;
                 case "get_friends":
-                    if (!authenticated)
+                    if (authenticated == false)
                     {
                         sendError("Not authenticated");
                         return;
@@ -358,7 +358,7 @@ private class ClientHandler
                     sendLine(server.friendsTracker.buildFriendsMessage().toString() ~ "\n");
                     break;
                 case "get_world":
-                    if (!authenticated)
+                    if (authenticated == false)
                     {
                         sendError("Not authenticated");
                         return;
@@ -366,7 +366,7 @@ private class ClientHandler
                     handleGetWorld(msg);
                     break;
                 case "notification_action":
-                    if (!authenticated)
+                    if (authenticated == false)
                     {
                         sendError("Not authenticated");
                         return;
@@ -374,7 +374,7 @@ private class ClientHandler
                     handleNotificationAction(msg);
                     break;
                 case "auth_response":
-                    if (!authenticated)
+                    if (authenticated == false)
                     {
                         sendError("Not authenticated");
                         return;

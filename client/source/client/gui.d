@@ -169,7 +169,7 @@ int runGui(string host, ushort port, string secret, long sinceId,
     initiate_renderer();
 
     // Load system font.
-    if (!initFont())
+    if (initFont() == false)
         logError("No system font found — text will not render");
 
     // Init UI context (heap-allocated — mu_Context is ~4 MB, far too
@@ -442,7 +442,7 @@ private void eventLoop(mu_Context* uictx)
             const(char)* nul = cast(const(char)*) memchr(appState.settingsFontPath.ptr, 0, appState.settingsFontPath.length);
             if (nul !is null)
                 fontPath = appState.settingsFontPath[0 .. nul - appState.settingsFontPath.ptr];
-            if (!initFont(fontPath, cast(int) appState.settingsFontSize))
+            if (initFont(fontPath, cast(int) appState.settingsFontSize) == false)
                 logError("Failed to load font");
         }
 

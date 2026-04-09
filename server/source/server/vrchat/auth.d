@@ -103,7 +103,7 @@ void setupClient(HTTPClient client, ref Config config)
     // Ensure cookie jar directory exists.
     string cookiePath = config.cookieJarPath;
     string dir = dirName(cookiePath);
-    if (!exists(dir))
+    if (exists(dir) == false)
         mkdirRecurse(dir);
     client.setCookieJar(cookiePath);
 }
@@ -298,7 +298,7 @@ void saveCredentials(string path, string username, string password)
     import std.path : dirName;
 
     string dir = dirName(path);
-    if (!exists(dir))
+    if (exists(dir) == false)
         mkdirRecurse(dir);
 
     JSONValue creds = JSONValue(["username": JSONValue(username), "password": JSONValue(password)]);

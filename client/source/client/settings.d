@@ -56,7 +56,7 @@ Settings loadSettings()
     Settings s;
     string path = settingsFilePath();
 
-    if (!exists(path))
+    if (exists(path) == false)
     {
         logDebugging("loadSettings: no settings file at %s, using defaults", path);
         return s;
@@ -139,7 +139,7 @@ void saveSettings(Settings s)
     {
         // Ensure parent directory exists.
         string dir = dirName(path);
-        if (!exists(dir))
+        if (exists(dir) == false)
             mkdirRecurse(dir);
 
         JSONValue json = JSONValue(string[string].init);

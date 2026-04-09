@@ -33,7 +33,7 @@ class EventStore
     this(string dbPath)
     {
         string dir = dirName(dbPath);
-        if (!exists(dir))
+        if (exists(dir) == false)
             mkdirRecurse(dir);
 
         db = new Sqlite(dbPath);

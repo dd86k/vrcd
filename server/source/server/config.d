@@ -73,7 +73,7 @@ struct Config
     {
         import std.file : readText, exists;
 
-        if (!exists(path))
+        if (exists(path) == false)
             return;
 
         string text = readText(path);

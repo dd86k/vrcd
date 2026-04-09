@@ -153,7 +153,7 @@ private void drawFeedSearchBar(mu_Context* ctx)
 /// Draw the filter popup as a standalone window.
 private void drawFeedFilterPopup(mu_Context* ctx)
 {
-    if (!filterPopupOpen)
+    if (filterPopupOpen == false)
         return;
 
     if (mu_begin_window_ex(ctx, "Filters", mu_Rect(10, 100, 340, 500),
@@ -247,14 +247,13 @@ private void drawFeedTab(mu_Context* ctx, AppState* state, int scrollDelta)
     {
         // Count filtered entries and render only the current page.
         int filteredCount;
-        int rendered;
         int skipStart = feedPage * cast(int) state.feedPageSize;
         int skipEnd = skipStart + cast(int) state.feedPageSize;
         bool anyVisible;
 
         foreach (ref FeedEntry entry; state.feedEntries)
         {
-            if (!passesFilter(entry, searchQuery))
+            if (passesFilter(entry, searchQuery) == false)
                 continue;
 
             if (filteredCount >= skipStart && filteredCount < skipEnd)
@@ -308,7 +307,7 @@ private void drawFeedTab(mu_Context* ctx, AppState* state, int scrollDelta)
         if (feedPage >= totalPages)
             feedPage = totalPages - 1;
 
-        if (!anyVisible)
+        if (anyVisible == false)
         {
             mu_layout_row(ctx, 1, fullCol.ptr, 0);
             mu_label(ctx, "No matching events.");
@@ -554,7 +553,7 @@ private bool passesFilter(ref FeedEntry entry, string query)
             break;
         }
     }
-    if (!typeAllowed)
+    if (typeAllowed == false)
         return false;
 
     // Text search filter.
@@ -632,7 +631,7 @@ private void gridCell(mu_Context* ctx, string text, mu_Color lineColor, bool las
 {
     mu_Rect r = mu_layout_next(ctx);
     mu_draw_control_text(ctx, text, r, MU_COLOR_TEXT, 0);
-    if (!lastCol)
+    if (lastCol == false)
         mu_draw_rect(ctx, mu_Rect(r.x + r.w - 1, r.y, 1, r.h), lineColor);
 }
 
@@ -934,7 +933,7 @@ private string stripOutputPath(string path)
     import std.path : dirName, baseName, buildPath;
     import std.string : endsWith;
 
-    if (!endsWith(toLower(path), ".png"))
+    if (endsWith(toLower(path), ".png") == 0)
         return null;
 
     string base = baseName(path);
