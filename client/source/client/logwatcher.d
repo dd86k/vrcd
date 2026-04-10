@@ -5,11 +5,10 @@
 module client.logwatcher;
 
 import std.file : dirEntries, SpanMode, exists, DirEntry;
-import std.path : buildPath, expandTilde;
+import std.path : buildPath;
 import std.stdio : File;
 import std.string : indexOf, stripRight;
 import std.algorithm : sort, remove, countUntil;
-import std.array : replace;
 import std.json : JSONValue;
 
 import core.thread;
@@ -19,6 +18,7 @@ import ddlogger;
 
 import client.state : MessageQueue;
 import client.png : writeDescriptionChunk;
+import client.directories : vrchatLogDir, translateVRChatPath;
 
 /// Log event types emitted by the watcher.
 enum LogEvent : string
@@ -543,47 +543,3 @@ class LogWatcher
     }
 }
 
-/// Return the VRChat log directory for the current platform.
-private string vrchatLogDir()
-{
-    version (Windows)
-    {
-        import std.process : environment;
-        string localAppData = environment.get("LOCALAPPDATA", "");
-        if (localAppData.length == 0)
-            return "";
-        return buildPath(localAppData ~ "Low", "VRChat", "VRChat");
-    }
-    else
-    {
-        return expandTilde(
-            "~/.steam/steam/steamapps/compatdata/438100/pfx/drive_c/users/steamuser/AppData/LocalLow/VRChat/VRChat"
-        );
-    }
-}
-
-/// Translate a Windows-flavoured path from the VRChat log into a local path.
-/// On Windows this is a no-op; on Linux it remaps "C:\..." into the Proton
-/// prefix used for the VRChat install.
-private string translateVRChatPath(string logPath)
-{
-    version (Windows)
-    {
-        return logPath;
-    }
-    else
-    {
-        // Expect something like "C:\users\steamuser\Pictures\VRChat\...".
-        if (logPath.length < 3 || logPath[1] != ':')
-            return logPath;
-        char sep = logPath[2];
-        if (sep != '\\' && sep != '/')
-            return logPath;
-        // Strip drive letter and normalise separators.
-        string tail = logPath[2 .. $].replace("\\", "/");
-        string prefix = expandTilde(
-            "~/.steam/steam/steamapps/compatdata/438100/pfx/drive_c"
-        );
-        return prefix ~ tail;
-    }
-}

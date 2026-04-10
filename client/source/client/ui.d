@@ -1184,48 +1184,30 @@ private void drawSettingsTab(mu_Context* ctx, AppState* state, int scrollDelta)
 private void openPicturesFolder()
 {
     import std.process : spawnProcess;
-    import std.path : buildPath, expandTilde;
+    import client.directories : vrchatPicturesDir;
 
+    string path = vrchatPicturesDir();
+    if (path.length == 0)
+        return;
     version (Windows)
-    {
-        import std.process : environment;
-        string userprofile = environment.get("USERPROFILE", "");
-        string picturesPath = buildPath(userprofile, "Pictures", "VRChat");
-        try spawnProcess(["explorer", picturesPath]);
-        catch (Exception) {}
-    }
+        try spawnProcess(["explorer", path]); catch (Exception) {}
     else
-    {
-        string picturesPath = expandTilde(
-            "~/.local/share/Steam/steamapps/compatdata/438100/pfx/drive_c/users/steamuser/Pictures/VRChat"
-        );
-        try spawnProcess(["xdg-open", picturesPath]);
-        catch (Exception) {}
-    }
+        try spawnProcess(["xdg-open", path]); catch (Exception) {}
 }
 
 /// Open the VRChat logs folder in the system file manager.
 private void openLogsFolder()
 {
     import std.process : spawnProcess;
-    import std.path : buildPath, expandTilde;
+    import client.directories : vrchatLogDir;
 
+    string path = vrchatLogDir();
+    if (path.length == 0)
+        return;
     version (Windows)
-    {
-        import std.process : environment;
-        string userprofile = environment.get("LOCALAPPDATA", "");
-        string picturesPath = buildPath(userprofile, "VRChat", "VRChat");
-        try spawnProcess(["explorer", picturesPath]);
-        catch (Exception) {}
-    }
+        try spawnProcess(["explorer", path]); catch (Exception) {}
     else
-    {
-        string picturesPath = expandTilde(
-            "~/.local/share/Steam/steamapps/compatdata/438100/pfx/drive_c/users/steamuser/AppData/LocalLow/VRChat/VRChat"
-        );
-        try spawnProcess(["xdg-open", picturesPath]);
-        catch (Exception) {}
-    }
+        try spawnProcess(["xdg-open", path]); catch (Exception) {}
 }
 
 /// Draw the status bar at the bottom.
