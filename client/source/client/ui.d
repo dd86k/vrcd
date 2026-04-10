@@ -446,28 +446,45 @@ private void drawFeedPagination(mu_Context* ctx, AppState* state)
 
     mu_begin_panel(ctx, "PaginationPanel");
 
-    // Determine how many page number buttons to show (up to 5).
+    int btnWidth = 80;
+    mu_Container* panel = mu_get_current_container(ctx);
+    int sp = ctx.style.spacing;
+    int layoutW = panel.body_.w - ctx.style.padding * 2;
+
+    // Cap page button count to what fits alongside the 4 nav buttons
+    // (First, Prev, Next, Last) plus a spacer column.
     int maxPageButtons = 5;
     if (totalPages < maxPageButtons)
         maxPageButtons = totalPages;
+
+    int fit = (layoutW - 4 * btnWidth - 5 * sp) / (btnWidth + sp);
+    if (fit < 0) fit = 0;
+    if (maxPageButtons > fit) maxPageButtons = fit;
+
+    // If the panel is too narrow for even the 4 nav buttons at full width,
+    // shrink them so Next and Last stay on-screen.
+    if (layoutW < 4 * btnWidth + 5 * sp)
+    {
+        int avail = layoutW - 5 * sp;
+        if (avail < 4) avail = 4;
+        btnWidth = avail / 4;
+        if (btnWidth < 10) btnWidth = 10;
+    }
 
     // Centre the page window around current page.
     int pageStart = feedPage - maxPageButtons / 2;
     if (pageStart < 0) pageStart = 0;
     if (pageStart + maxPageButtons > totalPages)
         pageStart = totalPages - maxPageButtons;
+    if (pageStart < 0) pageStart = 0;
 
     // Layout: First, Prev, [page buttons...], spacer, Next, Last
     int numCols = 5 + maxPageButtons; // First + Prev + pages + spacer + Next + Last
     int[10] colWidths;                // max 5 + 5 = 10
     assert(numCols <= colWidths.length);
 
-    int btnWidth = 80;
-    mu_Container* panel = mu_get_current_container(ctx);
-    int padding = ctx.style.padding * 2;
-    int spacing = ctx.style.spacing * numCols;
-    int usedWidth = btnWidth * (4 + maxPageButtons) + padding + spacing;
-    int spacerWidth = panel.body_.w - usedWidth;
+    int usedWidth = btnWidth * (4 + maxPageButtons) + numCols * sp;
+    int spacerWidth = layoutW - usedWidth;
     if (spacerWidth < 0) spacerWidth = 0;
 
     colWidths[0] = btnWidth; // First
