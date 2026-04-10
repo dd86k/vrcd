@@ -64,8 +64,10 @@ void drawFullWindow(mu_Context* ctx, AppState* state, int scrollDelta)
 
         if (activeTab == Tab.feed)
         {
-            // Feed: panel fills remaining space minus pagination row and status bar.
-            mu_layout_row(ctx, 1, fullCol.ptr, -75);
+            // Feed: panel fills remaining space minus pagination row, status bar,
+            // and the inter-row spacing inserted between pagination and status
+            // (otherwise the status bar lands one spacing lower than on other tabs).
+            mu_layout_row(ctx, 1, fullCol.ptr, -(50 + 25 + ctx.style.spacing));
             drawFeedTab(ctx, state, scrollDelta);
 
             // Pagination row (50px).
