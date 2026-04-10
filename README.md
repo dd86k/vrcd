@@ -35,6 +35,9 @@ HTTP requests/WS events
 
 Targets Windows and Linux.
 
+Related projects:
+- [vrcd-server-container](https://github.com/ArcaneDisgea/vrcd-server-container) by ArcaneDisgea.
+
 ## Quick Start
 
 See each component's README for dependencies, configuration, and architecture details.
