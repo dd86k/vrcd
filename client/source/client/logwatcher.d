@@ -47,7 +47,15 @@ class LogWatcher
 
     // Local state maintained from parsed log lines.
     private string currentLocation;
+    private string currentWorldName;
     private TrackedPlayer[] currentPlayers;
+    private TrackedPlayer localUser;
+
+    // While true, parseLine updates state but suppresses all outward-facing
+    // side effects (events, metadata writes). Used during initial backfill
+    // so we rebuild state from an existing log file without replaying old
+    // events to the UI.
+    private bool silent;
 
     this(MessageQueue queue, uint sdlEventType)
     {
@@ -128,10 +136,12 @@ class LogWatcher
             pos = filePositions[latest.name];
         else
         {
-            // First time seeing this file: skip to end so we only see new events.
-            pos = latest.size;
+            // First time seeing this file: scan the whole thing silently to
+            // rebuild state (local user, current world, roster) from history,
+            // then track from the end so only new events generate output.
+            pos = backfillFromFile(latest.name);
             filePositions[latest.name] = pos;
-            logDebugging("LogWatcher: tracking new file %s from offset %d",
+            logDebugging("LogWatcher: backfilled %s up to offset %d",
                 latest.name, pos);
             return;
         }
@@ -148,6 +158,9 @@ class LogWatcher
             char[] buf;
             while (f.readln(buf))
             {
+                // buf is reused by readln across iterations, so any slice
+                // of `line` that outlives this call must be idup'd by the
+                // consumer (see addPlayer, Joining/Entering Room handlers).
                 string line = cast(string) buf;
                 parseLine(line);
             }
@@ -162,6 +175,38 @@ class LogWatcher
         }
     }
 
+    /// Silently replay an existing log file to rebuild state without firing
+    /// events or writing metadata. Returns the file offset at end of scan so
+    /// the caller can resume live tailing from there.
+    private long backfillFromFile(string path)
+    {
+        silent = true;
+        scope (exit) silent = false;
+        try
+        {
+            File f = File(path, "r");
+            char[] buf;
+            while (f.readln(buf))
+            {
+                string line = cast(string) buf;
+                parseLine(line);
+            }
+            long end = f.tell();
+            f.close();
+            logDebugging("LogWatcher: backfill complete user='%s' world='%s' location='%s' players=%d",
+                localUser.displayName, currentWorldName, currentLocation, currentPlayers.length);
+            return end;
+        }
+        catch (Exception e)
+        {
+            logError("Failed to backfill from %s: %s", path, e.msg);
+            try
+                return DirEntry(path).size;
+            catch (Exception)
+                return 0;
+        }
+    }
+
     /// Parse a single log line for player join/leave events.
     private void parseLine(string line)
     {
@@ -173,9 +218,45 @@ class LogWatcher
         if (line.length <= 36 || line[31] != '-')
             return;
 
-        // Check for [Behaviour] marker at offset 34.
-        if (line.length <= 34 || line[34] != '[')
+        // Event: Local user authenticated with VRChat. Logged near the top of
+        // every session, e.g.
+        //   2026.04.10 17:05:07 Debug      -  User Authenticated: dd86k (usr_xxx)
+        // Does not have a [Behaviour] marker, so handle before the fast-path.
+        enum string authMarker = "User Authenticated: ";
+        ptrdiff_t authIdx = indexOf(line, authMarker);
+        if (authIdx == 34)
+        {
+            string rest = stripRight(line[authIdx + authMarker.length .. $]);
+            string displayName;
+            string userId;
+            splitPlayer(rest, displayName, userId);
+            if (displayName.length > 0 && userId.length > 0)
+            {
+                logDebugging("LogWatcher: local user authenticated as '%s' (%s)",
+                    displayName, userId);
+                localUser = TrackedPlayer(displayName.idup, userId.idup);
+            }
             return;
+        }
+
+        // Check for [Behaviour] marker at offset 34.
+        if (line[34] != '[')
+            return;
+
+        // Event: Entering Room, which gives us the human-readable world name.
+        // This fires immediately before the "Joining wrld_..." line.
+        enum string enterMarker = "[Behaviour] Entering Room: ";
+        ptrdiff_t enterIdx = indexOf(line, enterMarker);
+        if (enterIdx >= 0)
+        {
+            string name = stripRight(line[enterIdx + enterMarker.length .. $]);
+            if (name.length > 0)
+            {
+                logDebugging("LogWatcher: entering room '%s'", name);
+                currentWorldName = name.idup;
+            }
+            return;
+        }
 
         // Event: Someone is joining instance (friends only?)
         // Check for room join: [Behaviour] Joining wrld_xxx:12345~region(us)
@@ -195,9 +276,9 @@ class LogWatcher
                     if (location.length > 0)
                     {
                         logDebugging("LogWatcher: joining instance %s", location);
-                        currentLocation = location;
+                        currentLocation = location.idup;
                         currentPlayers = null;
-                        pushLocationEvent(location);
+                        pushLocationEvent(currentLocation);
                     }
                 }
             }
@@ -274,6 +355,11 @@ class LogWatcher
         ptrdiff_t photoIdx = indexOf(line, photoMarker);
         if (photoIdx >= 0)
         {
+            // Skip old photos replayed during backfill — VRChat has long
+            // since closed the file and we don't want to rewrite metadata
+            // for historical screenshots.
+            if (silent)
+                return;
             size_t pathStart = cast(size_t)(photoIdx + photoMarker.length);
             if (pathStart >= line.length)
                 return;
@@ -296,6 +382,7 @@ class LogWatcher
     }
 
     /// Add a player to the local instance roster (no-op if already present).
+    /// Strings are idup'd so they don't alias the reusable readln buffer.
     private void addPlayer(string displayName, string userId)
     {
         foreach (ref TrackedPlayer p; currentPlayers)
@@ -303,11 +390,11 @@ class LogWatcher
             if (p.displayName == displayName)
             {
                 if (p.userId.length == 0 && userId.length > 0)
-                    p.userId = userId;
+                    p.userId = userId.idup;
                 return;
             }
         }
-        currentPlayers ~= TrackedPlayer(displayName, userId);
+        currentPlayers ~= TrackedPlayer(displayName.idup, userId.idup);
     }
 
     /// Remove a player from the local instance roster by display name.
@@ -325,6 +412,15 @@ class LogWatcher
         msg["application"] = "vrcd";
         msg["version"] = 1;
 
+        if (localUser.displayName.length > 0)
+        {
+            JSONValue author = JSONValue(string[string].init);
+            author["displayName"] = localUser.displayName;
+            if (localUser.userId.length > 0)
+                author["id"] = localUser.userId;
+            msg["author"] = author;
+        }
+
         if (currentLocation.length > 0)
         {
             JSONValue world = JSONValue(string[string].init);
@@ -332,6 +428,8 @@ class LogWatcher
             ptrdiff_t colon = indexOf(currentLocation, ':');
             if (colon > 0)
                 world["id"] = currentLocation[0 .. colon];
+            if (currentWorldName.length > 0)
+                world["name"] = currentWorldName;
             msg["world"] = world;
         }
 
@@ -397,6 +495,8 @@ class LogWatcher
     /// Push a player join/leave event into the shared queue.
     private void pushEvent(LogEvent event, string displayName)
     {
+        if (silent)
+            return;
         JSONValue msg = JSONValue(string[string].init);
         msg["type"] = "log-event";
         msg["event_type"] = cast(string) event;
@@ -409,6 +509,8 @@ class LogWatcher
     /// Push a location change event into the shared queue.
     private void pushLocationEvent(string location)
     {
+        if (silent)
+            return;
         JSONValue msg = JSONValue(string[string].init);
         msg["type"] = "log-event";
         msg["event_type"] = cast(string) LogEvent.locationChange;
@@ -421,6 +523,8 @@ class LogWatcher
     /// Push a photo-taken event into the shared queue.
     private void pushPhotoEvent(string path)
     {
+        if (silent)
+            return;
         JSONValue msg = JSONValue(string[string].init);
         msg["type"] = "log-event";
         msg["event_type"] = cast(string) LogEvent.photoTaken;
