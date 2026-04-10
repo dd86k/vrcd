@@ -77,7 +77,7 @@ class ServerConnection
         JSONValue resp = readOneMessage();
         if (resp.type == JSONType.null_)
         {
-            logError("Connection closed during auth");
+            logError("Server closed connection during authentication");
             return false;
         }
 
@@ -98,12 +98,12 @@ class ServerConnection
             string errMessage;
             if (const(JSONValue)* v = "message" in resp)
                 errMessage = v.str;
-            logError("Auth failed: %s", errMessage);
+            logError("Server authentication failed: %s (check client token matches server)", errMessage);
             return false;
         }
         else
         {
-            logError("Unexpected auth response: %s", msgType);
+            logError("Unexpected server auth response: %s", msgType);
             return false;
         }
     }
