@@ -31,6 +31,10 @@ struct Settings
     float notifyOpacity = 1.0f;
     bool notifySound = true;
     bool[notifyEventLabels.length] notifyEventFilter = true;
+
+    // Highest event id processed from the server. Used on reconnect
+    // to resume catch-up instead of replaying the entire event store.
+    long lastEventId;
 }
 
 /// Return the settings file path per platform.
@@ -119,6 +123,8 @@ Settings loadSettings()
                     s.notifyEventFilter[i] = arr[i].type == JSONType.true_;
             }
         }
+        if ("last_event_id" in json && json["last_event_id"].type == JSONType.integer)
+            s.lastEventId = json["last_event_id"].get!long;
     }
     catch (Exception e)
     {
@@ -162,6 +168,8 @@ void saveSettings(Settings s)
         foreach (size_t i; 0 .. notifyEventLabels.length)
             filterArr ~= JSONValue(s.notifyEventFilter[i]);
         json["notify_event_filter"] = filterArr;
+
+        json["last_event_id"] = s.lastEventId;
 
         write(path, json.toPrettyString());
         logInfo("Settings saved to %s", path);

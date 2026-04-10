@@ -80,7 +80,7 @@ private enum MOMENTUM_MIN = 0.5f;
 bool wasClick;
 
 int runGui(string host, ushort port, string secret, long sinceId,
-    bool hostExplicit, bool portExplicit, bool secretExplicit)
+    bool hostExplicit, bool portExplicit, bool secretExplicit, bool sinceExplicit)
 {
     // Load saved settings; CLI args override.
     saved = loadSettings();
@@ -90,6 +90,9 @@ int runGui(string host, ushort port, string secret, long sinceId,
         port = saved.port;
     if (secretExplicit == false)
         secret = saved.secret;
+    // Resume catch-up from persisted cursor unless --since was explicit.
+    if (sinceExplicit == false)
+        sinceId = saved.lastEventId;
     appState.settingsFontSize = saved.fontSize;
     appState.feedPageSize = saved.feedPageSize;
 
@@ -520,6 +523,16 @@ private void eventLoop(mu_Context* uictx)
         pendingScrollY = 0;
         mu_end(uictx);
 
+        // If a button click mutated state this frame (e.g. an optimistic
+        // dismiss), push a wake event so the next iteration renders the
+        // updated state instead of waiting indefinitely in SDL_WaitEvent.
+        if (appState.pendingActions.length > 0)
+        {
+            SDL_Event wakeEv;
+            wakeEv.type = networkEventType;
+            SDL_PushEvent(&wakeEv);
+        }
+
         r_clear(mu_Color(30, 30, 35, 255));
         foreach (ref mu_Command cmd; mu_command_range(uictx))
         {
@@ -554,6 +567,9 @@ private void guiCleanup()
         netThread.join();
         netThread = null;
     }
+    // Persist the event cursor so the next run resumes instead of
+    // replaying everything from id 0.
+    saveSettings(saved);
     destroyFont();
     destroy_renderer();
     SDL_DestroyWindow(window);
@@ -584,6 +600,9 @@ private void drainNetworkMessages()
                     long id;
                     if (const(JSONValue) *jid = "id" in msg)
                         id = jid.integer;
+
+                    if (id > saved.lastEventId)
+                        saved.lastEventId = id;
 
                     string eventType;
                     if (const(JSONValue)* v = "event_type" in msg)
@@ -621,6 +640,9 @@ private void drainNetworkMessages()
                     long lastId;
                     if (const(JSONValue) *last_id = "last_id" in msg)
                         lastId = last_id.integer;
+                    if (lastId > saved.lastEventId)
+                        saved.lastEventId = lastId;
+                    saveSettings(saved);
                     appState.addFeedEntry(0, "system", "", "Caught up to event #" ~ lastId.to!string, "");
                     break;
 
@@ -1293,7 +1315,7 @@ private void doReconnect()
     {
         appState.connected = true;
         appState.serverStatus = "Connected";
-        conn.catchUp(0);
+        conn.catchUp(saved.lastEventId);
         conn.requestFriends();
 
         netThread = new Thread({
@@ -1336,6 +1358,10 @@ private void doSaveSettings()
     s.notifySound = appState.notifySound != 0;
     foreach (size_t i; 0 .. notifyEventLabels.length)
         s.notifyEventFilter[i] = appState.notifyEventFilter[i] != 0;
+
+    // Preserve the runtime-tracked event cursor; the Settings tab
+    // doesn't expose it and we don't want to reset it to 0.
+    s.lastEventId = saved.lastEventId;
 
     saved = s; // Update module-level copy used by notification dispatch.
     saveSettings(s);

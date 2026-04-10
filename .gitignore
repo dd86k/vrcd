@@ -21,4 +21,7 @@ vrcd-test-*
 *.obj
 *.lst
 *.json
+
 perso/
+
+*.log

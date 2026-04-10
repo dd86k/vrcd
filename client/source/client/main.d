@@ -56,7 +56,7 @@ int main(string[] args)
     string host;
     ushort port;
     string secret;
-    long sinceId;
+    long sinceId = -1;
     bool verbose;
     bool cliMode;
 
@@ -65,7 +65,7 @@ int main(string[] args)
         "host|h",     "Server host", &host,
         "port|p",     "Server port", &port,
         "secret|s",   "API secret", &secret,
-        "since",      "Catch up from event ID (0 = all)", &sinceId,
+        "since",      "Catch up from event ID (overrides persisted cursor; 0 = all)", &sinceId,
         "verbose|v",  "Enable verbose logging", &verbose,
         "cli",        "CLI mode (no GUI)", &cliMode,
     );
@@ -100,22 +100,25 @@ int main(string[] args)
     bool hostSet = host.length > 0;
     bool postSet = port != 0;
     bool secretSet = secret.length > 0;
+    bool sinceSet = sinceId >= 0;
 
     // Apply defaults for unset CLI args.
     if (hostSet == false)
         host = "127.0.0.1";
     if (postSet == false)
         port = 9700;
+    if (sinceSet == false)
+        sinceId = 0;
 
-    logDebugging("main: host=%s port=%d sinceId=%d cliMode=%s verbose=%s",
-        host, port, sinceId, cliMode, verbose);
+    logDebugging("main: host=%s port=%d sinceId=%d sinceSet=%s cliMode=%s verbose=%s",
+        host, port, sinceId, sinceSet, cliMode, verbose);
 
     if (cliMode)
     {
         cmdStream(host, port, secret, sinceId);
         return 0;
     }
-    
-    return runGui(host, port, secret, sinceId, hostSet, postSet, secretSet);
+
+    return runGui(host, port, secret, sinceId, hostSet, postSet, secretSet, sinceSet);
 }
 

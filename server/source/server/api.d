@@ -444,21 +444,29 @@ private class ClientHandler
 
         logInfo("Client catching up from event #%d", sinceId);
 
+        enum int batchSize = 1000;
         long lastId = sinceId;
         long sent;
-        foreach (row; server.store.queryEventsAfter(sinceId))
+        while (true)
         {
-            long id = row[0].to!long;
-            JSONValue eventMsg = JSONValue([
-                "type": JSONValue("event"),
-                "id": JSONValue(id),
-                "received_at": JSONValue(row[1].to!string),
-                "event_type": JSONValue(row[2].to!string),
-                "content": parseJSON(row[3].to!string),
-            ]);
-            sendLine(eventMsg.toString() ~ "\n");
-            lastId = id;
-            ++sent;
+            long batchSent;
+            foreach (row; server.store.queryEventsAfter(lastId, batchSize))
+            {
+                long id = row[0].to!long;
+                JSONValue eventMsg = JSONValue([
+                    "type": JSONValue("event"),
+                    "id": JSONValue(id),
+                    "received_at": JSONValue(row[1].to!string),
+                    "event_type": JSONValue(row[2].to!string),
+                    "content": parseJSON(row[3].to!string),
+                ]);
+                sendLine(eventMsg.toString() ~ "\n");
+                lastId = id;
+                ++sent;
+                ++batchSent;
+            }
+            if (batchSent < batchSize)
+                break;
         }
 
         JSONValue doneMsg = JSONValue([
