@@ -881,7 +881,8 @@ private void drawToolsTab(mu_Context* ctx, AppState* state)
 
     if (mu_button(ctx, "Open Pictures Folder"))
     {
-        openPicturesFolder();
+        import client.directories : vrchatPicturesDir;
+        openFolder(vrchatPicturesDir());
     }
 
     mu_layout_row(ctx, 1, fullCol.ptr, 60);
@@ -894,7 +895,8 @@ private void drawToolsTab(mu_Context* ctx, AppState* state)
 
     if (mu_button(ctx, "Open Logs Folder"))
     {
-        openLogsFolder();
+        import client.directories : vrchatLogDir;
+        openFolder(vrchatLogDir());
     }
 
     mu_end_panel(ctx);
@@ -1006,24 +1008,12 @@ private void stripDroppedFile(AppState* state)
 /// Open the folder containing the dropped file.
 private void openDroppedFileFolder(AppState* state)
 {
-    import std.process : spawnProcess;
     import std.path : dirName;
 
     if (state.droppedFilePath.length == 0)
         return;
 
-    string dir = dirName(state.droppedFilePath);
-
-    version (Windows)
-    {
-        try spawnProcess(["explorer", dir]);
-        catch (Exception) {}
-    }
-    else
-    {
-        try spawnProcess(["xdg-open", dir]);
-        catch (Exception) {}
-    }
+    openFolder( dirName(state.droppedFilePath) );
 }
 
 /// Settings tab: application configuration.
@@ -1180,28 +1170,11 @@ private void drawSettingsTab(mu_Context* ctx, AppState* state, int scrollDelta)
     mu_end_panel(ctx);
 }
 
-/// Open the VRChat pictures folder in the system file manager.
-private void openPicturesFolder()
+/// Open a specific folder the system file manager.
+private void openFolder(string path)
 {
     import std.process : spawnProcess;
-    import client.directories : vrchatPicturesDir;
 
-    string path = vrchatPicturesDir();
-    if (path.length == 0)
-        return;
-    version (Windows)
-        try spawnProcess(["explorer", path]); catch (Exception) {}
-    else
-        try spawnProcess(["xdg-open", path]); catch (Exception) {}
-}
-
-/// Open the VRChat logs folder in the system file manager.
-private void openLogsFolder()
-{
-    import std.process : spawnProcess;
-    import client.directories : vrchatLogDir;
-
-    string path = vrchatLogDir();
     if (path.length == 0)
         return;
     version (Windows)
