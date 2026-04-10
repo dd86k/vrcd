@@ -5,8 +5,9 @@
 module server.api;
 
 import core.thread;
-import core.time : dur;
+import core.time : dur, MonoTime, Duration;
 import core.sync.mutex;
+import core.sync.condition;
 
 import std.json;
 import std.conv : to;
@@ -22,6 +23,12 @@ import server.friends;
 import server.ratelimit;
 import server.store;
 import server.worldcache;
+
+/// Callback invoked by the re-seed worker to actually perform a full
+/// re-seed pass. The callback owns HTTPClient/RateLimitTracker access and
+/// must acquire the shared API mutex itself. Returns the newly-built friend
+/// map; the worker will swap it into the tracker and broadcast a snapshot.
+alias ReseedCallback = void delegate();
 
 /// TCP JSON-L API server for clients.
 class APIServer
@@ -39,9 +46,19 @@ class APIServer
     private FriendsTracker friendsTracker;
     private WorldCache worldCache;
     private HTTPClient httpClient;
-    private Mutex apiMutex; // Serializes VRChat API calls
+    private Mutex apiMutex; // Shared VRChat API serializer, injected via setAPIMutex.
     private AuthDelegator authDelegator;
     private RateLimitTracker rateLimiter;
+
+    // Re-seed worker state.
+    private Thread reseedThread;
+    private Mutex reseedSignalMutex;
+    private Condition reseedSignalCond;
+    private bool reseedRequested;
+    private ReseedCallback reseedCallback;
+    private MonoTime lastReseedAt;
+    private bool firstReseed = true;
+    private Duration reseedInterval;
 
     this(string bindAddr, ushort port, string sharedSecret, EventStore store)
     {
@@ -51,6 +68,9 @@ class APIServer
         this.store = store;
         this.clientsMutex = new Mutex();
         this.friendsTracker = new FriendsTracker();
+        this.reseedSignalMutex = new Mutex();
+        this.reseedSignalCond = new Condition(this.reseedSignalMutex);
+        this.reseedInterval = dur!"hours"(4);
     }
 
     /// Access the friends tracker (e.g. to seed from REST API).
@@ -69,7 +89,23 @@ class APIServer
     void setHTTPClient(HTTPClient client)
     {
         httpClient = client;
-        apiMutex = new Mutex();
+    }
+
+    /// Set the shared VRChat API mutex. All HTTPClient + RateLimitTracker
+    /// access across the server goes through this mutex.
+    void setAPIMutex(Mutex m)
+    {
+        apiMutex = m;
+    }
+
+    /// Install the re-seed callback invoked by the re-seed worker thread.
+    /// The callback is responsible for acquiring the API mutex, fetching,
+    /// repairing, and calling friendsTracker.replaceAll() on success.
+    /// After a successful pass, broadcastFriendsSnapshot() is called by
+    /// the worker automatically.
+    void setReseedCallback(ReseedCallback cb)
+    {
+        reseedCallback = cb;
     }
 
     /// Set the rate limit tracker for monitoring VRChat API limits.
@@ -115,12 +151,63 @@ class APIServer
         acceptThread = new Thread(&acceptLoop);
         acceptThread.isDaemon = true;
         acceptThread.start();
+
+        reseedThread = new Thread(&reseedLoop);
+        reseedThread.isDaemon = true;
+        reseedThread.start();
     }
 
     /// Stop the server.
     void stop()
     {
         running = false;
+        // Wake the reseed worker so it can exit promptly.
+        reseedSignalMutex.lock();
+        reseedSignalCond.notifyAll();
+        reseedSignalMutex.unlock();
+    }
+
+    /// Request a re-seed as soon as possible. Safe to call from any thread.
+    /// The request is coalesced: multiple calls before the worker wakes
+    /// result in a single pass. A 60-second debounce against the last
+    /// completed re-seed prevents reconnect storms from amplifying load.
+    void requestReseed()
+    {
+        reseedSignalMutex.lock();
+        scope(exit) reseedSignalMutex.unlock();
+
+        MonoTime now = MonoTime.currTime;
+        if (firstReseed == false && (now - lastReseedAt) < dur!"seconds"(60))
+        {
+            logDebugging("requestReseed: ignored (debounced, last=%d ms ago)",
+                (now - lastReseedAt).total!"msecs");
+            return;
+        }
+
+        reseedRequested = true;
+        reseedSignalCond.notifyAll();
+        logDebugging("requestReseed: signaled");
+    }
+
+    /// Broadcast a fresh friends snapshot to all authenticated clients.
+    void broadcastFriendsSnapshot()
+    {
+        string line = friendsTracker.buildFriendsMessage().toString() ~ "\n";
+
+        clientsMutex.lock();
+        scope(exit) clientsMutex.unlock();
+
+        size_t delivered;
+        foreach (client; clients)
+        {
+            if (client.authenticated)
+            {
+                client.sendLine(line);
+                ++delivered;
+            }
+        }
+        logDebugging("broadcastFriendsSnapshot: clients=%d/%d",
+            delivered, clients.length);
     }
 
     /// Broadcast a live event to all authenticated clients.
@@ -245,6 +332,52 @@ private:
             if (c !is handler)
                 updated ~= c;
         clients = updated;
+    }
+
+    void reseedLoop()
+    {
+        logInfo("Re-seed worker started (interval=%d minutes)",
+            reseedInterval.total!"minutes");
+
+        while (running)
+        {
+            bool signaled;
+            reseedSignalMutex.lock();
+            if (reseedRequested == false)
+            {
+                reseedSignalCond.wait(reseedInterval);
+            }
+            signaled = reseedRequested;
+            reseedRequested = false;
+            reseedSignalMutex.unlock();
+
+            if (running == false)
+                break;
+
+            if (reseedCallback is null)
+            {
+                logWarn("Re-seed worker: no callback installed, skipping");
+                continue;
+            }
+
+            logInfo("Re-seed worker: starting pass (signaled=%s)", signaled);
+            try
+            {
+                reseedCallback();
+                broadcastFriendsSnapshot();
+            }
+            catch (Exception e)
+            {
+                logError("Re-seed worker: pass failed: %s", e.msg);
+            }
+
+            reseedSignalMutex.lock();
+            lastReseedAt = MonoTime.currTime;
+            firstReseed = false;
+            reseedSignalMutex.unlock();
+        }
+
+        logDebugging("reseedLoop: exited");
     }
 }
 

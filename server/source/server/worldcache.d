@@ -4,6 +4,8 @@
 /// License: BSD-3-Clause-Clear
 module server.worldcache;
 
+import core.sync.mutex : Mutex;
+
 import std.json;
 
 import ddlogger;
@@ -23,35 +25,78 @@ class WorldCache
     }
 
     private CacheEntry[string] cache; // worldId -> entry
+    private Mutex cacheMutex;
     private HTTPClient client;
     private RateLimitTracker rateLimiter;
+    private Mutex apiMutex; // Shared VRChat API serializer (optional).
 
     this(HTTPClient client, RateLimitTracker rateLimiter = null)
     {
         this.client = client;
         this.rateLimiter = rateLimiter;
+        this.cacheMutex = new Mutex();
+    }
+
+    /// Provide the shared VRChat API mutex so HTTPClient+RateLimitTracker
+    /// access here is serialized with other VRChat API callers.
+    void setAPIMutex(Mutex m)
+    {
+        apiMutex = m;
+    }
+
+    /// Cache-only lookup. Returns the cached name if fresh, empty string
+    /// otherwise. Never issues HTTP and never touches the rate limiter.
+    /// Safe to call from any thread without holding the API mutex.
+    string tryGet(string worldId)
+    {
+        import core.stdc.time : time;
+        if (worldId.length == 0)
+            return "";
+        long now = time(null);
+        synchronized (cacheMutex)
+        {
+            CacheEntry* entry = worldId in cache;
+            if (entry is null || entry.expiresAt <= now)
+                return "";
+            // Don't return the fallback-to-ID entry as a "name".
+            return entry.name == worldId ? "" : entry.name;
+        }
     }
 
     /// Resolve a world ID to a human-readable name.
     /// Returns the cached name if fresh, otherwise fetches from VRChat API.
     /// On failure, returns the worldId as-is and caches with 1-hour TTL.
+    /// Acquires the shared API mutex if one is configured.
     string resolve(string worldId)
+    {
+        if (apiMutex !is null)
+        {
+            synchronized (apiMutex)
+                return resolveLocked(worldId);
+        }
+        return resolveLocked(worldId);
+    }
+
+    /// Same as resolve(), but assumes the caller already holds the shared
+    /// API mutex. Use from paths that batch multiple VRChat API calls.
+    string resolveLocked(string worldId)
     {
         import core.stdc.time : time;
         long now = time(null);
 
-        // Check cache.
-        CacheEntry* entry = worldId in cache;
-        if (entry !is null && entry.expiresAt > now)
+        synchronized (cacheMutex)
         {
-            logTrace("resolve: cache hit for %s -> %s", worldId, entry.name);
-            return entry.name;
+            CacheEntry* entry = worldId in cache;
+            if (entry !is null && entry.expiresAt > now)
+            {
+                logTrace("resolve: cache hit for %s -> %s", worldId, entry.name);
+                return entry.name;
+            }
         }
 
         logDebugging("resolve: cache miss for %s, fetching", worldId);
-        // Fetch from API.
         string name = fetchWorldName(worldId);
-        long ttl;
+        long ttl; // Time to live in seconds (unix time)
 
         if (name.length > 0)
         {
@@ -63,9 +108,12 @@ class WorldCache
             ttl = 60 * 60;  // 1 hour
         }
 
-        cache[worldId] = CacheEntry(name, now + ttl);
-        logDebugging("resolve: cached %s -> %s (ttl=%ds, entries=%d)",
-            worldId, name, ttl, cache.length);
+        synchronized (cacheMutex)
+        {
+            cache[worldId] = CacheEntry(name, now + ttl);
+            logDebugging("resolve: cached %s -> %s (ttl=%ds, entries=%d)",
+                worldId, name, ttl, cache.length);
+        }
         return name;
     }
 

@@ -4,7 +4,11 @@
 /// License: BSD-3-Clause-Clear
 module server.main;
 
+import core.sync.mutex : Mutex;
+import core.time : MonoTime;
+
 import std.getopt;
+import std.json : JSONValue, JSONType, parseJSON;
 import std.stdio : stderr, writeln, writefln;
 
 import ddlogger;
@@ -81,14 +85,37 @@ void cmdRun(ref Config config)
     // Rate limit tracker for VRChat API.
     RateLimitTracker rateLimiter = new RateLimitTracker();
 
-    // Seed friends tracker from REST API.
-    fetchAndSeedFriends(client, apiServer.getFriendsTracker(), rateLimiter);
+    // Shared serializer for all HTTPClient + RateLimitTracker access.
+    // Acquired by the event path (worldcache), the reseed worker, and
+    // client-initiated API calls in api.d.
+    Mutex vrcApiMutex = new Mutex();
 
     // World name cache for resolving world IDs via VRChat API.
     WorldCache worldCache = new WorldCache(client, rateLimiter);
+    worldCache.setAPIMutex(vrcApiMutex);
+
+    FriendsTracker tracker = apiServer.getFriendsTracker();
+    tracker.setWorldCache(worldCache);
+
     apiServer.setWorldCache(worldCache);
     apiServer.setHTTPClient(client);
     apiServer.setRateLimiter(rateLimiter);
+    apiServer.setAPIMutex(vrcApiMutex);
+
+    // Install the re-seed callback the worker thread will call on its
+    // periodic tick or when requested via requestReseed().
+    apiServer.setReseedCallback({
+        doReseed(client, rateLimiter, vrcApiMutex, worldCache, tracker);
+    });
+
+    // Initial seed reuses the same helper so startup state quality
+    // matches what the worker produces on subsequent passes.
+    doReseed(client, rateLimiter, vrcApiMutex, worldCache, tracker);
+
+    // Flag used to ignore the very first WebSocket connect event, since
+    // we already seeded above. Subsequent (reconnect) events trigger a
+    // re-seed via APIServer.requestReseed().
+    shared bool wsSeenFirstConnect = false;
 
     // Start WebSocket event listener.
     VRCWebSocket vrcws = new VRCWebSocket(authState.authToken,
@@ -106,6 +133,20 @@ void cmdRun(ref Config config)
         logInfo("VRChat WebSocket %s", connected ? "connected" : "disconnected");
         apiServer.setVRChatStatus(connected, lastError);
         store.logConnection(connected ? "connected" : "disconnected");
+
+        if (connected)
+        {
+            // Skip the very first connect; it's the initial startup
+            // handshake right after we already seeded inline above.
+            if (wsSeenFirstConnect == false)
+            {
+                wsSeenFirstConnect = true;
+                return;
+            }
+            // Reconnect after a disconnect window: refresh friend state
+            // since events fired during the gap are lost.
+            apiServer.requestReseed();
+        }
     });
     vrcws.setReAuthCallback({
         logInfo("Re-authenticating with VRChat...");
@@ -300,88 +341,260 @@ int main(string[] args)
     return 0;
 }
 
-/// Fetch the full friends list from VRChat REST API and seed the tracker.
-/// Paginates with offset/n until fewer than `n` results are returned.
-void fetchAndSeedFriends(HTTPClient client, FriendsTracker tracker, RateLimitTracker rateLimiter = null)
+/// Maximum number of individual GET /users/{id} calls per re-seed pass.
+/// Bounds the repair work to avoid spamming the VRChat API.
+private enum int REPAIR_CAP = 25;
+
+/// Minimum rate-limit headroom before the repair pass is skipped.
+private enum int REPAIR_HEADROOM = 50;
+
+/// Fetch the friends list from VRChat, repair any obviously-stale entries,
+/// backfill world names, and swap the result into the tracker.
+/// Holds the shared VRChat API mutex for the duration of the REST work.
+void doReseed(HTTPClient client, RateLimitTracker rateLimiter,
+    Mutex vrcApiMutex, WorldCache worldCache, FriendsTracker tracker)
 {
     import std.json : JSONValue, JSONType, parseJSON;
-    import std.conv : to;
+
+    logInfo("Re-seed: starting pass");
+
+    JSONValue[] allFriends;
+    int repairedCount;
+    int mismatchCount;
+    int worldFetchCount;
+
+    synchronized (vrcApiMutex)
+    {
+        allFriends = fetchAllFriendsLocked(client, rateLimiter);
+        if (allFriends.length == 0)
+        {
+            logWarn("Re-seed: bulk fetch returned no friends, aborting pass");
+            return;
+        }
+
+        // Broken-friend repair.
+        repairBrokenFriendsLocked(allFriends, client, rateLimiter,
+            repairedCount, mismatchCount);
+
+        // World-name backfill: walk unique worldIds and prime the cache.
+        worldFetchCount = backfillWorldNamesLocked(allFriends, worldCache, rateLimiter);
+    }
+
+    logInfo("Re-seed: fetched=%d mismatches=%d repaired=%d worlds_fetched=%d",
+        allFriends.length, mismatchCount, repairedCount, worldFetchCount);
+
+    FriendsTracker.FriendState[string] newMap = FriendsTracker.buildFriendMap(allFriends);
+    tracker.replaceAll(newMap);
+}
+
+/// Paginate /auth/user/friends (both online and offline pages).
+/// Caller must hold vrcApiMutex.
+private JSONValue[] fetchAllFriendsLocked(HTTPClient client, RateLimitTracker rateLimiter)
+{
+    import std.json : JSONValue, JSONType, parseJSON;
     import std.format : format;
 
-    enum PAGE_SIZE = 100;
-    int offset;
+    enum int PAGE_SIZE = 100;
     JSONValue[] allFriends;
 
     logInfo("Fetching friends list from VRChat API...");
 
-    while (true)
+    foreach (bool offlinePage; [false, true])
     {
+        int offset;
+        while (true)
+        {
+            if (rateLimiter !is null)
+                rateLimiter.waitIfNeeded();
+
+            string path = format!"/auth/user/friends?offset=%d&n=%d&offline=%s"(
+                offset, PAGE_SIZE, offlinePage ? "true" : "false");
+            HTTPResponse resp = client.get(path);
+            if (rateLimiter !is null)
+                rateLimiter.update(resp);
+
+            if (resp.code != 200)
+            {
+                logWarn("Failed to fetch friends (offline=%s offset=%d): HTTP %d",
+                    offlinePage, offset, resp.code);
+                break;
+            }
+
+            JSONValue json = parseJSON(resp.text);
+            if (json.type != JSONType.array)
+            {
+                logWarn("Unexpected friends response type");
+                break;
+            }
+
+            JSONValue[] page = json.array;
+            foreach (ref JSONValue f; page)
+                allFriends ~= f;
+
+            logInfo("Fetched %d friends (offline=%s offset=%d)",
+                page.length, offlinePage, offset);
+
+            if (page.length < PAGE_SIZE)
+                break;
+
+            offset += PAGE_SIZE;
+        }
+    }
+
+    return allFriends;
+}
+
+/// Walk the friend list and individually refetch any whose derived state
+/// (from `platform`) disagrees with the bulk-reported location, or whose
+/// `location == "traveling"`. Caps the number of individual calls.
+/// Caller must hold vrcApiMutex.
+private void repairBrokenFriendsLocked(ref JSONValue[] friendsArr,
+    HTTPClient client, RateLimitTracker rateLimiter,
+    out int repairedCount, out int mismatchCount)
+{
+    import std.json : JSONValue, JSONType, parseJSON;
+
+    if (rateLimiter)
+    {
+        if (rateLimiter.isBlocked())
+        {
+            logWarn("Repair pass skipped: rate limited");
+            return;
+        }
+        int remaining = rateLimiter.getRemaining();
+        if (remaining >= 0 && remaining < REPAIR_HEADROOM)
+        {
+            logWarn("Repair pass skipped: rate-limit headroom low (%d < %d)",
+                remaining, REPAIR_HEADROOM);
+            return;
+        }
+    }
+
+    foreach (size_t i, ref JSONValue f; friendsArr)
+    {
+        if (repairedCount >= REPAIR_CAP)
+            break;
+
+        string userId;
+        if (const(JSONValue)* v = "id" in f)
+            userId = v.str;
+        if (userId.length == 0)
+            continue;
+
+        string platform;
+        if (const(JSONValue)* v = "platform" in f)
+            platform = v.str;
+
+        string location;
+        if (const(JSONValue)* v = "location" in f)
+            location = v.str;
+
+        // Derive expected state from platform and compare to bulk location.
+        // platform == "web"  -> expected active (location "offline")
+        // platform empty     -> expected offline
+        // else               -> expected online (location should be real)
+        bool mismatched;
+        if (platform == "web")
+        {
+            // Active-on-website: location should be offline/empty/offline:offline.
+            mismatched = location.length > 0 && location != "offline"
+                && location != "offline:offline";
+        }
+        else if (platform.length == 0)
+        {
+            mismatched = location.length > 0 && location != "offline"
+                && location != "offline:offline";
+        }
+        else
+        {
+            // In-game platform: should have a real instance or private.
+            mismatched = location.length == 0
+                || location == "offline"
+                || location == "offline:offline";
+        }
+
+        bool traveling = location == "traveling";
+        if (mismatched == false && traveling == false)
+            continue;
+
+        ++mismatchCount;
+
         if (rateLimiter !is null)
             rateLimiter.waitIfNeeded();
 
-        string path = format!"/auth/user/friends?offset=%d&n=%d&offline=false"(offset, PAGE_SIZE);
-        HTTPResponse resp = client.get(path);
-        if (rateLimiter !is null)
-            rateLimiter.update(resp);
-
-        if (resp.code != 200)
+        try
         {
-            logWarn("Failed to fetch friends (offset=%d): HTTP %d", offset, resp.code);
-            break;
+            HTTPResponse resp = client.get("/users/" ~ userId);
+            if (rateLimiter !is null)
+                rateLimiter.update(resp);
+            if (resp.code != 200)
+            {
+                logWarn("Repair: GET /users/%s -> HTTP %d", userId, resp.code);
+                continue;
+            }
+            JSONValue fresh = parseJSON(resp.text);
+            if (fresh.type != JSONType.object)
+                continue;
+            friendsArr[i] = fresh;
+            ++repairedCount;
+            logDebugging("Repair: refreshed %s (platform=%s location=%s -> new)",
+                userId, platform, location);
         }
-
-        JSONValue json = parseJSON(resp.text);
-        if (json.type != JSONType.array)
+        catch (Exception e)
         {
-            logWarn("Unexpected friends response type");
-            break;
+            logWarn("Repair: GET /users/%s failed: %s", userId, e.msg);
         }
-
-        JSONValue[] page = json.array;
-        foreach (ref JSONValue f; page)
-            allFriends ~= f;
-
-        logInfo("Fetched %d friends (offset=%d)", page.length, offset);
-
-        if (page.length < PAGE_SIZE)
-            break;
-
-        offset += PAGE_SIZE;
     }
+}
 
-    // Also fetch offline friends.
-    offset = 0;
-    while (true)
+/// Walk the friend list, extract unique world IDs, and call
+/// WorldCache.resolveLocked on each so subsequent snapshot builds can
+/// return a name via tryGet. Caller must hold vrcApiMutex.
+private int backfillWorldNamesLocked(JSONValue[] friendsArr,
+    WorldCache worldCache, RateLimitTracker rateLimiter)
+{
+    import std.json : JSONValue;
+
+    if (worldCache is null)
+        return 0;
+
+    bool[string] seen;
+    int fetched;
+
+    foreach (ref JSONValue f; friendsArr)
     {
-        if (rateLimiter !is null)
-            rateLimiter.waitIfNeeded();
+        string location;
+        if (const(JSONValue)* v = "location" in f)
+            location = v.str;
 
-        string path = format!"/auth/user/friends?offset=%d&n=%d&offline=true"(offset, PAGE_SIZE);
-        HTTPResponse resp = client.get(path);
-        if (rateLimiter !is null)
-            rateLimiter.update(resp);
+        string worldId = WorldCache.extractWorldId(location);
+        if (worldId.length == 0)
+            continue;
+        if (worldId in seen)
+            continue;
+        seen[worldId] = true;
 
-        if (resp.code != 200)
+        if (rateLimiter !is null)
         {
-            logWarn("Failed to fetch offline friends (offset=%d): HTTP %d", offset, resp.code);
-            break;
+            if (rateLimiter.isBlocked())
+            {
+                logWarn("World-name backfill stopping: rate limited");
+                break;
+            }
+            int remaining = rateLimiter.getRemaining();
+            if (remaining >= 0 && remaining < REPAIR_HEADROOM)
+            {
+                logWarn("World-name backfill stopping: headroom low (%d)", remaining);
+                break;
+            }
         }
 
-        JSONValue json = parseJSON(resp.text);
-        if (json.type != JSONType.array)
-            break;
-
-        JSONValue[] page = json.array;
-        foreach (ref JSONValue f; page)
-            allFriends ~= f;
-
-        logInfo("Fetched %d offline friends (offset=%d)", page.length, offset);
-
-        if (page.length < PAGE_SIZE)
-            break;
-
-        offset += PAGE_SIZE;
+        // resolveLocked returns the cached name if fresh, otherwise fetches.
+        // It only incurs a REST call on a true cache miss.
+        string name = worldCache.resolveLocked(worldId);
+        if (name.length > 0 && name != worldId)
+            ++fetched;
     }
 
-    tracker.seedFromAPI(allFriends);
+    return fetched;
 }

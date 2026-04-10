@@ -4,11 +4,14 @@
 /// License: BSD-3-Clause-Clear
 module server.friends;
 
+import core.sync.mutex : Mutex;
+
 import std.json;
 
 import ddlogger;
 
 import server.events;
+import server.worldcache;
 
 /// Tracks the current state of all friends from WebSocket events.
 /// Maintained in-memory on the server; clients request a snapshot.
@@ -28,11 +31,25 @@ class FriendsTracker
     }
 
     private FriendState[string] friends; // keyed by userId
+    private Mutex friendsMutex;
+    private WorldCache worldCache;
 
-    /// Seed the tracker from a list of friend JSON objects
-    /// (as returned by GET /auth/user/friends).
-    void seedFromAPI(JSONValue[] friendObjects)
+    this()
     {
+        friendsMutex = new Mutex();
+    }
+
+    /// Provide a WorldCache for cache-only world-name fallback in snapshots.
+    void setWorldCache(WorldCache wc)
+    {
+        worldCache = wc;
+    }
+
+    /// Build a FriendState map from a list of friend JSON objects
+    /// (as returned by GET /auth/user/friends). Pure: no locks, no I/O.
+    static FriendState[string] buildFriendMap(JSONValue[] friendObjects)
+    {
+        FriendState[string] result;
         foreach (ref JSONValue f; friendObjects)
         {
             string userId;
@@ -56,93 +73,127 @@ class FriendsTracker
             if (const(JSONValue)* v = "platform" in f)
                 state.platform = v.str;
 
-            // Determine online state from location/status.
             string loc = state.location;
             state.online = loc.length > 0 && loc != "offline" && loc != "";
 
-            // Extract world name if the API included it (it usually doesn't
-            // in the friends list, but location is enough for grouping).
             if (const(JSONValue)* v = "worldName" in f)
                 state.worldName = v.str;
 
-            friends[userId] = state;
+            result[userId] = state;
         }
+        return result;
+    }
 
-        logInfo("Seeded friends tracker with %d friends", friends.length);
+    /// Seed the tracker from a list of friend JSON objects
+    /// (as returned by GET /auth/user/friends).
+    void seedFromAPI(JSONValue[] friendObjects)
+    {
+        FriendState[string] built = buildFriendMap(friendObjects);
+        synchronized (friendsMutex)
+        {
+            friends = built;
+            logInfo("Seeded friends tracker with %d friends", friends.length);
+        }
+    }
+
+    /// Replace all friend state atomically. Used by the re-seed worker after
+    /// a successful bulk fetch + repair pass.
+    void replaceAll(FriendState[string] newFriends)
+    {
+        synchronized (friendsMutex)
+        {
+            friends = newFriends;
+            logInfo("Replaced friends tracker with %d friends", friends.length);
+        }
     }
 
     /// Process a VRCEvent and update friend state.
     /// Returns true if the friends state changed.
     bool processEvent(VRCEvent event)
     {
-        bool changed;
-        switch (event.type)
+        synchronized (friendsMutex)
         {
-            case EventType.friendOnline:
-                changed = handleFriendOnline(event.content); break;
-            case EventType.friendOffline:
-                changed = handleFriendOffline(event.content); break;
-            case EventType.friendActive:
-                changed = handleFriendActive(event.content); break;
-            case EventType.friendLocation:
-                changed = handleFriendLocation(event.content); break;
-            case EventType.friendUpdate:
-                changed = handleFriendUpdate(event.content); break;
-            case EventType.friendDelete:
-                changed = handleFriendDelete(event.content); break;
-            case EventType.friendAdd:
-                changed = handleFriendAdd(event.content); break;
-            default:
-                logTrace("processEvent: ignoring type=%s", event.typeRaw);
-                return false;
+            bool changed;
+            switch (event.type)
+            {
+                case EventType.friendOnline:
+                    changed = handleFriendOnline(event.content); break;
+                case EventType.friendOffline:
+                    changed = handleFriendOffline(event.content); break;
+                case EventType.friendActive:
+                    changed = handleFriendActive(event.content); break;
+                case EventType.friendLocation:
+                    changed = handleFriendLocation(event.content); break;
+                case EventType.friendUpdate:
+                    changed = handleFriendUpdate(event.content); break;
+                case EventType.friendDelete:
+                    changed = handleFriendDelete(event.content); break;
+                case EventType.friendAdd:
+                    changed = handleFriendAdd(event.content); break;
+                default:
+                    logTrace("processEvent: ignoring type=%s", event.typeRaw);
+                    return false;
+            }
+            logDebugging("processEvent: type=%s changed=%s friends=%d",
+                event.typeRaw, changed, friends.length);
+            return changed;
         }
-        logDebugging("processEvent: type=%s changed=%s friends=%d",
-            event.typeRaw, changed, friends.length);
-        return changed;
     }
 
     /// Build a JSON message with the full friends snapshot.
     JSONValue buildFriendsMessage()
     {
-        JSONValue[] instanceList;
-        JSONValue[] offlineList;
-
-        // Group online friends by location.
-        JSONValue[][string] byLocation;
-        string[string] locationWorldName; // location -> worldName
-
-        foreach (ref FriendState f; friends)
+        synchronized (friendsMutex)
         {
-            JSONValue fObj = friendToJSON(f);
+            JSONValue[] instanceList;
+            JSONValue[] offlineList;
 
-            if (f.online == false || f.location.length == 0 || f.location == "offline")
+            // Group online friends by location.
+            JSONValue[][string] byLocation;
+            string[string] locationWorldName; // location -> worldName
+
+            foreach (ref FriendState f; friends)
             {
-                offlineList ~= fObj;
-                continue;
+                JSONValue fObj = friendToJSON(f);
+
+                if (f.online == false || f.location.length == 0 || f.location == "offline")
+                {
+                    offlineList ~= fObj;
+                    continue;
+                }
+
+                byLocation[f.location] ~= fObj;
+                if (f.worldName.length > 0)
+                    locationWorldName[f.location] = f.worldName;
             }
 
-            byLocation[f.location] ~= fObj;
-            if (f.worldName.length > 0)
-                locationWorldName[f.location] = f.worldName;
-        }
+            foreach (string loc, JSONValue[] friendObjs; byLocation)
+            {
+                string worldName = loc in locationWorldName ? locationWorldName[loc] : "";
 
-        foreach (string loc, JSONValue[] friendObjs; byLocation)
-        {
-            string worldName = loc in locationWorldName ? locationWorldName[loc] : "";
+                // Fallback: ask the WorldCache whether it already knows
+                // this world's name. Pure lookup, no REST call.
+                if (worldName.length == 0 && worldCache !is null)
+                {
+                    string worldId = WorldCache.extractWorldId(loc);
+                    if (worldId.length > 0)
+                        worldName = worldCache.tryGet(worldId);
+                }
 
-            JSONValue group = JSONValue([
-                "instance_id": JSONValue(loc),
-                "world_name": JSONValue(worldName),
-                "friends": JSONValue(friendObjs),
+                JSONValue group = JSONValue([
+                    "instance_id": JSONValue(loc),
+                    "world_name": JSONValue(worldName),
+                    "friends": JSONValue(friendObjs),
+                ]);
+                instanceList ~= group;
+            }
+
+            return JSONValue([
+                "type": JSONValue("friends"),
+                "instances": JSONValue(instanceList),
+                "offline": JSONValue(offlineList),
             ]);
-            instanceList ~= group;
         }
-
-        return JSONValue([
-            "type": JSONValue("friends"),
-            "instances": JSONValue(instanceList),
-            "offline": JSONValue(offlineList),
-        ]);
     }
 
     /// Serialize a FriendState to JSON.
@@ -167,24 +218,29 @@ class FriendsTracker
         if (userId.length == 0)
             return;
 
-        FriendState* f = userId in friends;
-        if (f is null)
+        string cachedDisplayName;
+        string cachedPlatform;
+        synchronized (friendsMutex)
         {
-            logTrace("enrichContent: no cached friend for %s", userId);
-            return;
+            FriendState* f = userId in friends;
+            if (f is null)
+            {
+                logTrace("enrichContent: no cached friend for %s", userId);
+                return;
+            }
+            cachedDisplayName = f.displayName;
+            cachedPlatform = f.platform;
         }
 
-        // Add displayName if missing.
-        if ("displayName" !in event.content && f.displayName.length > 0)
+        if ("displayName" !in event.content && cachedDisplayName.length > 0)
         {
-            event.content["displayName"] = JSONValue(f.displayName);
+            event.content["displayName"] = JSONValue(cachedDisplayName);
             logTrace("enrichContent: added displayName=%s for %s",
-                f.displayName, userId);
+                cachedDisplayName, userId);
         }
 
-        // Add platform if missing.
-        if ("platform" !in event.content && f.platform.length > 0)
-            event.content["platform"] = JSONValue(f.platform);
+        if ("platform" !in event.content && cachedPlatform.length > 0)
+            event.content["platform"] = JSONValue(cachedPlatform);
     }
 
 private:
