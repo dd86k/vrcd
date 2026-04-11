@@ -6,6 +6,7 @@ module server.friends;
 
 import core.sync.mutex : Mutex;
 
+import std.datetime.systime : Clock;
 import std.json;
 
 import ddlogger;
@@ -27,12 +28,15 @@ class FriendsTracker
         string location;         // instance ID, "private", "offline", or ""
         string worldName;
         string platform;         // "standalonewindows", "android", etc.
+        string currentAvatar;    // "avtr_..." of currently-equipped avatar
         bool online;
     }
 
     private FriendState[string] friends; // keyed by userId
     private Mutex friendsMutex;
     private WorldCache worldCache;
+    private string selfUserId;           // also stored in `friends`, filtered from snapshots
+    private VRCEvent[] pendingSynthetics; // derived events (e.g. avatar-change)
 
     this()
     {
@@ -43,6 +47,38 @@ class FriendsTracker
     void setWorldCache(WorldCache wc)
     {
         worldCache = wc;
+    }
+
+    /// Register the logged-in user as a tracked entry. The self entry lives
+    /// in the same map as friends so user-update/user-location events go
+    /// through the same avatar-diff logic, but buildFriendsMessage filters
+    /// it out so clients never see themselves in the friends list.
+    void setSelf(string userId, string displayName, string currentAvatar)
+    {
+        if (userId.length == 0)
+            return;
+        synchronized (friendsMutex)
+        {
+            this.selfUserId = userId;
+            FriendState* f = getOrCreate(userId);
+            if (displayName.length > 0)
+                f.displayName = displayName;
+            if (currentAvatar.length > 0)
+                f.currentAvatar = currentAvatar;
+        }
+    }
+
+    /// Drain any synthesized events the tracker has queued (e.g. avatar
+    /// changes derived from user-update/friend-update diffs). Caller is
+    /// responsible for storing, logging and broadcasting them.
+    VRCEvent[] takePendingSynthetics()
+    {
+        synchronized (friendsMutex)
+        {
+            VRCEvent[] result = pendingSynthetics;
+            pendingSynthetics = null;
+            return result;
+        }
     }
 
     /// Build a FriendState map from a list of friend JSON objects
@@ -79,6 +115,10 @@ class FriendsTracker
             if (const(JSONValue)* v = "worldName" in f)
                 state.worldName = v.str;
 
+            if (const(JSONValue)* v = "currentAvatar" in f)
+                if (v.type == JSONType.string)
+                    state.currentAvatar = v.str;
+
             result[userId] = state;
         }
         return result;
@@ -97,11 +137,15 @@ class FriendsTracker
     }
 
     /// Replace all friend state atomically. Used by the re-seed worker after
-    /// a successful bulk fetch + repair pass.
+    /// a successful bulk fetch + repair pass. Preserves the self entry,
+    /// which buildFriendMap does not include.
     void replaceAll(FriendState[string] newFriends)
     {
         synchronized (friendsMutex)
         {
+            if (selfUserId.length > 0)
+                if (FriendState* self = selfUserId in friends)
+                    newFriends[selfUserId] = *self;
             friends = newFriends;
             logInfo("Replaced friends tracker with %d friends", friends.length);
         }
@@ -130,6 +174,10 @@ class FriendsTracker
                     changed = handleFriendDelete(event.content); break;
                 case EventType.friendAdd:
                     changed = handleFriendAdd(event.content); break;
+                case EventType.userUpdate:
+                    changed = handleUserUpdate(event.content); break;
+                case EventType.userLocation:
+                    changed = handleUserLocation(event.content); break;
                 default:
                     logTrace("processEvent: ignoring type=%s", event.typeRaw);
                     return false;
@@ -154,6 +202,10 @@ class FriendsTracker
 
             foreach (ref FriendState f; friends)
             {
+                // Don't list self among friends.
+                if (selfUserId.length > 0 && f.userId == selfUserId)
+                    continue;
+
                 JSONValue fObj = friendToJSON(f);
 
                 if (f.online == false || f.location.length == 0 || f.location == "offline")
@@ -266,6 +318,7 @@ private:
         if (worldName.length > 0)
             f.worldName = worldName;
 
+        applyAvatarUpdate(f, c);
         return true;
     }
 
@@ -297,6 +350,7 @@ private:
         // friend-active means on the website, no world location.
         f.location = "private";
         f.worldName = "";
+        applyAvatarUpdate(f, c);
         return true;
     }
 
@@ -324,6 +378,7 @@ private:
         else if (loc == "private")
             f.worldName = "";
 
+        applyAvatarUpdate(f, c);
         return true;
     }
 
@@ -344,7 +399,58 @@ private:
             if (v.str.length > 0)
                 f.statusDescription = v.str;
 
+        applyAvatarUpdate(f, c);
         return true;
+    }
+
+    bool handleUserUpdate(JSONValue c)
+    {
+        string userId = extractUserId(c);
+        if (userId.length == 0)
+            return false;
+
+        FriendState* f = getOrCreate(userId);
+        f.displayName = extractDisplayName(c, f.displayName);
+
+        // user-update nests fields under "user".
+        if (const(JSONValue)* u = "user" in c)
+        {
+            if (u.type == JSONType.object)
+            {
+                if (const(JSONValue)* v = "status" in *u)
+                    if (v.type == JSONType.string && v.str.length > 0)
+                        f.status = v.str;
+                if (const(JSONValue)* v = "statusDescription" in *u)
+                    if (v.type == JSONType.string)
+                        f.statusDescription = v.str;
+            }
+        }
+
+        applyAvatarUpdate(f, c);
+        // Self is filtered out of buildFriendsMessage, so no snapshot push.
+        return false;
+    }
+
+    bool handleUserLocation(JSONValue c)
+    {
+        string userId = extractUserId(c);
+        if (userId.length == 0)
+            return false;
+
+        FriendState* f = getOrCreate(userId);
+        f.displayName = extractDisplayName(c, f.displayName);
+
+        if (const(JSONValue)* v = "location" in c)
+            if (v.str.length > 0)
+                f.location = v.str;
+
+        string worldName = extractWorldName(c);
+        if (worldName.length > 0)
+            f.worldName = worldName;
+
+        applyAvatarUpdate(f, c);
+        // Self is filtered out of buildFriendsMessage, so no snapshot push.
+        return false;
     }
 
     bool handleFriendDelete(JSONValue c)
@@ -373,6 +479,44 @@ private:
         if (userId !in friends)
             friends[userId] = FriendState(userId);
         return &friends[userId];
+    }
+
+    /// Diff an incoming avatar id against cached state. First sighting seeds
+    /// silently; subsequent changes queue a synthetic avatar-change event.
+    void applyAvatarUpdate(FriendState* f, JSONValue c)
+    {
+        string newAvatar = extractCurrentAvatar(c);
+        if (newAvatar.length == 0)
+            return;
+
+        if (f.currentAvatar.length > 0 && f.currentAvatar != newAvatar)
+        {
+            JSONValue content = JSONValue([
+                "userId":         JSONValue(f.userId),
+                "displayName":    JSONValue(f.displayName),
+                "previousAvatar": JSONValue(f.currentAvatar),
+                "currentAvatar":  JSONValue(newAvatar),
+                "isSelf":         JSONValue(f.userId == selfUserId),
+            ]);
+
+            VRCEvent syn;
+            syn.type = EventType.avatarChange;
+            syn.typeRaw = "avatar-change";
+            syn.content = content;
+            syn.receivedAt = Clock.currTime();
+            // Synthesized: no real WebSocket frame, so build a canonical
+            // envelope so the stored raw_json stays consistent.
+            syn.rawJson = JSONValue([
+                "type":    JSONValue("avatar-change"),
+                "content": JSONValue(content.toString()),
+            ]).toString();
+
+            pendingSynthetics ~= syn;
+            logTrace("applyAvatarUpdate: queued avatar-change for %s (%s -> %s)",
+                f.userId, f.currentAvatar, newAvatar);
+        }
+
+        f.currentAvatar = newAvatar;
     }
 
     static string extractUserId(JSONValue c)
@@ -421,6 +565,21 @@ private:
             if (v.type == JSONType.object)
                 if (const(JSONValue)* wn = "name" in *v)
                     return wn.str;
+
+        return "";
+    }
+
+    static string extractCurrentAvatar(JSONValue c)
+    {
+        if (const(JSONValue)* v = "currentAvatar" in c)
+            if (v.type == JSONType.string && v.str.length > 0)
+                return v.str;
+
+        if (const(JSONValue)* v = "user" in c)
+            if (v.type == JSONType.object)
+                if (const(JSONValue)* ca = "currentAvatar" in *v)
+                    if (ca.type == JSONType.string && ca.str.length > 0)
+                        return ca.str;
 
         return "";
     }

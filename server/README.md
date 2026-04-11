@@ -119,9 +119,17 @@ VRChat WebSocket
        ├──> Store in SQLite
        │
        └──> Broadcast to connected clients
+                 │
+                 ▼
+           FriendsTracker.processEvent
+                 │
+                 └──> Synthesized events (e.g. avatar-change)
+                           │
+                           ├──> Store in SQLite
+                           └──> Broadcast to connected clients
 ```
 
-Events arrive from VRChat's WebSocket, get parsed and enriched with display names and world names from cache, then are both persisted to SQLite and broadcast live to all authenticated clients.
+Events arrive from VRChat's WebSocket, get parsed and enriched with display names and world names from cache, then are both persisted to SQLite and broadcast live to all authenticated clients. The tracker may also derive synthesized events from state diffs (e.g. an `avatar-change` when a cached `currentAvatar` changes between two `friend-update`/`user-update` payloads); those go through the same store+broadcast path as real events.
 
 ### Threading Model
 
@@ -162,7 +170,7 @@ Event type definitions and parser.
 - `VRCEvent` struct -- parsed event with type, content (double-decoded JSON), timestamp, and raw JSON
 - `parseEvent()` -- handles VRChat's double-encoded JSON format (content field is JSON-in-a-string)
 
-All recognized events are stored in SQLite and broadcast to clients. Friend events additionally update the in-memory `FriendsTracker` state. Unrecognized types are stored as `unknown` but still broadcast.
+All recognized events are stored in SQLite and broadcast to clients. Friend and self (`user-update`/`user-location`) events additionally update the in-memory `FriendsTracker` state, which may derive synthesized events. Unrecognized types are stored as `unknown` but still broadcast.
 
 | Category | Event types |
 |----------|-------------|
@@ -172,6 +180,11 @@ All recognized events are stored in SQLite and broadcast to clients. Friend even
 | Group | `group-joined`, `group-left`, `group-role-updated`, `group-member-updated` |
 | Instance | `instance-queue-joined`, `instance-queue-position`, `instance-queue-ready`, `instance-queue-left`, `instance-closed` |
 | Content | `content-refresh` |
+| Synthesized | `avatar-change` |
+
+**Synthesized events** are not produced by VRChat's WebSocket. They are derived on the server from state diffs and then persisted + broadcast identically to real events, so catch-up and the event viewer see them alongside the rest. Currently:
+
+- `avatar-change` -- emitted when the cached `currentAvatar` on a tracked entry (friend or self) changes between updates. Content: `{ userId, displayName, previousAvatar, currentAvatar, isSelf }`. Clients can filter self-originated changes via the `isSelf` flag.
 
 ### `store.d`
 SQLite persistence layer via arsd-official:sqlite.
@@ -192,13 +205,15 @@ Database tables:
   - `*_notifications`, `*_moderation` -- notification and block/mute logs
 
 ### `friends.d`
-In-memory friend presence tracker.
+In-memory friend presence tracker. Also tracks the logged-in user (self) in the same map so self-originated events go through the same state-diff machinery; self is filtered out of the friends snapshot sent to clients.
 
 - `FriendsTracker` -- state machine updated by WebSocket events
-- `seedFromAPI()` -- initialize from REST API friend list
-- `processEvent()` -- update state from live events (online, offline, active, location, update, add, delete)
-- `buildFriendsMessage()` -- serialize all friends grouped by instance for client delivery
-- `enrichContent()` -- add displayName/platform to event content when missing
+- `setSelf(userId, displayName, currentAvatar)` -- register the logged-in user; called once at startup from `AuthState`. The self entry is preserved across re-seeds.
+- `replaceAll()` -- atomic swap used by the re-seed worker; re-injects the self entry since the REST friend list doesn't include the logged-in user.
+- `processEvent()` -- update state from friend events (online, offline, active, location, update, add, delete) and self events (`user-update`, `user-location`). May queue synthesized events.
+- `takePendingSynthetics()` -- drain derived events (e.g. `avatar-change`) produced since the last call. `APIServer.broadcast` drains and stores/logs/broadcasts them immediately after processing the triggering event.
+- `buildFriendsMessage()` -- serialize friends grouped by instance for client delivery; self is skipped.
+- `enrichContent()` -- add displayName/platform to event content when missing.
 
 ### `worldcache.d`
 World name resolution cache with TTL.

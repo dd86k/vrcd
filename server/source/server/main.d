@@ -96,6 +96,7 @@ void cmdRun(ref Config config)
 
     FriendsTracker tracker = apiServer.getFriendsTracker();
     tracker.setWorldCache(worldCache);
+    tracker.setSelf(authState.userId, authState.displayName, authState.currentAvatar);
 
     apiServer.setWorldCache(worldCache);
     apiServer.setHTTPClient(client);

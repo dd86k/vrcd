@@ -223,6 +223,20 @@ class APIServer
         if (friendsChanged)
             friendsLine = friendsTracker.buildFriendsMessage().toString() ~ "\n";
 
+        // Drain any synthesized events the tracker produced (e.g. avatar
+        // changes). Persist + log them so catch-up and the server log see
+        // them alongside real events, then queue their wire lines.
+        // This keeps broadcast a little simpler and keeps FriendsTracker a
+        // pure state machine.
+        VRCEvent[] synthetics = friendsTracker.takePendingSynthetics();
+        string[] synLines;
+        foreach (ref syn; synthetics)
+        {
+            long synId = store.storeEvent(syn);
+            logInfo("[#%d %s] %s", synId, syn.typeRaw, syn.content.toString());
+            synLines ~= buildEventMessage(syn, synId).toString() ~ "\n";
+        }
+
         clientsMutex.lock();
         scope(exit) clientsMutex.unlock();
 
@@ -232,14 +246,16 @@ class APIServer
             if (client.authenticated)
             {
                 client.sendLine(line);
+                foreach (sl; synLines) // send synthesized events
+                    client.sendLine(sl);
                 if (friendsChanged)
                     client.sendLine(friendsLine);
                 ++delivered;
             }
         }
 
-        logDebugging("broadcast: id=%d type=%s clients=%d/%d friendsChanged=%s",
-            eventId, event.typeRaw, delivered, clients.length, friendsChanged);
+        logDebugging("broadcast: id=%d type=%s clients=%d/%d friendsChanged=%s synth=%d",
+            eventId, event.typeRaw, delivered, clients.length, friendsChanged, synLines.length);
     }
 
     /// Broadcast current status to all authenticated clients.
