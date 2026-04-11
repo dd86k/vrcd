@@ -61,6 +61,7 @@ struct FeedEntry
     string detail;
     string receivedAt;
     string rawContent; // raw JSON content for detail view
+    bool isSelf;       // event about the logged-in user (for the "hide self" filter)
 }
 
 /// Friend info as received from server.
@@ -176,12 +177,12 @@ struct AppState
     bool authDialogCancel;
 
     void addFeedEntry(long id, string eventType, string user, string detail, string receivedAt,
-        string rawContent = "")
+        string rawContent = "", bool isSelf = false)
     {
         // Prepend (newest first), cap at 500 entries.
         if (feedEntries.length >= 500)
             feedEntries = feedEntries[0 .. 499];
-        feedEntries = FeedEntry(id, eventType, user, detail, receivedAt, rawContent) ~ feedEntries;
+        feedEntries = FeedEntry(id, eventType, user, detail, receivedAt, rawContent, isSelf) ~ feedEntries;
     }
 
     /// Add a notification, deduplicating by notificationId.

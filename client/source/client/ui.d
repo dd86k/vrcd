@@ -41,6 +41,9 @@ private immutable string[] eventTypeLabels = [
 /// 1 = shown, 0 = hidden. All visible by default.
 private int[eventTypeLabels.length] eventTypeVisible = 1;
 
+/// 1 = hide self events (user-update, user-location, self avatar changes, etc).
+private int hideSelfEvents;
+
 /// Draw the full-window UI layout.
 void drawFullWindow(mu_Context* ctx, AppState* state, int scrollDelta)
 {
@@ -180,6 +183,13 @@ private void drawFeedFilterPopup(mu_Context* ctx)
                     mu_layout_next(ctx); // empty cell
             }
         }
+
+        static immutable int[1] selfCol = [320];
+        mu_layout_row(ctx, 1, selfCol.ptr, 0);
+        int prevHideSelf = hideSelfEvents;
+        mu_checkbox(ctx, "Hide self events", &hideSelfEvents);
+        if (hideSelfEvents != prevHideSelf)
+            feedPage = 0;
 
         static immutable int[2] btnCols = [160, 160];
         mu_layout_row(ctx, 2, btnCols.ptr, 30);
@@ -562,6 +572,10 @@ private string searchStr()
 /// Check whether a feed entry passes the current filters.
 private bool passesFilter(ref FeedEntry entry, string query)
 {
+    // Hide self events (user-update, user-location, self avatar changes, etc).
+    if (hideSelfEvents != 0 && entry.isSelf)
+        return false;
+
     // Event type filter.
     bool typeAllowed = true;
     foreach (size_t i, string label; eventTypeLabels)

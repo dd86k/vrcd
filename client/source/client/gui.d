@@ -617,10 +617,18 @@ private void drainNetworkMessages()
 
                     // Store raw content JSON for the detail view.
                     string rawContent;
+                    bool isSelfEvent = isSelfEventType(eventType);
                     if (const(JSONValue) *content = "content" in msg)
+                    {
                         rawContent = content.toString(); // full json
+                        // avatar-change carries isSelf in its content.
+                        if (eventType == "avatar-change" && content.type == JSONType.object)
+                            if (const(JSONValue)* v = "isSelf" in *content)
+                                if (v.type == JSONType.true_)
+                                    isSelfEvent = true;
+                    }
 
-                    appState.addFeedEntry(id, prettyEventType(eventType), user, detail, receivedAt, rawContent);
+                    appState.addFeedEntry(id, prettyEventType(eventType), user, detail, receivedAt, rawContent, isSelfEvent);
                     dispatchNotification(eventType, user, detail, saved);
 
                     // Store actionable notifications.
@@ -1181,6 +1189,22 @@ private void checkPlayerJoining(JSONValue msg, string user)
 }
 
 /// Map raw event type strings to pretty display names.
+/// Event types that are inherently about the logged-in user.
+/// avatar-change is handled separately (check content.isSelf).
+private bool isSelfEventType(string eventType)
+{
+    switch (eventType)
+    {
+        case "user-update":
+        case "user-location":
+        case "user-badge-assigned":
+        case "user-badge-unassigned":
+            return true;
+        default:
+            return false;
+    }
+}
+
 private string prettyEventType(string eventType)
 {
     switch (eventType)
