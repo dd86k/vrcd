@@ -22,6 +22,7 @@ private Tab activeTab = Tab.feed;
 
 // --- Feed filter state ---
 private char[128] searchBuf = '\0';
+private size_t searchLen;
 
 // --- Feed pagination state ---
 private int feedPage;            // 0-indexed current page
@@ -152,7 +153,12 @@ private void drawFeedSearchBar(mu_Context* ctx)
     mu_layout_row(ctx, 2, searchCols.ptr, 30);
     if (mu_button(ctx, "Filter"))
         filterPopupOpen = !filterPopupOpen;
-    mu_textbox(ctx, searchBuf.ptr, cast(int) searchBuf.length);
+    int res = mu_textbox(ctx, searchBuf.ptr, cast(int) searchBuf.length, cast(int) searchLen);
+    if (res & MU_RES_CHANGE)
+    {
+        const(char)* p = cast(const(char)*) memchr(searchBuf.ptr, '\0', searchBuf.length);
+        searchLen = p ? (p - searchBuf.ptr) : searchBuf.length;
+    }
 }
 
 /// Draw the filter popup as a standalone window.
@@ -562,11 +568,9 @@ private void drawFeedPagination(mu_Context* ctx, AppState* state)
 /// Extract the search buffer as a D string.
 private string searchStr()
 {
-    auto p = cast(const(char)*) memchr(searchBuf.ptr, '\0', searchBuf.length);
-    size_t len = p ? (p - searchBuf.ptr) : searchBuf.length;
-    if (len == 0)
+    if (searchLen == 0)
         return null;
-    return cast(string) searchBuf[0 .. len];
+    return cast(string) searchBuf[0 .. searchLen];
 }
 
 /// Check whether a feed entry passes the current filters.
