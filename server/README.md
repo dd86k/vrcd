@@ -158,9 +158,20 @@ Configuration struct with platform-specific defaults. Fields: listen address/por
 ### `events.d`
 Event type definitions and parser.
 
-- `EventType` enum -- 40+ VRChat event types (friend, user, notification, group, instance, content)
+- `EventType` enum -- recognized VRChat event types (see list below)
 - `VRCEvent` struct -- parsed event with type, content (double-decoded JSON), timestamp, and raw JSON
 - `parseEvent()` -- handles VRChat's double-encoded JSON format (content field is JSON-in-a-string)
+
+All recognized events are stored in SQLite and broadcast to clients. Friend events additionally update the in-memory `FriendsTracker` state. Unrecognized types are stored as `unknown` but still broadcast.
+
+| Category | Event types |
+|----------|-------------|
+| Friend | `friend-online`, `friend-offline`, `friend-active`, `friend-update`, `friend-location`, `friend-add`, `friend-delete` |
+| User | `user-update`, `user-location`, `user-badge-assigned`, `user-badge-unassigned` |
+| Notification | `notification`, `notification-v2`, `notification-v2-update`, `notification-v2-delete`, `see-notification`, `hide-notification`, `response-notification` |
+| Group | `group-joined`, `group-left`, `group-role-updated`, `group-member-updated` |
+| Instance | `instance-queue-joined`, `instance-queue-position`, `instance-queue-ready`, `instance-queue-left`, `instance-closed` |
+| Content | `content-refresh` |
 
 ### `store.d`
 SQLite persistence layer via arsd-official:sqlite.
