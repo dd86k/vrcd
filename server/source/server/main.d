@@ -260,6 +260,10 @@ int main(string[] args)
             config.verbose = true;
             cliSet |= Config.SET_VERBOSE;
         },
+        "log-file|L","Append log output to file", (string _, string val) {
+            config.logFilePath = val;
+            cliSet |= Config.SET_LOG_FILE;
+        },
         "version",  "Show version page and exit", &cliVersion,
         "help-config", "Show effective config paths and exit", &helpConfig,
     );
@@ -302,14 +306,31 @@ int main(string[] args)
         printline("Cookie jar", config.cookieJarPath);
         printline("Listen", config.listenAddr ~ ":" ~ to!string(config.listenPort));
         printline("Secret", config.apiSecret.length > 0 ? "(set)" : "(not set)");
+        printline("Log file", config.logFilePath.length > 0 ? config.logFilePath : "(not set)");
         printline("Verbose", config.verbose ? "true" : "false");
         return 0;
     }
 
     // Set up logging
+    LogLevel logLevel = config.verbose ? LogLevel.trace : LogLevel.info;
     ConsoleAppender logAppender = new ConsoleAppender();
-    logAppender.setLogLevel(config.verbose ? LogLevel.trace : LogLevel.info);
+    logAppender.setLogLevel(logLevel);
     logAddAppender(logAppender);
+    if (config.logFilePath.length > 0)
+    {
+        try
+        {
+            FileAppender fileAppender = new FileAppender(config.logFilePath);
+            fileAppender.setLogLevel(logLevel);
+            logAddAppender(fileAppender);
+        }
+        catch (Exception ex)
+        {
+            stderr.writeln("error: could not open log file '",
+                config.logFilePath, "': ", ex.msg);
+            return 1;
+        }
+    }
     
     // Throws and prints by default
     if (args.length > 1)

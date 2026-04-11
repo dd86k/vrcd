@@ -59,6 +59,7 @@ int main(string[] args)
     long sinceId = -1;
     bool verbose;
     bool cliMode;
+    string logFilePath;
 
     GetoptResult opts = void;
     try opts = getopt(args,
@@ -68,6 +69,7 @@ int main(string[] args)
         "since",      "Catch up from event ID (overrides persisted cursor; 0 = all)", &sinceId,
         "verbose|v",  "Enable verbose logging", &verbose,
         "cli",        "CLI mode (no GUI)", &cliMode,
+        "log-file|L", "Append log output to file", &logFilePath,
     );
     catch (Exception ex)
     {
@@ -92,9 +94,24 @@ int main(string[] args)
     }
 
     // Set up logging.
+    LogLevel logLevel = verbose ? LogLevel.trace : LogLevel.info;
     ConsoleAppender logAppender = new ConsoleAppender();
-    logAppender.setLogLevel(verbose ? LogLevel.trace : LogLevel.info);
+    logAppender.setLogLevel(logLevel);
     logAddAppender(logAppender);
+    if (logFilePath.length > 0)
+    {
+        try
+        {
+            FileAppender fileAppender = new FileAppender(logFilePath);
+            fileAppender.setLogLevel(logLevel);
+            logAddAppender(fileAppender);
+        }
+        catch (Exception ex)
+        {
+            stderr.writeln("error: could not open log file '", logFilePath, "': ", ex.msg);
+            return 1;
+        }
+    }
 
     // Detect which args were explicitly provided on the CLI.
     bool hostSet = host.length > 0;

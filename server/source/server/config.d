@@ -17,6 +17,7 @@ struct Config
     string credentialsPath;
     string cookieJarPath;
     string apiSecret; /// Shared secret for client auth. Empty = no auth required.
+    string logFilePath; /// Optional file to append log output to. Empty = disabled.
     bool verbose;
 
     /// Bitmask constants for tracking which fields were set by CLI.
@@ -28,6 +29,7 @@ struct Config
         SET_AUTH       = 1 << 3,
         SET_COOKIE_JAR = 1 << 4,
         SET_VERBOSE    = 1 << 5,
+        SET_LOG_FILE   = 1 << 6,
     }
 
     /// Resolve default paths based on platform.
@@ -125,6 +127,10 @@ struct Config
                 case "verbose":
                     if ((cliSet & SET_VERBOSE) == 0)
                         verbose = (val == "true" || val == "1");
+                    break;
+                case "log_file":
+                    if ((cliSet & SET_LOG_FILE) == 0)
+                        logFilePath = val;
                     break;
                 default:
                     break;
