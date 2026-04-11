@@ -119,9 +119,21 @@ class FriendsTracker
                 if (v.type == JSONType.string)
                     state.currentAvatar = v.str;
 
+            normalizeOfflinePlatform(state);
             result[userId] = state;
         }
         return result;
+    }
+
+    /// An offline friend must not carry a stale game platform. "web" is the
+    /// one platform valid on an offline-in-game friend (they're web-active).
+    /// Anything else gets cleared so the client doesn't render "Offline - PC".
+    static void normalizeOfflinePlatform(ref FriendState f)
+    {
+        if (f.status != "offline" && f.online)
+            return;
+        if (f.platform != "web")
+            f.platform = "";
     }
 
     /// Seed the tracker from a list of friend JSON objects
@@ -208,7 +220,8 @@ class FriendsTracker
 
                 JSONValue fObj = friendToJSON(f);
 
-                if (f.online == false || f.location.length == 0 || f.location == "offline")
+                if (f.online == false || f.status == "offline"
+                    || f.location.length == 0 || f.location == "offline")
                 {
                     offlineList ~= fObj;
                     continue;
@@ -330,9 +343,11 @@ private:
 
         FriendState* f = getOrCreate(userId);
         f.online = false;
+        f.status = "offline";
         f.location = "offline";
         f.worldName = "";
         f.displayName = extractDisplayName(c, f.displayName);
+        normalizeOfflinePlatform(*f);
         return true;
     }
 
