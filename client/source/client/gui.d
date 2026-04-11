@@ -4,6 +4,7 @@
 /// License: BSD-3-Clause-Clear
 module client.gui;
 
+import std.algorithm.sorting : sort;
 import std.format : format;
 import std.json;
 
@@ -964,6 +965,7 @@ private void applyFriendsSnapshot(JSONValue msg)
                 foreach (ref JSONValue fVal; grp["friends"].array)
                     ig.friends ~= parseFriendInfo(fVal);
             }
+            sort!friendLess(ig.friends);
             instances ~= ig;
         }
     }
@@ -976,10 +978,36 @@ private void applyFriendsSnapshot(JSONValue msg)
             offlineFriends ~= parseFriendInfo(fVal);
         }
     }
+    sort!friendLess(offlineFriends);
 
     appState.instances = instances;
     appState.offlineFriends = offlineFriends;
     appState.selectedFriend = null; // Reset selection on refresh.
+}
+
+/// Status rank for sorting: Join Me, Online, Ask Me, Busy, then anything else,
+/// with Offline last. Ties fall back to case-insensitive display name.
+private int statusRank(string status)
+{
+    switch (status)
+    {
+        case "join me": return 0;
+        case "active":  return 1;
+        case "ask me":  return 2;
+        case "busy":    return 3;
+        case "offline": return 5;
+        default:        return 4;
+    }
+}
+
+private bool friendLess(ref const FriendInfo a, ref const FriendInfo b)
+{
+    int ra = statusRank(a.status);
+    int rb = statusRank(b.status);
+    if (ra != rb)
+        return ra < rb;
+    import std.uni : icmp;
+    return icmp(a.displayName, b.displayName) < 0;
 }
 
 /// Parse a FriendInfo from a JSON friend object.

@@ -17,7 +17,7 @@ import client.gui : wasClick;
 import client.state;
 
 /// Active tab selection.
-enum Tab { feed, friends, notifications, tools, settings }
+enum Tab { feed, online, notifications, tools, settings }
 private Tab activeTab = Tab.feed;
 
 // --- Feed filter state ---
@@ -85,7 +85,7 @@ void drawFullWindow(mu_Context* ctx, AppState* state, int scrollDelta)
             final switch (activeTab)
             {
                 case Tab.feed:          break; // handled above
-                case Tab.friends:       drawFriendsTab(ctx, state, scrollDelta);       break;
+                case Tab.online:        drawOnlineTab(ctx, state, scrollDelta);        break;
                 case Tab.notifications: drawNotificationsTab(ctx, state, scrollDelta); break;
                 case Tab.tools:         drawToolsTab(ctx, state);                      break;
                 case Tab.settings:      drawSettingsTab(ctx, state, scrollDelta);       break;
@@ -115,7 +115,7 @@ private void drawTabBar(mu_Context* ctx)
 
     // Highlight active tab by drawing a colored background.
     drawTabButton(ctx, "FEED",          Tab.feed);
-    drawTabButton(ctx, "FRIENDS",       Tab.friends);
+    drawTabButton(ctx, "ONLINE",        Tab.online);
     drawTabButton(ctx, "NOTIFICATIONS", Tab.notifications);
     drawTabButton(ctx, "TOOLS",         Tab.tools);
     drawTabButton(ctx, "SETTINGS",      Tab.settings);
@@ -672,8 +672,8 @@ private void gridCell(mu_Context* ctx, string text, mu_Color lineColor, bool las
         mu_draw_rect(ctx, mu_Rect(r.x + r.w - 1, r.y, 1, r.h), lineColor);
 }
 
-/// Friends tab: friends grouped by instance, or profile view.
-private void drawFriendsTab(mu_Context* ctx, AppState* state, int scrollDelta)
+/// Online tab: friends grouped by instance, or profile view.
+private void drawOnlineTab(mu_Context* ctx, AppState* state, int scrollDelta)
 {
     if (state.selectedFriend !is null)
     {
@@ -704,12 +704,8 @@ private void drawFriendsTab(mu_Context* ctx, AppState* state, int scrollDelta)
             string header = grp.worldName.length > 0 ? grp.worldName : grp.instanceId;
             if (mu_header_ex(ctx, header, MU_OPT_EXPANDED))
             {
-                mu_layout_row(ctx, 1, fullCol.ptr, 40);
                 foreach (ref FriendInfo f; grp.friends)
-                {
-                    if (mu_button(ctx, f.displayName))
-                        state.selectedFriend = &f;
-                }
+                    drawFriendCard(ctx, state, f);
                 mu_layout_row(ctx, 1, fullCol.ptr, 0);
             }
         }
@@ -718,18 +714,73 @@ private void drawFriendsTab(mu_Context* ctx, AppState* state, int scrollDelta)
         {
             if (mu_header(ctx, "Offline"))
             {
-                mu_layout_row(ctx, 1, fullCol.ptr, 40);
                 foreach (ref FriendInfo f; state.offlineFriends)
-                {
-                    if (mu_button(ctx, f.displayName))
-                        state.selectedFriend = &f;
-                }
+                    drawFriendCard(ctx, state, f);
                 mu_layout_row(ctx, 1, fullCol.ptr, 0);
             }
         }
     }
 
     mu_end_panel(ctx);
+}
+
+/// Draw a single friend as a flexbox-style card. Clicks fire via wasClick,
+/// so dragging on the row (or the left gutter) scrolls the panel instead.
+private void drawFriendCard(mu_Context* ctx, AppState* state, ref FriendInfo f)
+{
+    enum mu_Color cardBg    = mu_Color(38, 42, 52, 255);
+    enum mu_Color cardHover = mu_Color(55, 62, 82, 255);
+
+    static immutable int[2] indentCols = [14, -1];
+    mu_layout_row(ctx, 2, indentCols.ptr, 56);
+    mu_layout_next(ctx); // left gutter — empty, scrollable drag area
+
+    mu_Rect r = mu_layout_next(ctx);
+    bool mouseOver = mu_mouse_over(ctx, r) != 0;
+
+    // Card background with hover highlight (suppressed while dragging).
+    mu_draw_rect(ctx, r, (mouseOver && ctx.mouse_down == 0) ? cardHover : cardBg);
+
+    // Status accent strip on the left edge.
+    mu_draw_rect(ctx, mu_Rect(r.x, r.y, 4, r.h), statusColor(f.status));
+
+    int padX = 14;
+    int innerX = r.x + padX;
+    int innerW = r.w - padX * 2;
+
+    mu_draw_control_text(ctx, f.displayName,
+        mu_Rect(innerX, r.y + 6, innerW, 22), MU_COLOR_TEXT, 0);
+
+    char[128] subBuf;
+    string sub;
+    if (f.status.length > 0 && f.platform.length > 0)
+        sub = cast(string) sformat(subBuf, "%s  -  %s",
+            prettyStatus(f.status), prettyPlatform(f.platform));
+    else if (f.status.length > 0)
+        sub = prettyStatus(f.status);
+    else if (f.platform.length > 0)
+        sub = prettyPlatform(f.platform);
+
+    if (sub.length > 0)
+        mu_draw_control_text(ctx, sub,
+            mu_Rect(innerX, r.y + 30, innerW, 20), MU_COLOR_TEXT, 0);
+
+    if (wasClick && mouseOver)
+        state.selectedFriend = &f;
+}
+
+/// Map VRChat status to an accent colour for the friend card strip.
+private mu_Color statusColor(string status)
+{
+    switch (status)
+    {
+        case "active":  return mu_Color(70, 200, 90, 255);
+        case "join me": return mu_Color(70, 140, 220, 255);
+        case "ask me":  return mu_Color(220, 170, 60, 255);
+        case "busy":    return mu_Color(220, 70, 70, 255);
+        case "offline": return mu_Color(120, 120, 120, 255);
+        default:        return mu_Color(120, 120, 120, 255);
+    }
 }
 
 /// Friend profile detail view.
