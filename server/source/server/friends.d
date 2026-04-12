@@ -12,6 +12,7 @@ import std.json;
 import ddlogger;
 
 import server.events;
+import server.instancecache;
 import server.worldcache;
 
 /// Tracks the current state of all friends from WebSocket events.
@@ -35,6 +36,7 @@ class FriendsTracker
     private FriendState[string] friends; // keyed by userId
     private Mutex friendsMutex;
     private WorldCache worldCache;
+    private InstanceCache instanceCache;
     private string selfUserId;           // also stored in `friends`, filtered from snapshots
     private VRCEvent[] pendingSynthetics; // derived events (e.g. avatar-change)
 
@@ -47,6 +49,12 @@ class FriendsTracker
     void setWorldCache(WorldCache wc)
     {
         worldCache = wc;
+    }
+
+    /// Provide an InstanceCache for cache-only instance occupancy in snapshots.
+    void setInstanceCache(InstanceCache ic)
+    {
+        instanceCache = ic;
     }
 
     /// Register the logged-in user as a tracked entry. The self entry lives
@@ -238,7 +246,7 @@ class FriendsTracker
 
                 // Fallback: ask the WorldCache whether it already knows
                 // this world's name. Pure lookup, no REST call.
-                if (worldName.length == 0 && worldCache !is null)
+                if (worldName.length == 0 && worldCache)
                 {
                     string worldId = WorldCache.extractWorldId(loc);
                     if (worldId.length > 0)
@@ -250,6 +258,19 @@ class FriendsTracker
                     "world_name": JSONValue(worldName),
                     "friends": JSONValue(friendObjs),
                 ]);
+
+                // Attach instance occupancy if the cache has a fresh entry.
+                // Pure lookup, no REST call.
+                if (instanceCache)
+                {
+                    InstanceInfo info = instanceCache.tryGet(loc);
+                    if (info.known)
+                    {
+                        group["n_users"] = JSONValue(info.nUsers);
+                        group["capacity"] = JSONValue(info.capacity);
+                    }
+                }
+
                 instanceList ~= group;
             }
 

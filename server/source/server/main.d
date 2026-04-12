@@ -19,6 +19,7 @@ import server.authdelegate;
 import server.config;
 import server.events;
 import server.friends;
+import server.instancecache;
 import server.ratelimit;
 import server.store;
 import server.worldcache;
@@ -94,11 +95,17 @@ void cmdRun(ref Config config)
     WorldCache worldCache = new WorldCache(client, rateLimiter);
     worldCache.setAPIMutex(vrcApiMutex);
 
+    // Instance occupancy cache for "n_users/capacity" in the ONLINE tab.
+    InstanceCache instanceCache = new InstanceCache(client, rateLimiter);
+    instanceCache.setAPIMutex(vrcApiMutex);
+
     FriendsTracker tracker = apiServer.getFriendsTracker();
     tracker.setWorldCache(worldCache);
+    tracker.setInstanceCache(instanceCache);
     tracker.setSelf(authState.userId, authState.displayName, authState.currentAvatar);
 
     apiServer.setWorldCache(worldCache);
+    apiServer.setInstanceCache(instanceCache);
     apiServer.setHTTPClient(client);
     apiServer.setRateLimiter(rateLimiter);
     apiServer.setAPIMutex(vrcApiMutex);
@@ -106,12 +113,12 @@ void cmdRun(ref Config config)
     // Install the re-seed callback the worker thread will call on its
     // periodic tick or when requested via requestReseed().
     apiServer.setReseedCallback({
-        doReseed(client, rateLimiter, vrcApiMutex, worldCache, tracker);
+        doReseed(client, rateLimiter, vrcApiMutex, worldCache, instanceCache, tracker);
     });
 
     // Initial seed reuses the same helper so startup state quality
     // matches what the worker produces on subsequent passes.
-    doReseed(client, rateLimiter, vrcApiMutex, worldCache, tracker);
+    doReseed(client, rateLimiter, vrcApiMutex, worldCache, instanceCache, tracker);
 
     // Flag used to ignore the very first WebSocket connect event, since
     // we already seeded above. Subsequent (reconnect) events trigger a
@@ -226,143 +233,6 @@ void cliVersion()
     exit(0);
 }
 
-int main(string[] args)
-{
-    Config config = Config.defaults();
-    uint cliSet; // Bitmask of fields explicitly set by CLI.
-    bool helpConfig;
-
-    GetoptResult opts = void;
-    try opts = getopt(args,
-        "basedir|b", "Base directory for all config/data files", (string _, string val) {
-            config.setBaseDir(val);
-            cliSet |= Config.SET_DB | Config.SET_AUTH | Config.SET_COOKIE_JAR;
-        },
-        "config|c", "Path to config file", (string _, string val) {
-            config.configPath = val;
-        },
-        "db|d",     "Path to SQLite database", (string _, string val) {
-            config.dbPath = val;
-            cliSet |= Config.SET_DB;
-        },
-        "listen|l", "Listen address (host:port)", (string _, string val) {
-            config.parseListen(val);
-            cliSet |= Config.SET_LISTEN;
-        },
-        "secret",   "Shared secret for client auth", (string _, string val) {
-            config.apiSecret = val;
-            cliSet |= Config.SET_SECRET;
-        },
-        "auth|a",   "Path to credentials file", (string _, string val) {
-            config.credentialsPath = val;
-            cliSet |= Config.SET_AUTH;
-        },
-        "verbose|v","Enable verbose logging", () {
-            config.verbose = true;
-            cliSet |= Config.SET_VERBOSE;
-        },
-        "log-file|L","Append log output to file", (string _, string val) {
-            config.logFilePath = val;
-            cliSet |= Config.SET_LOG_FILE;
-        },
-        "version",  "Show version page and exit", &cliVersion,
-        "help-config", "Show effective config paths and exit", &helpConfig,
-    );
-    catch (Exception ex)
-    {
-        stderr.writeln("error: ", ex.msg);
-        return 1;
-    }
-
-    // Load config file after CLI so we can use --config to set the path.
-    // Fields explicitly set on CLI are preserved; file fills in the rest.
-    config.loadFromFile(config.configPath, cliSet);
-
-    if (opts.helpWanted)
-    {
-        defaultGetoptPrinter(
-            "vrcd server - VRChat event recorder\n" ~
-            "\n" ~
-            "Usage: server [commands...] [options...]\n" ~
-            "\n" ~
-            "Commands:\n" ~
-            "  run      Start the server (default)\n" ~
-            "  auth     Interactive login to VRChat\n" ~
-            "  events   Query stored events\n" ~
-            "\n" ~
-            "Options:",
-            opts.options,
-        );
-        return 0;
-    }
-
-    if (helpConfig)
-    {
-        import std.file : exists;
-        import std.conv : to;
-        printline("Config file", config.configPath ~
-            (exists(config.configPath) ? " (loaded)" : " (not found)"));
-        printline("Database", config.dbPath);
-        printline("Credentials", config.credentialsPath);
-        printline("Cookie jar", config.cookieJarPath);
-        printline("Listen", config.listenAddr ~ ":" ~ to!string(config.listenPort));
-        printline("Secret", config.apiSecret.length > 0 ? "(set)" : "(not set)");
-        printline("Log file", config.logFilePath.length > 0 ? config.logFilePath : "(not set)");
-        printline("Verbose", config.verbose ? "true" : "false");
-        return 0;
-    }
-
-    // Set up logging
-    LogLevel logLevel = config.verbose ? LogLevel.trace : LogLevel.info;
-    ConsoleAppender logAppender = new ConsoleAppender();
-    logAppender.setLogLevel(logLevel);
-    logAddAppender(logAppender);
-    if (config.logFilePath.length > 0)
-    {
-        try
-        {
-            FileAppender fileAppender = new FileAppender(config.logFilePath);
-            fileAppender.setLogLevel(logLevel);
-            logAddAppender(fileAppender);
-        }
-        catch (Exception ex)
-        {
-            stderr.writeln("error: could not open log file '",
-                config.logFilePath, "': ", ex.msg);
-            return 1;
-        }
-    }
-    
-    // Throws and prints by default
-    if (args.length > 1)
-    {
-        foreach (string command; args[1..$])
-        {
-            switch (command)
-            {
-                case "run":
-                    cmdRun(config);
-                    break;
-                case "auth":
-                    cmdAuth(config);
-                    break;
-                case "events":
-                    cmdEvents(config);
-                    break;
-                default:
-                    logError("Unknown command: %s", command);
-                    break;
-            }
-        }
-    }
-    else // by default, run
-    {
-        cmdRun(config);
-    }
-    
-    return 0;
-}
-
 /// Maximum number of individual GET /users/{id} calls per re-seed pass.
 /// Bounds the repair work to avoid spamming the VRChat API.
 private enum int REPAIR_CAP = 25;
@@ -371,10 +241,12 @@ private enum int REPAIR_CAP = 25;
 private enum int REPAIR_HEADROOM = 50;
 
 /// Fetch the friends list from VRChat, repair any obviously-stale entries,
-/// backfill world names, and swap the result into the tracker.
-/// Holds the shared VRChat API mutex for the duration of the REST work.
+/// backfill world names and instance occupancy, and swap the result into
+/// the tracker. Holds the shared VRChat API mutex for the duration of the
+/// REST work.
 void doReseed(HTTPClient client, RateLimitTracker rateLimiter,
-    Mutex vrcApiMutex, WorldCache worldCache, FriendsTracker tracker)
+    Mutex vrcApiMutex, WorldCache worldCache, InstanceCache instanceCache,
+    FriendsTracker tracker)
 {
     import std.json : JSONValue, JSONType, parseJSON;
 
@@ -384,6 +256,7 @@ void doReseed(HTTPClient client, RateLimitTracker rateLimiter,
     int repairedCount;
     int mismatchCount;
     int worldFetchCount;
+    int instanceFetchCount;
 
     synchronized (vrcApiMutex)
     {
@@ -400,10 +273,13 @@ void doReseed(HTTPClient client, RateLimitTracker rateLimiter,
 
         // World-name backfill: walk unique worldIds and prime the cache.
         worldFetchCount = backfillWorldNamesLocked(allFriends, worldCache, rateLimiter);
+
+        // Instance occupancy backfill: walk unique public locations.
+        instanceFetchCount = backfillInstancesLocked(allFriends, instanceCache, rateLimiter);
     }
 
-    logInfo("Re-seed: fetched=%d mismatches=%d repaired=%d worlds_fetched=%d",
-        allFriends.length, mismatchCount, repairedCount, worldFetchCount);
+    logInfo("Re-seed: fetched=%d mismatches=%d repaired=%d worlds_fetched=%d instances_fetched=%d",
+        allFriends.length, mismatchCount, repairedCount, worldFetchCount, instanceFetchCount);
 
     FriendsTracker.FriendState[string] newMap = FriendsTracker.buildFriendMap(allFriends);
     tracker.replaceAll(newMap);
@@ -619,4 +495,191 @@ private int backfillWorldNamesLocked(JSONValue[] friendsArr,
     }
 
     return fetched;
+}
+
+/// Walk the friend list, extract unique public instance locations, and
+/// call InstanceCache.resolveLocked on each so snapshot builds can return
+/// occupancy via tryGet. Caller must hold vrcApiMutex.
+private int backfillInstancesLocked(JSONValue[] friendsArr,
+    InstanceCache instanceCache, RateLimitTracker rateLimiter)
+{
+    import std.json : JSONValue;
+
+    if (instanceCache is null)
+        return 0;
+
+    bool[string] seen;
+    int fetched;
+
+    foreach (ref JSONValue f; friendsArr)
+    {
+        string location;
+        if (const(JSONValue)* v = "location" in f)
+            location = v.str;
+
+        if (InstanceCache.isResolvable(location) == false)
+            continue;
+        if (location in seen)
+            continue;
+        seen[location] = true;
+
+        if (rateLimiter !is null)
+        {
+            if (rateLimiter.isBlocked())
+            {
+                logWarn("Instance backfill stopping: rate limited");
+                break;
+            }
+            int remaining = rateLimiter.getRemaining();
+            if (remaining >= 0 && remaining < REPAIR_HEADROOM)
+            {
+                logWarn("Instance backfill stopping: headroom low (%d)", remaining);
+                break;
+            }
+        }
+
+        InstanceInfo info = instanceCache.resolveLocked(location);
+        if (info.known)
+            ++fetched;
+    }
+
+    return fetched;
+}
+
+// As per tradition, keep main() at the end of module
+int main(string[] args)
+{
+    Config config = Config.defaults();
+    uint cliSet; // Bitmask of fields explicitly set by CLI.
+    bool helpConfig;
+
+    GetoptResult opts = void;
+    try opts = getopt(args,
+        "basedir|b", "Base directory for all config/data files", (string _, string val) {
+            config.setBaseDir(val);
+            cliSet |= Config.SET_DB | Config.SET_AUTH | Config.SET_COOKIE_JAR;
+        },
+        "config|c", "Path to config file", (string _, string val) {
+            config.configPath = val;
+        },
+        "db|d",     "Path to SQLite database", (string _, string val) {
+            config.dbPath = val;
+            cliSet |= Config.SET_DB;
+        },
+        "listen|l", "Listen address (host:port)", (string _, string val) {
+            config.parseListen(val);
+            cliSet |= Config.SET_LISTEN;
+        },
+        "secret",   "Shared secret for client auth", (string _, string val) {
+            config.apiSecret = val;
+            cliSet |= Config.SET_SECRET;
+        },
+        "auth|a",   "Path to credentials file", (string _, string val) {
+            config.credentialsPath = val;
+            cliSet |= Config.SET_AUTH;
+        },
+        "verbose|v","Enable verbose logging", () {
+            config.verbose = true;
+            cliSet |= Config.SET_VERBOSE;
+        },
+        "log-file|L","Append log output to file", (string _, string val) {
+            config.logFilePath = val;
+            cliSet |= Config.SET_LOG_FILE;
+        },
+        "version",  "Show version page and exit", &cliVersion,
+        "help-config", "Show effective config paths and exit", &helpConfig,
+    );
+    catch (Exception ex)
+    {
+        stderr.writeln("error: ", ex.msg);
+        return 1;
+    }
+
+    // Load config file after CLI so we can use --config to set the path.
+    // Fields explicitly set on CLI are preserved; file fills in the rest.
+    config.loadFromFile(config.configPath, cliSet);
+
+    if (opts.helpWanted)
+    {
+        defaultGetoptPrinter(
+            "vrcd server - VRChat event recorder\n" ~
+            "\n" ~
+            "Usage: server [commands...] [options...]\n" ~
+            "\n" ~
+            "Commands:\n" ~
+            "  run      Start the server (default)\n" ~
+            "  auth     Interactive login to VRChat\n" ~
+            "  events   Query stored events\n" ~
+            "\n" ~
+            "Options:",
+            opts.options,
+        );
+        return 0;
+    }
+
+    if (helpConfig)
+    {
+        import std.file : exists;
+        import std.conv : to;
+        printline("Config file", config.configPath ~
+            (exists(config.configPath) ? " (loaded)" : " (not found)"));
+        printline("Database", config.dbPath);
+        printline("Credentials", config.credentialsPath);
+        printline("Cookie jar", config.cookieJarPath);
+        printline("Listen", config.listenAddr ~ ":" ~ to!string(config.listenPort));
+        printline("Secret", config.apiSecret.length > 0 ? "(set)" : "(not set)");
+        printline("Log file", config.logFilePath.length > 0 ? config.logFilePath : "(not set)");
+        printline("Verbose", config.verbose ? "true" : "false");
+        return 0;
+    }
+
+    // Set up logging
+    LogLevel logLevel = config.verbose ? LogLevel.trace : LogLevel.info;
+    ConsoleAppender logAppender = new ConsoleAppender();
+    logAppender.setLogLevel(logLevel);
+    logAddAppender(logAppender);
+    if (config.logFilePath.length > 0)
+    {
+        try
+        {
+            FileAppender fileAppender = new FileAppender(config.logFilePath);
+            fileAppender.setLogLevel(logLevel);
+            logAddAppender(fileAppender);
+        }
+        catch (Exception ex)
+        {
+            stderr.writeln("error: could not open log file '",
+                config.logFilePath, "': ", ex.msg);
+            return 1;
+        }
+    }
+    
+    // Throws and prints by default
+    if (args.length > 1)
+    {
+        foreach (string command; args[1..$])
+        {
+            switch (command)
+            {
+                case "run":
+                    cmdRun(config);
+                    break;
+                case "auth":
+                    cmdAuth(config);
+                    break;
+                case "events":
+                    cmdEvents(config);
+                    break;
+                default:
+                    logError("Unknown command: %s", command);
+                    break;
+            }
+        }
+    }
+    else // by default, run
+    {
+        cmdRun(config);
+    }
+    
+    return 0;
 }

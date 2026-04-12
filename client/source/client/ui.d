@@ -699,12 +699,17 @@ private void drawOnlineTab(mu_Context* ctx, AppState* state, int scrollDelta)
     }
     else
     {
+        char[160] headerBuf = void;
         foreach (ref InstanceGroup grp; state.instances)
         {
             if (grp.instanceId == "private")
                 continue;
-            string header = grp.worldName.length > 0 ? grp.worldName : grp.instanceId;
-            if (mu_header_ex(ctx, header, MU_OPT_EXPANDED))
+            string baseName = grp.worldName.length > 0 ? grp.worldName : grp.instanceId;
+            const(char)[] header = baseName;
+            if (grp.nUsers >= 0 && grp.capacity > 0)
+                header = sformat(headerBuf[], "%s (%d/%d)",
+                    baseName, grp.nUsers, grp.capacity);
+            if (mu_header_ex(ctx, cast(string)header, MU_OPT_EXPANDED))
             {
                 foreach (ref FriendInfo f; grp.friends)
                     drawFriendCard(ctx, state, f);

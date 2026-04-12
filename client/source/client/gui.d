@@ -975,6 +975,12 @@ private void applyFriendsSnapshot(JSONValue msg)
                 ig.instanceId = v.str;
             if (const(JSONValue)* v = "world_name" in grp)
                 ig.worldName = v.str;
+            if (const(JSONValue)* v = "n_users" in grp)
+                if (v.type == JSONType.integer || v.type == JSONType.uinteger)
+                    ig.nUsers = v.integer;
+            if (const(JSONValue)* v = "capacity" in grp)
+                if (v.type == JSONType.integer || v.type == JSONType.uinteger)
+                    ig.capacity = v.integer;
 
             if ("friends" in grp && grp["friends"].type == JSONType.array)
             {

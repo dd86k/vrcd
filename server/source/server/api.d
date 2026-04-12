@@ -20,6 +20,7 @@ import ddcurl;
 import server.authdelegate;
 import server.events;
 import server.friends;
+import server.instancecache;
 import server.ratelimit;
 import server.store;
 import server.worldcache;
@@ -46,6 +47,7 @@ class APIServer
     private string vrchatLastError;
     private FriendsTracker friendsTracker;
     private WorldCache worldCache;
+    private InstanceCache instanceCache;
     private HTTPClient httpClient;
     private Mutex apiMutex; // Shared VRChat API serializer, injected via setAPIMutex.
     private AuthDelegator authDelegator;
@@ -85,6 +87,12 @@ class APIServer
     void setWorldCache(WorldCache wc)
     {
         worldCache = wc;
+    }
+
+    /// Set the instance cache for resolving instance occupancy.
+    void setInstanceCache(InstanceCache ic)
+    {
+        instanceCache = ic;
     }
 
     /// Set the HTTP client for proxying VRChat API calls.
@@ -506,7 +514,7 @@ private class ClientHandler
                         sendError("Not authenticated");
                         return;
                     }
-                    sendLine(server.friendsTracker.buildFriendsMessage().toString() ~ "\n");
+                    handleGetFriends();
                     break;
                 case "get_world":
                     if (authenticated == false)
@@ -627,6 +635,59 @@ private class ClientHandler
         sendLine(doneMsg.toString() ~ "\n");
         logDebugging("handleCatchUp: sent %d events, lastId=%d", sent, lastId);
         logInfo("Client caught up to event #%d", lastId);
+    }
+
+    /// Refresh instance occupancy for every public instance that has at
+    /// least one friend in it, then send the friends snapshot. Caps the
+    /// number of fetches per refresh to avoid spamming the VRChat API.
+    void handleGetFriends()
+    {
+        enum int INSTANCE_REFRESH_CAP = 20;
+
+        if (server.instanceCache && server.apiMutex)
+        {
+            // Gather unique resolvable locations from the current tracker
+            // state. This snapshot is cheap and doesn't hold the API mutex.
+            JSONValue pre = server.friendsTracker.buildFriendsMessage();
+            string[] toRefresh;
+            bool[string] seen;
+            if (JSONValue* v = "instances" in pre)
+            {
+                foreach (ref JSONValue grp; v.array)
+                {
+                    string loc;
+                    if (const(JSONValue)* l = "instance_id" in grp)
+                        loc = l.str;
+                    if (InstanceCache.isResolvable(loc) == false)
+                        continue;
+                    if (loc in seen)
+                        continue;
+                    seen[loc] = true;
+                    toRefresh ~= loc;
+                    if (toRefresh.length >= INSTANCE_REFRESH_CAP)
+                        break;
+                }
+            }
+
+            if (toRefresh.length > 0)
+            {
+                synchronized (server.apiMutex)
+                {
+                    foreach (string loc; toRefresh)
+                    {
+                        // Respect rate limit, stop early if we get blocked.
+                        if (server.rateLimiter && server.rateLimiter.isBlocked())
+                        {
+                            logWarn("handleGetFriends: stopping refresh, rate limited");
+                            break;
+                        }
+                        server.instanceCache.resolveLocked(loc);
+                    }
+                }
+            }
+        }
+
+        sendLine(server.friendsTracker.buildFriendsMessage().toString() ~ "\n");
     }
 
     void handleGetWorld(JSONValue msg)

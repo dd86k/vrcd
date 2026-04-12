@@ -81,6 +81,8 @@ struct InstanceGroup
     string instanceId;
     string worldName;
     FriendInfo[] friends;
+    long nUsers   = -1; // -1 = unknown
+    long capacity = -1; // -1 = unknown
 }
 
 /// A pending notification action to send to the server.
