@@ -145,6 +145,7 @@ int main(string[] args)
     long sinceId = -1;
     bool verbose;
     bool cliMode;
+    bool hardwareAccel;
     bool showVersion;
     string logFilePath;
 
@@ -156,6 +157,7 @@ int main(string[] args)
         "since",      "Catch up from event ID (overrides persisted cursor; 0 = all)", &sinceId,
         "verbose|v",  "Enable verbose logging", &verbose,
         "cli",        "CLI mode (no GUI)", &cliMode,
+        "hardware",   "Allow hardware-accelerated framebuffer (default: software)", &hardwareAccel,
         "log-file|L", "Append log output to file", &logFilePath,
         "version",    "Show version information and exit", &showVersion,
     );
@@ -221,8 +223,8 @@ int main(string[] args)
     if (sinceSet == false)
         sinceId = 0;
 
-    logDebugging("main: host=%s port=%d sinceId=%d sinceSet=%s cliMode=%s verbose=%s",
-        host, port, sinceId, sinceSet, cliMode, verbose);
+    logDebugging("main: host=%s port=%d sinceId=%d sinceSet=%s cliMode=%s verbose=%s hardwareAccel=%s",
+        host, port, sinceId, sinceSet, cliMode, verbose, hardwareAccel);
 
     if (cliMode)
     {
@@ -230,6 +232,6 @@ int main(string[] args)
         return 0;
     }
 
-    return runGui(host, port, secret, sinceId, hostSet, postSet, secretSet, sinceSet);
+    return runGui(host, port, secret, sinceId, hostSet, postSet, secretSet, sinceSet, hardwareAccel);
 }
 

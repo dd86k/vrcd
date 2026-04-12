@@ -81,7 +81,8 @@ private enum MOMENTUM_MIN = 0.5f;
 bool wasClick;
 
 int runGui(string host, ushort port, string secret, long sinceId,
-    bool hostExplicit, bool portExplicit, bool secretExplicit, bool sinceExplicit)
+    bool hostExplicit, bool portExplicit, bool secretExplicit, bool sinceExplicit,
+    bool hardwareAccel)
 {
     // Load saved settings; CLI args override.
     saved = loadSettings();
@@ -140,8 +141,9 @@ int runGui(string host, ushort port, string secret, long sinceId,
         return 1;
     }
 
-    // Init SDL.
-    SDL_SetHint(SDL_HINT_FRAMEBUFFER_ACCELERATION, "0");
+    // Init SDL. Software framebuffer is the default; --hardware opts into
+    // SDL's accelerated window-surface path when the backend supports it.
+    SDL_SetHint(SDL_HINT_FRAMEBUFFER_ACCELERATION, hardwareAccel ? "1" : "0");
     SDL_SetHint(SDL_HINT_VIDEO_HIGHDPI_DISABLED, "0");
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_EVENTS) != 0)
     {
@@ -244,7 +246,7 @@ int runGui(string host, ushort port, string secret, long sinceId,
     return 0;
 }
 
-/// Main event loop — split out to keep stack frames small (avoids
+/// Main event loop, split out to keep stack frames small (avoids
 /// __chkstk failures on Windows when a single function is too large).
 private void eventLoop(mu_Context* uictx)
 {
