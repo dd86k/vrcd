@@ -23,10 +23,13 @@ import client.directories : vrchatLogDir, translateVRChatPath;
 /// Log event types emitted by the watcher.
 enum LogEvent : string
 {
-    playerJoined  = "player-joined",
-    playerLeft    = "player-left",
-    locationChange = "location-change",
-    photoTaken    = "photo-taken",
+    playerJoined    = "player-joined",
+    playerLeft      = "player-left",
+    locationChange  = "location-change",
+    photoTaken      = "photo-taken",
+    urlVideo        = "url-video",
+    urlString       = "url-string",
+    urlImage        = "url-image",
 }
 
 /// A tracked player in the current instance.
@@ -347,6 +350,115 @@ class LogWatcher
             return;
         }
         
+        // Event: Video playback URL
+        // Several log formats exist:
+        //   [Video Playback] Attempting to resolve URL 'https://...'
+        //   [Video Playback] Resolving URL 'https://...'
+        //   User DisplayName added URL https://...
+        //   [USharpVideo] Started video load for URL: https://..., requested by DisplayName
+        string videoUrl;
+        string videoUser;
+
+        enum string vpAttemptMarker = "[Video Playback] Attempting to resolve URL '";
+        enum string vpResolveMarker = "[Video Playback] Resolving URL '";
+        enum string usharpMarker = "[USharpVideo] Started video load for URL: ";
+
+        ptrdiff_t vpAttemptIdx = indexOf(line, vpAttemptMarker);
+        if (vpAttemptIdx >= 0)
+        {
+            string rest = stripRight(line[vpAttemptIdx + vpAttemptMarker.length .. $]);
+            if (rest.length > 0 && rest[$ - 1] == '\'')
+                videoUrl = rest[0 .. $ - 1].idup;
+        }
+
+        if (videoUrl.length == 0)
+        {
+            ptrdiff_t vpResolveIdx = indexOf(line, vpResolveMarker);
+            if (vpResolveIdx >= 0)
+            {
+                string rest = stripRight(line[vpResolveIdx + vpResolveMarker.length .. $]);
+                if (rest.length > 0 && rest[$ - 1] == '\'')
+                    videoUrl = rest[0 .. $ - 1].idup;
+            }
+        }
+
+        if (videoUrl.length == 0)
+        {
+            ptrdiff_t usharpIdx = indexOf(line, usharpMarker);
+            if (usharpIdx >= 0)
+            {
+                string rest = stripRight(line[usharpIdx + usharpMarker.length .. $]);
+                ptrdiff_t reqIdx = indexOf(rest, ", requested by ");
+                if (reqIdx > 0)
+                {
+                    videoUrl = rest[0 .. reqIdx].idup;
+                    videoUser = rest[reqIdx + 15 .. $].idup;
+                }
+            }
+        }
+
+        if (videoUrl.length == 0)
+        {
+            ptrdiff_t addedIdx = indexOf(line, " added URL ");
+            if (addedIdx >= 0 && addedIdx > 34)
+            {
+                // "User DisplayName added URL https://..."
+                // The "User " prefix starts at offset 34.
+                enum string userPrefix = "User ";
+                ptrdiff_t userIdx = indexOf(line, userPrefix);
+                if (userIdx == 34)
+                {
+                    videoUser = line[userIdx + userPrefix.length .. addedIdx].idup;
+                    videoUrl = stripRight(line[addedIdx + 11 .. $]).idup;
+                }
+            }
+        }
+
+        if (videoUrl.length > 0)
+        {
+            logDebugging("LogWatcher: url-video url=%s user=%s", videoUrl, videoUser);
+            pushUrlEvent(LogEvent.urlVideo, videoUrl, videoUser);
+            return;
+        }
+
+        // Event: String download
+        //   [String Download] Attempting to load String from URL 'https://...'
+        enum string stringDlMarker = "] Attempting to load String from URL '";
+        ptrdiff_t stringDlIdx = indexOf(line, stringDlMarker);
+        if (stringDlIdx >= 0)
+        {
+            string rest = stripRight(line[stringDlIdx + stringDlMarker.length .. $]);
+            if (rest.length > 0 && rest[$ - 1] == '\'')
+            {
+                string url = rest[0 .. $ - 1].idup;
+                if (isLocalRequest(url) == false)
+                {
+                    logDebugging("LogWatcher: resource-load-string url=%s", url);
+                    pushUrlEvent(LogEvent.urlString, url, "");
+                }
+            }
+            return;
+        }
+
+        // Event: Image download
+        //   [Image Download] Attempting to load image from URL 'https://...'
+        enum string imageDlMarker = "] Attempting to load image from URL '";
+        ptrdiff_t imageDlIdx = indexOf(line, imageDlMarker);
+        if (imageDlIdx >= 0)
+        {
+            string rest = stripRight(line[imageDlIdx + imageDlMarker.length .. $]);
+            if (rest.length > 0 && rest[$ - 1] == '\'')
+            {
+                string url = rest[0 .. $ - 1].idup;
+                if (isLocalRequest(url) == false)
+                {
+                    logDebugging("LogWatcher: resource-load-image url=%s", url);
+                    pushUrlEvent(LogEvent.urlImage, url, "");
+                }
+            }
+            return;
+        }
+
         // Event: Photo taken
         // VRChat always logs a Windows-style path, even under Proton on Linux:
         //   2026.04.08 14:41:22 Log        -  [VRC Camera] Took screenshot to: PATH
@@ -532,6 +644,29 @@ class LogWatcher
 
         queue.pushMessage(msg.toString());
         pushWakeEvent();
+    }
+
+    /// Push a URL load event (video, string, image) into the shared queue.
+    private void pushUrlEvent(LogEvent event, string url, string user)
+    {
+        if (silent)
+            return;
+        JSONValue msg = JSONValue(string[string].init);
+        msg["type"] = "log-event";
+        msg["event_type"] = cast(string) event;
+        msg["url"] = url;
+        if (user.length > 0)
+            msg["display_name"] = user;
+
+        queue.pushMessage(msg.toString());
+        pushWakeEvent();
+    }
+
+    /// Check if a URL is a local request (VRCX/localhost) that should be ignored.
+    private static bool isLocalRequest(string url)
+    {
+        return indexOf(url, "http://127.0.0.1:22500") == 0 ||
+               indexOf(url, "http://localhost:22500") == 0;
     }
 
     /// Push an SDL event to wake the main thread.

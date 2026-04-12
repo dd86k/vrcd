@@ -711,6 +711,18 @@ private void drainNetworkMessages()
                             photoPath = v.str;
                         dispatchNotification(logEventType, "", photoPath, saved);
                     }
+                    else if (logEventType == "url-video" ||
+                        logEventType == "url-string" ||
+                        logEventType == "url-image")
+                    {
+                        string url;
+                        string urlUser;
+                        if (const(JSONValue)* v = "url" in msg)
+                            url = v.str;
+                        if (const(JSONValue)* v = "display_name" in msg)
+                            urlUser = v.str;
+                        appState.addFeedEntry(0, prettyEventType(logEventType), urlUser, url, "");
+                    }
                     else
                     {
                         string logUser;
@@ -1273,6 +1285,9 @@ private string prettyEventType(string eventType)
         case "player-joined":   return "Player Joined";
         case "player-left":     return "Player Left";
         case "photo-taken":     return "Photo Taken";
+        case "url-video":       return "URL Video";
+        case "url-string":      return "URL String";
+        case "url-image":       return "URL Image";
         case "system":          return "System";
         case "error":           return "Error";
         default:                return eventType;
