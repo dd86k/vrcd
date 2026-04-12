@@ -69,7 +69,7 @@ UI layout using ddui (immediate-mode). Defines five tabs:
 SDL2 software rendering and font management. Provides:
 - `r_draw_rect()`, `r_draw_text()`, `r_draw_icon()` -- primitives with alpha blending
 - `r_set_clip_rect()`, `r_clear()`, `r_present()` -- frame management
-- `initFont()` with platform-specific fallback chains (Segoe UI / Liberation Sans / Noto Sans / DejaVu Sans)
+- `initFont()` opens a primary font (Segoe UI on Windows, Liberation Sans on Linux, with per-platform fallbacks) plus a coverage chain of per-script fonts (Thai, Arabic, Hebrew, Devanagari, CJK, emoji). `r_draw_text` splits strings into runs per-codepoint via `TTF_GlyphIsProvided32` and renders each run with the first font in the chain that provides the glyph, blitted at a shared baseline.
 - 128x128 monochrome icon atlas from ddui
 
 ### `state.d`
@@ -123,6 +123,20 @@ JSON-based persistent settings.
 - `loadSettings()` / `saveSettings()` -- read/write from platform-specific config path
 - Fields: host, port, secret, font path/size, feed page size, notification preferences
 
+## Requirements
+
+- **OS:** Linux (Ubuntu 24.04 or newer / equivalent) or Windows 10+
+- **SDL2:** 2.0.22 or newer
+- **SDL2_ttf:** 2.22 or newer (required for `TTF_GlyphIsProvided32`, used by the font fallback chain)
+- **DMD**, **GDC**, or **LDC** (D compiler) and **DUB** for building
+
+For Unicode coverage outside Latin/Greek/Cyrillic (Thai, Arabic, CJK, etc.), install the matching Noto fonts:
+
+```bash
+# Debian/Ubuntu, but they likely already have them
+sudo apt install fonts-noto fonts-noto-cjk
+```
+
 ## Dependencies
 
 Except for SDL2, these dependencies are pulled by DUB when building.
@@ -142,5 +156,3 @@ dub test :client
 ```
 
 > **Note:** If you get linking issues on Windows, try with LDC: `--compiler=ldc2`
-
-Requires SDL2 and SDL2_ttf runtime libraries.
