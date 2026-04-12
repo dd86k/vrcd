@@ -5,6 +5,8 @@
 module client.renderer;
 
 import core.stdc.string;
+import std.typecons : Yes;
+import std.utf : decode;
 import bindbc.sdl;
 import sdl_ttf;
 import ddui;
@@ -15,7 +17,12 @@ __gshared int window_height = 640;
 
 __gshared SDL_Surface* surface;
 __gshared mu_Rect clip;
-__gshared TTF_Font* font;
+
+// Font fallback chain. fonts[0] is the primary (used for layout metrics);
+// subsequent entries are coverage fonts opened opportunistically for scripts
+// the primary doesn't provide (Thai, Arabic, CJK, etc.). Strings are split
+// into runs per-codepoint via TTF_GlyphIsProvided32 and rendered per-font.
+__gshared TTF_Font*[] fonts;
 
 enum FONT_SIZE = 16;
 __gshared int currentFontSize = FONT_SIZE;
@@ -103,18 +110,97 @@ void r_draw_rect(mu_Rect rect, mu_Color color)
 
 void r_draw_text(const(char) *text, mu_Vec2 pos, mu_Color color)
 {
-    if (text is null || *text == 0 || font is null) return;
+    if (text is null || *text == 0 || fonts.length == 0) return;
 
     SDL_Color fg = SDL_Color(color.r, color.g, color.b, color.a);
-    SDL_Surface* textSurface = TTF_RenderUTF8_Blended(font, text, fg);
-    if (textSurface is null) return;
-
     SDL_Rect clipRect = SDL_Rect(clip.x, clip.y, clip.w, clip.h);
     SDL_SetClipRect(surface, &clipRect);
-    SDL_Rect dstRect = SDL_Rect(pos.x, pos.y, textSurface.w, textSurface.h);
-    SDL_BlitSurface(textSurface, null, surface, &dstRect);
-    SDL_SetClipRect(surface, null);
-    SDL_FreeSurface(textSurface);
+    scope(exit) SDL_SetClipRect(surface, null);
+
+    // Fast path: single font loaded, or pure-ASCII string — render the
+    // whole thing with the primary in one shot. Covers the common case of
+    // UI labels and log lines.
+    const(char)[] str = text[0 .. strlen(text)];
+    if (fonts.length == 1 || isAscii(str))
+    {
+        SDL_Surface* s = TTF_RenderUTF8_Blended(fonts[0], text, fg);
+        if (s is null) return;
+        SDL_Rect dst = SDL_Rect(pos.x, pos.y, s.w, s.h);
+        SDL_BlitSurface(s, null, surface, &dst);
+        SDL_FreeSurface(s);
+        return;
+    }
+
+    // Slow path: walk codepoints, group into same-font runs, render each
+    // run separately and blit at a shared baseline so per-font ascent
+    // differences line up.
+    int penX = pos.x;
+    int baselineY = pos.y + TTF_FontAscent(fonts[0]);
+
+    size_t runStart = 0;
+    int runFontIdx = -1;
+    size_t i = 0;
+    while (i < str.length)
+    {
+        size_t cpStart = i;
+        dchar cp = decode!(Yes.useReplacementDchar)(str, i);
+        int idx = pickFontIndex(cp);
+        if (runFontIdx < 0)
+            runFontIdx = idx;
+        else if (idx != runFontIdx)
+        {
+            penX += blitRun(str[runStart .. cpStart], runFontIdx, penX, baselineY, fg);
+            runStart = cpStart;
+            runFontIdx = idx;
+        }
+    }
+    if (runFontIdx >= 0 && runStart < str.length)
+        blitRun(str[runStart .. $], runFontIdx, penX, baselineY, fg);
+}
+
+// Returns the advance width (pixels) the run consumed, or 0 on failure.
+private int blitRun(const(char)[] run, int fontIdx, int penX, int baselineY, SDL_Color fg)
+{
+    char[1024] stackBuf = void;
+    char[] buf;
+    if (run.length < stackBuf.length)
+        buf = stackBuf[0 .. run.length + 1];
+    else
+        buf = new char[run.length + 1];
+    buf[0 .. run.length] = run[];
+    buf[run.length] = 0;
+
+    TTF_Font* f = fonts[fontIdx];
+    SDL_Surface* s = TTF_RenderUTF8_Blended(f, buf.ptr, fg);
+    if (s is null) return 0;
+
+    SDL_Rect dst = SDL_Rect(penX, baselineY - TTF_FontAscent(f), s.w, s.h);
+    SDL_BlitSurface(s, null, surface, &dst);
+    int advance = s.w;
+    SDL_FreeSurface(s);
+    return advance;
+}
+
+// Pick the first font in the fallback chain that provides a glyph for cp.
+// Falls back to the primary (index 0) so unknown glyphs at least render
+// as tofu rather than vanishing.
+private int pickFontIndex(dchar cp)
+{
+    // ASCII always lives in the primary — skip the charmap lookups.
+    if (cp < 0x80) return 0;
+    foreach (size_t i, TTF_Font* f; fonts)
+    {
+        if (TTF_GlyphIsProvided32(f, cast(uint)cp))
+            return cast(int)i;
+    }
+    return 0;
+}
+
+private bool isAscii(const(char)[] s)
+{
+    foreach (char c; s)
+        if (c & 0x80) return false;
+    return true;
 }
 
 void r_draw_icon(int id, mu_Rect rect, mu_Color color)
@@ -141,28 +227,78 @@ void r_draw_icon(int id, mu_Rect rect, mu_Color color)
 
 int r_get_text_width(const(char) *text, int len)
 {
-    if (font is null) return 0;
+    if (text is null || fonts.length == 0) return 0;
 
-    int w;
-    if (len < 0 || text[len] == 0)
+    size_t total = (len < 0 || text[len] == 0) ? strlen(text) : cast(size_t)len;
+    const(char)[] str = text[0 .. total];
+
+    // Fast path: single font or ASCII — one TTF_SizeUTF8 call.
+    if (fonts.length == 1 || isAscii(str))
     {
-        TTF_SizeUTF8(font, text, &w, null);
+        char[512] buf = void;
+        const(char)* p;
+        if (str.length < buf.length)
+        {
+            buf[0 .. str.length] = str[];
+            buf[str.length] = 0;
+            p = buf.ptr;
+        }
+        else
+        {
+            char[] tmp = new char[str.length + 1];
+            tmp[0 .. str.length] = str[];
+            tmp[str.length] = 0;
+            p = tmp.ptr;
+        }
+        int w;
+        TTF_SizeUTF8(fonts[0], p, &w, null);
         return w;
     }
 
-    // TTF_SizeUTF8 needs null-terminated input; copy substring.
-    char[512] buf = void;
-    int n = len < cast(int)(buf.length - 1) ? len : cast(int)(buf.length - 1);
-    buf[0 .. n] = text[0 .. n];
-    buf[n] = 0;
-    TTF_SizeUTF8(font, buf.ptr, &w, null);
+    // Slow path: same run-splitting walk as r_draw_text, sum per-run widths.
+    int totalW = 0;
+    size_t runStart = 0;
+    int runFontIdx = -1;
+    size_t i = 0;
+    while (i < str.length)
+    {
+        size_t cpStart = i;
+        dchar cp = decode!(Yes.useReplacementDchar)(str, i);
+        int idx = pickFontIndex(cp);
+        if (runFontIdx < 0)
+            runFontIdx = idx;
+        else if (idx != runFontIdx)
+        {
+            totalW += measureRun(str[runStart .. cpStart], runFontIdx);
+            runStart = cpStart;
+            runFontIdx = idx;
+        }
+    }
+    if (runFontIdx >= 0 && runStart < str.length)
+        totalW += measureRun(str[runStart .. $], runFontIdx);
+    return totalW;
+}
+
+private int measureRun(const(char)[] run, int fontIdx)
+{
+    char[1024] stackBuf = void;
+    char[] buf;
+    if (run.length < stackBuf.length)
+        buf = stackBuf[0 .. run.length + 1];
+    else
+        buf = new char[run.length + 1];
+    buf[0 .. run.length] = run[];
+    buf[run.length] = 0;
+
+    int w;
+    TTF_SizeUTF8(fonts[fontIdx], buf.ptr, &w, null);
     return w;
 }
 
 int r_get_text_height()
 {
-    if (font is null) return 18;
-    return TTF_FontHeight(font);
+    if (fonts.length == 0) return 18;
+    return TTF_FontHeight(fonts[0]);
 }
 
 void r_set_clip_rect(mu_Rect rect)
@@ -183,9 +319,79 @@ void r_present()
     SDL_UpdateWindowSurface(window);
 }
 
+// Primary font candidates — first one that opens becomes fonts[0] and
+// defines the UI metrics (ascent, height). Ordered by visual preference,
+// not by Unicode coverage.
+version(Windows)
+{
+    private static immutable string[] primaryFontPaths = [
+        `C:\Windows\Fonts\segoeui.ttf`,
+        `C:\Windows\Fonts\arial.ttf`,
+        `C:\Windows\Fonts\tahoma.ttf`,
+    ];
+}
+else
+{
+    private static immutable string[] primaryFontPaths = [
+        // Liberation Sans — preferred primary (looks nicer than Noto Sans)
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/TTF/LiberationSans-Regular.ttf",
+        // Noto Sans
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+        // DejaVu
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
+        // FreeSans
+        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+    ];
+}
+
+// Coverage fonts — every one that exists is opened and appended after the
+// primary. Each entry covers a script the primary likely doesn't provide
+// (Thai, Arabic, CJK, etc.). Missing files are silently skipped.
+version(Windows)
+{
+    private static immutable string[] coverageFontPaths = [
+        `C:\Windows\Fonts\tahoma.ttf`,      // Thai, Arabic, Hebrew
+        `C:\Windows\Fonts\msyh.ttc`,        // Microsoft YaHei — Simplified Chinese
+        `C:\Windows\Fonts\msjh.ttc`,        // Microsoft JhengHei — Traditional Chinese
+        `C:\Windows\Fonts\meiryo.ttc`,      // Meiryo — Japanese
+        `C:\Windows\Fonts\malgun.ttf`,      // Malgun Gothic — Korean
+        `C:\Windows\Fonts\seguiemj.ttf`,    // Segoe UI Emoji
+    ];
+}
+else
+{
+    private static immutable string[] coverageFontPaths = [
+        // Thai
+        "/usr/share/fonts/truetype/noto/NotoSansThai-Regular.ttf",
+        "/usr/share/fonts/noto/NotoSansThai-Regular.ttf",
+        // Arabic
+        "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
+        "/usr/share/fonts/noto/NotoSansArabic-Regular.ttf",
+        // Hebrew
+        "/usr/share/fonts/truetype/noto/NotoSansHebrew-Regular.ttf",
+        "/usr/share/fonts/noto/NotoSansHebrew-Regular.ttf",
+        // Devanagari
+        "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",
+        "/usr/share/fonts/noto/NotoSansDevanagari-Regular.ttf",
+        // CJK (single OTC covers JP/KR/SC/TC)
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
+        // GNU Unifont — last-resort BMP coverage (looks bitmappy but renders)
+        "/usr/share/fonts/truetype/unifont/unifont.ttf",
+        "/usr/share/fonts/misc/unifont.ttf",
+    ];
+}
+
 bool initFont(const(char)[] customPath = null, int size = FONT_SIZE)
 {
     int fontSize = (size >= 8 && size <= 72) ? size : FONT_SIZE;
+
+    TTF_Font* primary;
 
     // Try custom path first.
     if (customPath.length > 0)
@@ -200,92 +406,44 @@ bool initFont(const(char)[] customPath = null, int size = FONT_SIZE)
             char[] tmp = (cast(char[]) customPath) ~ '\0';
             pathPtr = tmp.ptr;
         }
-        TTF_Font* newFont = TTF_OpenFont(pathPtr, fontSize);
-        if (newFont !is null)
+        primary = TTF_OpenFont(pathPtr, fontSize);
+    }
+
+    // Fall back to the primary candidate list.
+    if (primary is null)
+    {
+        foreach (path; primaryFontPaths)
         {
-            destroyFont();
-            font = newFont;
-            currentFontSize = fontSize;
-            return true;
+            primary = TTF_OpenFont(path.ptr, fontSize);
+            if (primary !is null) break;
         }
     }
 
-    // TODO: Font fallback for unknown glyphs
-    //       This is a known limitation of SDL2_ttf with TTF_RenderUTF8_Blended. It  
-    //       uses FreeType/HarfBuzz under the hood, but:               
-    //                                                                               
-    //       1. Single font only — SDL2_ttf doesn't do font fallback. If the loaded  
-    //       font (e.g., Noto Sans Regular) doesn't contain the Thai glyphs, they    
-    //       render as missing/tofu. Even if it does contain them, combining marks   
-    //       like U+0E4B require proper shaping.                       
-    //       2. HarfBuzz shaping — SDL2_ttf 2.20+ (SDL_TTF_2012 version flag you're
-    //       using) does include HarfBuzz support, so complex text shaping should    
-    //       work if the font has the glyphs. The issue is likely that Liberation
-    //       Sans / Noto Sans Regular doesn't include Thai script.                   
-    //                                                                 
-    //       Options:                                                           
-    //       
-    //       - Font fallback chain: Load a secondary font (e.g.,                     
-    //       NotoSansThai-Regular.ttf) and use TTF_SetFontFallback() (added in
-    //       SDL_ttf 2.22.0 / SDL_ttf 3.x). Check if your SDL_ttf version supports   
-    //       it.                                                       
-    //       - Use Noto Sans CJK / Noto Sans universal: A font that covers more
-    //       Unicode blocks. NotoSans-Regular.ttf from Google's variable font package
-    //        covers Latin/Greek/Cyrillic but NOT Thai. You'd need NotoSansThai
-    //       specifically, or the mega NotoSans that bundles all scripts.            
-    //       - Multiple render passes: For characters the primary font can't handle,
-    //       detect missing glyphs with TTF_GlyphIsProvided32() and render with an   
-    //       alternate font. This is manual font fallback.
-    //                                                                               
-    //       What SDL_ttf version are you building against? That determines whether  
-    //       TTF_SetFontFallback is available — it would be the cleanest solution.
-    version(Windows)
+    if (primary is null) return false;
+
+    destroyFont();
+    fonts ~= primary;
+
+    // Open every coverage font we can find.
+    foreach (path; coverageFontPaths)
     {
-        static immutable string[] fontPaths = [
-            `C:\Windows\Fonts\segoeui.ttf`,
-            `C:\Windows\Fonts\arial.ttf`,
-            `C:\Windows\Fonts\tahoma.ttf`,
-        ];
-    }
-    else
-    {
-        static immutable string[] fontPaths = [
-            // Liberation Sans
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-            "/usr/share/fonts/TTF/LiberationSans-Regular.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-            // Noto Sans
-            "/usr/share/fonts/noto/NotoSans-Regular.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            // DejaVu
-            "/usr/share/fonts/TTF/DejaVuSans.ttf",
-            "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
-            // FreeSans
-            "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
-        ];
+        TTF_Font* f = TTF_OpenFont(path.ptr, fontSize);
+        if (f !is null)
+            fonts ~= f;
     }
 
-    foreach (path; fontPaths)
-    {
-        TTF_Font* newFont = TTF_OpenFont(path.ptr, fontSize);
-        if (newFont !is null)
-        {
-            destroyFont();
-            font = newFont;
-            currentFontSize = fontSize;
-            return true;
-        }
-    }
-    return false;
+    currentFontSize = fontSize;
+    return true;
 }
 
 void destroyFont()
 {
-    if (font !is null)
+    foreach (f; fonts)
     {
-        TTF_CloseFont(font);
-        font = null;
+        if (f !is null)
+            TTF_CloseFont(f);
     }
+    fonts.length = 0;
 }
 
 enum { ATLAS_WHITE = MU_ICON_MAX, ATLAS_FONT }
