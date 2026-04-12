@@ -78,6 +78,16 @@ Request events since a given ID. Server sends up to 1000 events in ascending ord
 | `type`     | string | `"catch_up"`                     |
 | `since_id` | long | Last known event ID (0 for all)    |
 
+### `fetch_older`
+
+Request a page of older events (with id strictly less than `before_id`). Server sends matching events in **descending** order as `event_older` messages (capped at `limit`, max 500), followed by an `older_fetched` terminator. Intended for UI back-fill when a client has caught up and wants to scroll into history.
+
+| Field       | Type | Description                               |
+|-------------|------|-------------------------------------------|
+| `type`      | string | `"fetch_older"`                         |
+| `before_id` | long | Return events with id < before_id         |
+| `limit`     | int  | Max events to return (default 100, max 500) |
+
 ### `get_friends`
 
 Request current friends state snapshot.
@@ -153,6 +163,21 @@ Sent after all catch-up events have been delivered.
 |-----------|--------|------------------------------|
 | `type`    | string | `"caught_up"`                |
 | `last_id` | long   | ID of the last event in the database |
+
+### `event_older`
+
+A back-filled VRChat event from a `fetch_older` request. Same fields as `event` but the `type` is `"event_older"` so the client can append it to the tail of the feed without advancing its live-cursor high-water mark.
+
+### `older_fetched`
+
+Terminator for a `fetch_older` response. Sent after all `event_older` messages in the batch.
+
+| Field       | Type   | Description                                  |
+|-------------|--------|----------------------------------------------|
+| `type`      | string | `"older_fetched"`                            |
+| `before_id` | long   | The `before_id` the client requested         |
+| `oldest_id` | long   | ID of the oldest event in this batch (equals `before_id` when `count == 0`) |
+| `count`     | long   | Number of events returned in this batch      |
 
 ### `friends`
 

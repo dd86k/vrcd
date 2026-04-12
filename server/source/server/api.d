@@ -500,6 +500,14 @@ private class ClientHandler
                     }
                     handleCatchUp(msg);
                     break;
+                case "fetch_older":
+                    if (authenticated == false)
+                    {
+                        sendError("Not authenticated");
+                        return;
+                    }
+                    handleFetchOlder(msg);
+                    break;
                 case "status":
                     if (authenticated == false)
                     {
@@ -640,6 +648,66 @@ private class ClientHandler
     /// Refresh instance occupancy for every public instance that has at
     /// least one friend in it, then send the friends snapshot. Caps the
     /// number of fetches per refresh to avoid spamming the VRChat API.
+    /// Send a page of older events (id < before_id) for UI back-fill.
+    /// Events are sent newest-first as `event_older` messages, capped at
+    /// the requested limit (hard cap 500), followed by an `older_fetched`
+    /// terminator carrying the oldest id in the page (or the floor sentinel).
+    void handleFetchOlder(JSONValue msg)
+    {
+        long beforeId;
+        if (const(JSONValue)* v = "before_id" in msg)
+        {
+            if (v.type == JSONType.integer)
+                beforeId = v.integer;
+            else if (v.type == JSONType.string)
+                beforeId = v.str.to!long;
+        }
+        int limit = 100;
+        if (const(JSONValue)* v = "limit" in msg)
+        {
+            if (v.type == JSONType.integer)
+                limit = cast(int) v.integer;
+            else if (v.type == JSONType.string)
+                limit = v.str.to!int;
+        }
+        if (limit <= 0)
+            limit = 100;
+        if (limit > 500)
+            limit = 500;
+
+        logInfo("Client fetching older events: before=%d limit=%d", beforeId, limit);
+
+        long oldestId = beforeId;
+        long sent;
+        if (beforeId > 0)
+        {
+            foreach (row; server.store.queryEventsBefore(beforeId, limit))
+            {
+                long id = row[0].to!long;
+                JSONValue eventMsg = JSONValue([
+                    "type": JSONValue("event_older"),
+                    "id": JSONValue(id),
+                    "received_at": JSONValue(row[1].to!string),
+                    "event_type": JSONValue(row[2].to!string),
+                    "content": parseJSON(row[3].to!string),
+                ]);
+                sendLine(eventMsg.toString() ~ "\n");
+                oldestId = id;
+                ++sent;
+            }
+        }
+
+        JSONValue doneMsg = JSONValue([
+            "type": JSONValue("older_fetched"),
+            "before_id": JSONValue(beforeId),
+            "oldest_id": JSONValue(oldestId),
+            "count": JSONValue(sent),
+        ]);
+        sendLine(doneMsg.toString() ~ "\n");
+        logDebugging("handleFetchOlder: sent %d events, before=%d oldest=%d",
+            sent, beforeId, oldestId);
+    }
+
     void handleGetFriends()
     {
         enum int INSTANCE_REFRESH_CAP = 20;

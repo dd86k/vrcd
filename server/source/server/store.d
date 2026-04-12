@@ -83,6 +83,17 @@ class EventStore
         );
     }
 
+    /// Query events before a given ID, newest first (for client back-fill).
+    auto queryEventsBefore(long beforeId, int limit = 100)
+    {
+        logDebugging("queryEventsBefore: beforeId=%d limit=%d", beforeId, limit);
+        return db.query(
+            "SELECT id, received_at, event_type, content_json FROM ws_events WHERE id < ? ORDER BY id DESC LIMIT ?",
+            beforeId.to!string,
+            limit.to!string,
+        );
+    }
+
     /// Query recent events (for CLI viewer).
     auto queryRecentEvents(int limit = 50)
     {
