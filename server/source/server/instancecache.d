@@ -3,9 +3,11 @@
 /// Caches instance occupancy (n_users) and capacity resolved from the
 /// VRChat REST API endpoint /instances/{worldId}:{instanceId}.
 ///
-/// Populations change quickly, so TTLs are deliberately short: fresh
-/// data has a 2-minute TTL and failures a 1-minute TTL. Rapid refreshes
-/// by clients hit the cache; slower refreshes pay the fetch cost.
+/// Populations change quickly, so resolveLocked() refetches aggressively
+/// (2-minute TTL on success, 1-minute on failure). tryGet() however
+/// returns the last-known value regardless of expiry: broadcast paths
+/// that never refresh should still show the most recent number we have,
+/// not hide the field as soon as the TTL lapses.
 ///
 /// Copyright: dd86k <dd@dax.moe>
 /// License: BSD-3-Clause-Clear
@@ -60,19 +62,21 @@ class InstanceCache
         apiMutex = m;
     }
 
-    /// Cache-only lookup. Returns a populated InstanceInfo if fresh,
-    /// otherwise an InstanceInfo with `known == false`. Never issues HTTP.
+    /// Cache-only lookup. Returns the last successful value for this
+    /// location if we ever had one, regardless of whether it is still
+    /// fresh. TTL freshness is enforced by resolve()/resolveLocked() on
+    /// the refresh path; this call exists so broadcast snapshots keep
+    /// showing the most recent known count between refreshes. Never
+    /// issues HTTP.
     InstanceInfo tryGet(string location)
     {
-        import core.stdc.time : time;
         InstanceInfo result;
         if (isResolvable(location) == false)
             return result;
-        long now = time(null);
         synchronized (cacheMutex)
         {
             CacheEntry* entry = location in cache;
-            if (entry is null || entry.expiresAt <= now || entry.ok == false)
+            if (entry is null || entry.ok == false)
                 return result;
             result.known = true;
             result.nUsers = entry.nUsers;
