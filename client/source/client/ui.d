@@ -260,6 +260,10 @@ private void drawFeedTab(mu_Context* ctx, AppState* state, int scrollDelta)
     {
         mu_layout_row(ctx, 1, fullCol.ptr, 0);
         mu_label(ctx, "No events yet.");
+
+        // Empty-state CTA: big button occupies the "would-be" event area,
+        // directly addressing the "restart with zero notifs" scenario.
+        drawFetchOlderRow(ctx, state, 60, true);
     }
     else
     {
@@ -329,6 +333,12 @@ private void drawFeedTab(mu_Context* ctx, AppState* state, int scrollDelta)
         {
             mu_layout_row(ctx, 1, fullCol.ptr, 0);
             mu_label(ctx, "No matching events.");
+        }
+        else if (feedPage == totalPages - 1)
+        {
+            // On the last page, append the Fetch Older button after the
+            // last row as an "infinite scroll" style sentinel.
+            drawFetchOlderRow(ctx, state, 45, false);
         }
     }
 
@@ -440,6 +450,48 @@ private void drawFeedDetail(mu_Context* ctx, AppState* state, int scrollDelta)
     }
 
     mu_end_panel(ctx);
+}
+
+/// Render a full-width "Fetch older events" row as the last item inside
+/// the feed panel. Height is configurable so the empty-state can use a
+/// larger, more prominent touch target. Disables itself while a request
+/// is in flight or when the server has reported no more events.
+private void drawFetchOlderRow(mu_Context* ctx, AppState* state, int height, bool emptyState)
+{
+    static immutable int[1] fullCol = [-1];
+
+    string label;
+    bool clickable = true;
+    if (state.fetchingOlder)
+    {
+        label = "Fetching older events...";
+        clickable = false;
+    }
+    else if (state.noOlderEvents)
+    {
+        label = "No older events on server";
+        clickable = false;
+    }
+    else
+    {
+        label = emptyState
+            ? "Fetch older events from server"
+            : "Load older events  v";
+    }
+
+    mu_layout_row(ctx, 1, fullCol.ptr, height);
+    if (clickable)
+    {
+        if (mu_button(ctx, label))
+            state.fetchOlderRequested = true;
+    }
+    else
+    {
+        // Disabled-looking label inside a button-shaped rect.
+        mu_Rect r = mu_layout_next(ctx);
+        mu_draw_rect(ctx, r, mu_Color(40, 40, 50, 255));
+        mu_draw_control_text(ctx, label, r, MU_COLOR_TEXT, MU_OPT_ALIGNCENTER);
+    }
 }
 
 /// Pagination bar with First, Prev, page numbers, Next, Last buttons.

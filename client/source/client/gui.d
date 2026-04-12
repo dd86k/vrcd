@@ -451,6 +451,26 @@ private void eventLoop(mu_Context* uictx)
                 conn.requestFriends();
         }
 
+        // Handle "Fetch older" request from the Feed tab.
+        if (appState.fetchOlderRequested)
+        {
+            appState.fetchOlderRequested = false;
+            if (conn !is null && appState.connected && appState.fetchingOlder == false)
+            {
+                // Cursor: smallest id currently in feed, or lastEventId+1
+                // if the feed hasn't loaded any server events yet.
+                long beforeId = appState.oldestLoadedEventId == long.max
+                    ? saved.lastEventId + 1
+                    : appState.oldestLoadedEventId;
+                if (beforeId > 0)
+                {
+                    appState.fetchingOlder = true;
+                    appState.noOlderEvents = false;
+                    conn.fetchOlder(beforeId, 100);
+                }
+            }
+        }
+
         // Handle font reload request from Settings tab.
         if (appState.fontReloadRequested)
         {
@@ -671,6 +691,61 @@ private void drainNetworkMessages()
                         saved.lastEventId = lastId;
                     saveSettings(saved);
                     appState.addFeedEntry(0, "system", "", "Caught up to event #" ~ lastId.to!string, "");
+                    break;
+
+                case "event_older":
+                    // Back-filled event from a fetch_older request. Append to
+                    // the tail of the feed (oldest position). Do NOT touch
+                    // saved.lastEventId — that's the high-water mark for live
+                    // catch-up, not the oldest.
+                    long id;
+                    if (const(JSONValue) *jid = "id" in msg)
+                        id = jid.integer;
+
+                    string eventType;
+                    if (const(JSONValue)* v = "event_type" in msg)
+                        eventType = v.str;
+                    string rawReceivedAt;
+                    if (const(JSONValue)* v = "received_at" in msg)
+                        rawReceivedAt = v.str;
+                    string receivedAt = formatTimestamp(rawReceivedAt);
+                    string user;
+                    string detail;
+                    extractEventFields(eventType, msg, user, detail);
+
+                    string rawContent;
+                    bool isSelfEvent = isSelfEventType(eventType);
+                    if (const(JSONValue) *content = "content" in msg)
+                    {
+                        rawContent = content.toString();
+                        if (eventType == "avatar-change" && content.type == JSONType.object)
+                            if (const(JSONValue)* v = "isSelf" in *content)
+                                if (v.type == JSONType.true_)
+                                    isSelfEvent = true;
+                    }
+
+                    appState.appendOldFeedEntry(id, prettyEventType(eventType),
+                        user, detail, receivedAt, rawContent, isSelfEvent);
+                    break;
+
+                case "older_fetched":
+                    long count;
+                    if (const(JSONValue) *c = "count" in msg)
+                        count = c.integer;
+                    long beforeId;
+                    if (const(JSONValue) *b = "before_id" in msg)
+                        beforeId = b.integer;
+                    appState.fetchingOlder = false;
+                    if (count == 0)
+                    {
+                        appState.noOlderEvents = true;
+                        appState.addFeedEntry(0, "system", "",
+                            "No events older than #" ~ beforeId.to!string, "");
+                    }
+                    else
+                    {
+                        appState.noOlderEvents = false;
+                    }
                     break;
 
                 case "status":

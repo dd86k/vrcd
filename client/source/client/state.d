@@ -135,6 +135,16 @@ struct AppState
     float feedPageSize = 25.0f; // items per page (float for slider)
     FeedEntry[] feedEntries;
 
+    // Smallest server event id currently loaded in feedEntries (long.max = none).
+    // Used as the cursor for "Fetch older" back-fill requests.
+    long oldestLoadedEventId = long.max;
+    // True while a fetch_older request is in flight; button shows "Fetching...".
+    bool fetchingOlder;
+    // Set by the UI to request a fetch_older round-trip on the next frame.
+    bool fetchOlderRequested;
+    // True when the server reports no events exist below oldestLoadedEventId.
+    bool noOlderEvents;
+
     // Feed detail
     FeedEntry* selectedFeedEntry; // null = list view, non-null = detail view
 
@@ -181,10 +191,22 @@ struct AppState
     void addFeedEntry(long id, string eventType, string user, string detail, string receivedAt,
         string rawContent = "", bool isSelf = false)
     {
-        // Prepend (newest first), cap at 500 entries.
-        if (feedEntries.length >= 500)
-            feedEntries = feedEntries[0 .. 499];
+        // Prepend (newest first), cap at 2000 entries.
+        if (feedEntries.length >= 2000)
+            feedEntries = feedEntries[0 .. 1999];
         feedEntries = FeedEntry(id, eventType, user, detail, receivedAt, rawContent, isSelf) ~ feedEntries;
+        if (id > 0 && id < oldestLoadedEventId)
+            oldestLoadedEventId = id;
+    }
+
+    /// Append an older event at the tail (oldest position).
+    /// Used by `fetch_older` back-fill — does not cap.
+    void appendOldFeedEntry(long id, string eventType, string user, string detail, string receivedAt,
+        string rawContent = "", bool isSelf = false)
+    {
+        feedEntries ~= FeedEntry(id, eventType, user, detail, receivedAt, rawContent, isSelf);
+        if (id > 0 && id < oldestLoadedEventId)
+            oldestLoadedEventId = id;
     }
 
     /// Add a notification, deduplicating by notificationId.

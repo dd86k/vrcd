@@ -118,6 +118,19 @@ class ServerConnection
         ]));
     }
 
+    /// Request a page of older events (with id < beforeId), newest first.
+    /// Server replies with `event_older` messages followed by an
+    /// `older_fetched` terminator.
+    void fetchOlder(long beforeId, int limit = 100)
+    {
+        logDebugging("fetchOlder: beforeId=%d limit=%d", beforeId, limit);
+        sendMessage(JSONValue([
+            "type": JSONValue("fetch_older"),
+            "before_id": JSONValue(beforeId),
+            "limit": JSONValue(limit),
+        ]));
+    }
+
     /// Request the current friends state from the server.
     void requestFriends()
     {
@@ -338,6 +351,17 @@ private:
                     if ("last_id" in msg && msg["last_id"].type == JSONType.integer)
                         lastId = msg["last_id"].get!long;
                     logInfo("Caught up to event #%d", lastId);
+                    break;
+                case "event_older":
+                    // CLI mode treats back-filled events like live events.
+                    if (onEvent)
+                        onEvent(msg);
+                    break;
+                case "older_fetched":
+                    long count;
+                    if ("count" in msg && msg["count"].type == JSONType.integer)
+                        count = msg["count"].get!long;
+                    logInfo("Fetched %d older events", count);
                     break;
                 case "error":
                     string errMsg;
