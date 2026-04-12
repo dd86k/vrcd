@@ -504,6 +504,10 @@ private void eventLoop(mu_Context* uictx)
             }
         }
 
+        // Sync notification settings from UI state so toggles take
+        // effect immediately without requiring a manual save.
+        syncNotifySettings();
+
         // Handle test notification request from Settings tab.
         if (appState.testNotifyRequested)
         {
@@ -1383,6 +1387,22 @@ private void doReconnect()
 }
 
 /// Read current UI state into a Settings struct and persist to disk.
+/// Keep the module-level `saved` notification fields in sync with the UI
+/// so that toggling a checkbox takes effect immediately for dispatch,
+/// without requiring the user to click "Save Settings".
+private void syncNotifySettings()
+{
+    saved.notifyXSOverlay   = appState.notifyXSOverlay != 0;
+    saved.notifyOVRToolkit  = appState.notifyOVRToolkit != 0;
+    saved.notifyDesktop     = appState.notifyDesktop != 0;
+    saved.notifyVolume      = appState.notifyVolume;
+    saved.notifyTimeout     = appState.notifyTimeout;
+    saved.notifyOpacity     = appState.notifyOpacity;
+    saved.notifySound       = appState.notifySound != 0;
+    foreach (size_t i; 0 .. notifyEventLabels.length)
+        saved.notifyEventFilter[i] = appState.notifyEventFilter[i] != 0;
+}
+
 private void doSaveSettings()
 {
     import core.stdc.string : strlen;
