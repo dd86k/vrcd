@@ -7,6 +7,11 @@ module client.main;
 import std.getopt;
 import std.stdio : stderr, writeln, writefln;
 import std.json;
+import std.string : stripRight;
+
+import bindbc.sdl;
+import sdl_ttf;
+import sdl_image;
 
 import ddlogger;
 
@@ -51,6 +56,87 @@ void cmdStream(string host, ushort port, string secret, long sinceId)
     conn.run();
 }
 
+void printLine(string name, const(char)[] val)
+{
+    enum WIDTH = -15;
+    writefln("%*s %s", WIDTH, name ? name : "", val);
+}
+
+void cmdVersion()
+{
+    import std.format : format, sformat;
+    
+    // Version, built date
+    enum APP_VERSION = import("VERSION");
+    printLine("vrcd-client", APP_VERSION);
+    static immutable string BUILT_DATE = "Built: " ~ __TIMESTAMP__;
+    printLine(null, BUILT_DATE);
+    
+    // License, Homepage
+    printLine("License", "BSD-3-Clause-Clear");
+    printLine(null,      "Copyright (c) dd86k <dd@dax.moe>");
+    printLine("Homepage", "https://github.com/dd86k/vrcd");
+    
+    // Compiler
+    static immutable string COMPILER = __VENDOR__ ~ " " ~ format("%u.%u", __VERSION__ / 1000, __VERSION__ % 1000);
+    printLine("Compiler", COMPILER);
+    
+    // TODO: Take directly from dub.selections.json
+    printLine("bindbc-common",  "1.0.5");
+    printLine("bindbc-loader",  "1.1.5");
+    printLine("bindbc-sdl",     "1.5.2");
+    printLine("ddlogger",       "4ec9bc06bb90c4a7844f62fcfc1429bc7cdb1378");
+    printLine("ddui",           "106ff4bdd26cfa07953acff559c195fb228909f5");
+    
+    static immutable const(char)[] NOT_FOUND = "(not found)";
+    
+    // SDL2 (core)
+    char[16] buf = void;
+    const(char)[] val = void;
+    SDLSupport sdlStatus = loadSDL();
+    if (sdlStatus == SDLSupport.noLibrary || sdlStatus == SDLSupport.badLibrary)
+    {
+        val = NOT_FOUND;
+    }
+    else
+    {
+        SDL_version ver = void;
+        SDL_GetVersion(&ver);
+        val = sformat(buf, "%d.%d.%d", ver.major, ver.minor, ver.patch);
+    }
+    printLine("SDL2", val);
+    
+    // SDL2_ttf
+    SDLTTFSupport ttfStatus = loadSDLTTF();
+    if (ttfStatus == SDLTTFSupport.noLibrary)
+        ttfStatus = loadSDLTTF("libSDL2_ttf-2.0.so.0");
+    if (ttfStatus == SDLTTFSupport.noLibrary || ttfStatus == SDLTTFSupport.badLibrary)
+    {
+        val = NOT_FOUND;
+    }
+    else
+    {
+        const(SDL_version)* ttfVer = TTF_Linked_Version();
+        val = sformat(buf, "%d.%d.%d", ttfVer.major, ttfVer.minor, ttfVer.patch);
+    }
+    printLine("SDL2_ttf", val);
+    
+    // SDL2_image
+    SDLImageSupport imgStatus = loadSDLImage();
+    if (imgStatus == SDLImageSupport.noLibrary)
+        imgStatus = loadSDLImage("libSDL2_image-2.0.so.0");
+    if (imgStatus == SDLImageSupport.noLibrary || imgStatus == SDLImageSupport.badLibrary)
+    {
+        val = NOT_FOUND;
+    }
+    else
+    {
+        const(SDL_version)* imgVer = IMG_Linked_Version();
+        val = sformat(buf, "%d.%d.%d", imgVer.major, imgVer.minor, imgVer.patch);
+    }
+    printLine("SDL2_image", val);
+}
+
 int main(string[] args)
 {
     string host;
@@ -59,6 +145,7 @@ int main(string[] args)
     long sinceId = -1;
     bool verbose;
     bool cliMode;
+    bool showVersion;
     string logFilePath;
 
     GetoptResult opts = void;
@@ -70,6 +157,7 @@ int main(string[] args)
         "verbose|v",  "Enable verbose logging", &verbose,
         "cli",        "CLI mode (no GUI)", &cliMode,
         "log-file|L", "Append log output to file", &logFilePath,
+        "version",    "Show version information and exit", &showVersion,
     );
     catch (Exception ex)
     {
@@ -90,6 +178,12 @@ int main(string[] args)
             "Options:",
             opts.options,
         );
+        return 0;
+    }
+
+    if (showVersion)
+    {
+        cmdVersion();
         return 0;
     }
 
