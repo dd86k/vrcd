@@ -54,7 +54,7 @@ void cmdRun(ref Config config)
         // In headless mode, start API server first so clients can connect
         // and provide credentials/2FA codes if needed.
         delegator = new AuthDelegator();
-        apiServer = new APIServer(config.listenAddr, config.listenPort, config.apiSecret, store);
+        apiServer = new APIServer(config.listenAddr, config.listenPort, config.apiSecret, store, config.reseedInterval);
         apiServer.setAuthDelegator(delegator);
         apiServer.start();
         logInfo("Server started, listening on %s:%d", config.listenAddr, config.listenPort);
@@ -77,7 +77,7 @@ void cmdRun(ref Config config)
     if (apiServer is null)
     {
         // Interactive mode: start API server after auth.
-        apiServer = new APIServer(config.listenAddr, config.listenPort, config.apiSecret, store);
+        apiServer = new APIServer(config.listenAddr, config.listenPort, config.apiSecret, store, config.reseedInterval);
         apiServer.start();
         logInfo("Server started, listening on %s:%d", config.listenAddr, config.listenPort);
     }

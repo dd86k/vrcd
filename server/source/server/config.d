@@ -4,8 +4,16 @@
 /// License: BSD-3-Clause-Clear
 module server.config;
 
+import core.time : dur, Duration;
 import std.path : buildPath, expandTilde;
 import std.string : strip, indexOf, lineSplitter;
+
+/// Default friend state reseed interval.
+///
+/// This variable dictates how often to re-fetch all friends from the VRChat API.
+///
+/// Used in config and api.
+immutable DEFAULT_RESEED_INTERVAL = dur!"hours"(2);
 
 /// Server configuration loaded from file or CLI args.
 struct Config
@@ -18,6 +26,7 @@ struct Config
     string cookieJarPath;
     string apiSecret; /// Shared secret for client auth. Empty = no auth required.
     string logFilePath; /// Optional file to append log output to. Empty = disabled.
+    Duration reseedInterval = DEFAULT_RESEED_INTERVAL;
     bool verbose;
 
     /// Bitmask constants for tracking which fields were set by CLI.
@@ -131,6 +140,14 @@ struct Config
                 case "log_file":
                     if ((cliSet & SET_LOG_FILE) == 0)
                         logFilePath = val;
+                    break;
+                case "reseed_interval":
+                    import std.conv : to;
+                    try reseedInterval = dur!"minutes"(val.to!int);
+                    catch (Exception ex)
+                    {
+                        throw new Exception("Invalid value for reseed_interval: " ~ ex.msg);
+                    }
                     break;
                 default:
                     break;

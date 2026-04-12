@@ -5,7 +5,7 @@
 module server.api;
 
 import core.thread;
-import core.time : dur, MonoTime, Duration;
+import core.time : Duration, dur, MonoTime;
 import core.sync.mutex;
 import core.sync.condition;
 
@@ -23,6 +23,7 @@ import server.friends;
 import server.ratelimit;
 import server.store;
 import server.worldcache;
+import server.config : DEFAULT_RESEED_INTERVAL;
 
 /// Callback invoked by the re-seed worker to actually perform a full
 /// re-seed pass. The callback owns HTTPClient/RateLimitTracker access and
@@ -60,7 +61,8 @@ class APIServer
     private bool firstReseed = true;
     private Duration reseedInterval;
 
-    this(string bindAddr, ushort port, string sharedSecret, EventStore store)
+    this(string bindAddr, ushort port, string sharedSecret, EventStore store,
+        Duration reseedInterval = DEFAULT_RESEED_INTERVAL)
     {
         this.bindAddr = bindAddr;
         this.port = port;
@@ -70,7 +72,7 @@ class APIServer
         this.friendsTracker = new FriendsTracker();
         this.reseedSignalMutex = new Mutex();
         this.reseedSignalCond = new Condition(this.reseedSignalMutex);
-        this.reseedInterval = dur!"hours"(4);
+        this.reseedInterval = reseedInterval;
     }
 
     /// Access the friends tracker (e.g. to seed from REST API).
