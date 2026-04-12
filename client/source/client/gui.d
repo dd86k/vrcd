@@ -174,9 +174,21 @@ int runGui(string host, ushort port, string secret, long sinceId,
 
     // Load system font.
     if (initFont() == false)
-        logError("No system font found — text will not render");
+    {
+        logError("No system font found, text will not render");
+        version (Windows)
+            static immutable string msg =
+                "No usable system font.\n" ~
+                "Check C:\\Windows\\Fonts for Segoe UI.";
+        else
+            static immutable string msg =
+                "No usable system font.\n" ~
+                "Install a TTF font (e.g. fonts-liberation).";
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "vrcd: No font found", msg.ptr, window);
+        return 2;
+    }
 
-    // Init UI context (heap-allocated — mu_Context is ~4 MB, far too
+    // Init UI context (heap-allocated since mu_Context is ~4 MB, far too
     // large for the stack and triggers __chkstk failures on Windows).
     mu_Context* uictx = new mu_Context();
     mu_init(uictx);
