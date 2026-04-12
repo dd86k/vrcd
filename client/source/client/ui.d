@@ -417,7 +417,7 @@ private void drawFeedDetail(mu_Context* ctx, AppState* state, int scrollDelta)
             {
                 foreach (string key, JSONValue val; c.objectNoRef)
                 {
-                    // Skip nested objects/arrays — show scalar fields.
+                    // Skip nested objects/arrays,  show scalar fields.
                     if (val.type == JSONType.object || val.type == JSONType.array)
                         continue;
 
@@ -752,7 +752,7 @@ private void drawFriendCard(mu_Context* ctx, AppState* state, ref FriendInfo f)
 
     static immutable int[2] indentCols = [14, -1];
     mu_layout_row(ctx, 2, indentCols.ptr, 56);
-    mu_layout_next(ctx); // left gutter — empty, scrollable drag area
+    mu_layout_next(ctx); // left gutter,  empty, scrollable drag area
 
     mu_Rect r = mu_layout_next(ctx);
     bool mouseOver = mu_mouse_over(ctx, r) != 0;

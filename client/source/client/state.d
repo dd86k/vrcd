@@ -161,7 +161,7 @@ struct AppState
     int[notifyEventLabels.length] notifyEventFilter = 1;
     bool testNotifyRequested;
 
-    // Tools tab — strip metadata
+    // Tools tab,  strip metadata
     bool stripMetadataPage;
     string droppedFilePath;
     string stripStatus;

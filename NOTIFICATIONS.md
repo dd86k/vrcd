@@ -126,7 +126,7 @@ WayVR also implements this same UDP protocol (see above), so targeting the XSOve
 
 | Field            | Type     | Default     | Description                                                     |
 |------------------|----------|-------------|-----------------------------------------------------------------|
-| `messageType`    | `int`    | —           | `1` = notification popup, `2` = media player info               |
+| `messageType`    | `int`    |             | `1` = notification popup, `2` = media player info               |
 | `title`          | `string` | `""`        | Notification title (supports Rich Text)                         |
 | `content`        | `string` | `""`        | Notification body (supports Rich Text); if empty, shows compact |
 | `timeout`        | `float`  | `0.5`       | Display duration in seconds                                     |
@@ -136,7 +136,7 @@ WayVR also implements this same UDP protocol (see above), so targeting the XSOve
 | `icon`           | `string` | `""`        | Base64 image data, file path, or `"default"`/`"error"`/`"warning"` |
 | `useBase64Icon`  | `bool`   | `false`     | Set `true` when `icon` contains base64 data                    |
 | `sourceApp`      | `string` | `""`        | Application name (for debugging)                                |
-| `opacity`        | `float`  | —           | Notification opacity (0.0–1.0)                                  |
+| `opacity`        | `float`  |             | Notification opacity (0.0–1.0)                                  |
 | `index`          | `int`    | `0`         | Only used for media player (messageType 2)                      |
 
 ### Height Heuristic

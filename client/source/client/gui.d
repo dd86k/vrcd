@@ -324,7 +324,7 @@ private void eventLoop(mu_Context* uictx)
                     {
                         if (filterPopupOpen)
                         {
-                            // Pass directly to ddui — no drag in popup mode.
+                            // Pass directly to ddui,  no drag in popup mode.
                             mu_input_mousedown(uictx, e.button.x, e.button.y, MU_MOUSE_LEFT);
                         }
                         else
@@ -351,18 +351,18 @@ private void eventLoop(mu_Context* uictx)
                     {
                         if (filterPopupOpen)
                         {
-                            // Pass directly to ddui — no drag in popup mode.
+                            // Pass directly to ddui,  no drag in popup mode.
                             mu_input_mouseup(uictx, e.button.x, e.button.y, MU_MOUSE_LEFT);
                         }
                         else if (dragState == DragState.pending)
                         {
-                            // Was a click, not a drag — mousedown already sent.
+                            // Was a click, not a drag,  mousedown already sent.
                             mu_input_mouseup(uictx, e.button.x, e.button.y, MU_MOUSE_LEFT);
                             wasClick = true;
                         }
                         else if (dragState == DragState.dragging)
                         {
-                            // Scroll-drag ended — release ddui control.
+                            // Scroll-drag ended,  release ddui control.
                             mu_input_mouseup(uictx, e.button.x, e.button.y, MU_MOUSE_LEFT);
                         }
                         dragState = DragState.idle;
@@ -763,7 +763,7 @@ private void drainNetworkMessages()
                     {
                         // Check whether the notification is still in state.
                         // For fire-and-forget "hide", it was already removed
-                        // optimistically — suppress the error to avoid noise.
+                        // optimistically,  suppress the error to avoid noise.
                         bool stillPresent;
                         foreach (ref NotificationEntry n; appState.notifications)
                         {

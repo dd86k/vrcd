@@ -467,7 +467,7 @@ class LogWatcher
         ptrdiff_t photoIdx = indexOf(line, photoMarker);
         if (photoIdx >= 0)
         {
-            // Skip old photos replayed during backfill — VRChat has long
+            // Skip old photos replayed during backfill,  VRChat has long
             // since closed the file and we don't want to rewrite metadata
             // for historical screenshots.
             if (silent)

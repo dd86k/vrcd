@@ -170,7 +170,7 @@ private struct VdfNode
 }
 
 /// Parse a libraryfolders-style VDF document. Handles only double-quoted
-/// strings and `{`/`}` blocks — sufficient for Steam's generated files.
+/// strings and `{`/`}` blocks, sufficient for Steam's generated files.
 /// Returns an empty node on any parse error.
 private VdfNode parseVdf(string src)
 {
@@ -217,7 +217,7 @@ private void parseBlock(string src, ref size_t pos, ref VdfNode node)
         }
         else
         {
-            // Unexpected — skip a character to make progress and keep going.
+            // Unexpected, skip a character to make progress and keep going.
             pos++;
         }
     }
@@ -233,7 +233,7 @@ private void skipWs(string src, ref size_t pos)
             pos++;
             continue;
         }
-        // Line comments `//` — not used by Steam's file but cheap to tolerate.
+        // Line comments `//`, not used by Steam's file but cheap to tolerate.
         if (c == '/' && pos + 1 < src.length && src[pos + 1] == '/')
         {
             pos += 2;

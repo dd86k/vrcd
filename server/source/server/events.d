@@ -92,7 +92,7 @@ VRCEvent parseEvent(const(char)[] rawMessage)
         JSONValue contentVal = json["content"];
         if (contentVal.type == JSONType.string)
         {
-            // Content is a JSON-encoded string — parse it.
+            // Content is a JSON-encoded string,  parse it.
             try
                 event.content = parseJSON(contentVal.str);
             catch (Exception)

@@ -61,7 +61,7 @@ AuthState authenticate(ref Config config, HTTPClient client, AuthDelegator deleg
         return reAuthUser(client);
     }
 
-    // No valid session — do full login.
+    // No valid session,  do full login.
     return fullLogin(config, client, delegator);
 }
 

@@ -126,7 +126,7 @@ private:
     {
         logInfo("Initializing database schema...");
 
-        // Raw event log — canonical append-only stream.
+        // Raw event log,  canonical append-only stream.
         db.exec(
             "CREATE TABLE IF NOT EXISTS ws_events (" ~
             "  id INTEGER PRIMARY KEY AUTOINCREMENT," ~

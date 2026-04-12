@@ -117,7 +117,7 @@ void r_draw_text(const(char) *text, mu_Vec2 pos, mu_Color color)
     SDL_SetClipRect(surface, &clipRect);
     scope(exit) SDL_SetClipRect(surface, null);
 
-    // Fast path: single font loaded, or pure-ASCII string — render the
+    // Fast path: single font loaded, or pure-ASCII string,  render the
     // whole thing with the primary in one shot. Covers the common case of
     // UI labels and log lines.
     const(char)[] str = text[0 .. strlen(text)];
@@ -186,7 +186,7 @@ private int blitRun(const(char)[] run, int fontIdx, int penX, int baselineY, SDL
 // as tofu rather than vanishing.
 private int pickFontIndex(dchar cp)
 {
-    // ASCII always lives in the primary — skip the charmap lookups.
+    // ASCII always lives in the primary,  skip the charmap lookups.
     if (cp < 0x80) return 0;
     foreach (size_t i, TTF_Font* f; fonts)
     {
@@ -232,7 +232,7 @@ int r_get_text_width(const(char) *text, int len)
     size_t total = (len < 0 || text[len] == 0) ? strlen(text) : cast(size_t)len;
     const(char)[] str = text[0 .. total];
 
-    // Fast path: single font or ASCII — one TTF_SizeUTF8 call.
+    // Fast path: single font or ASCII,  one TTF_SizeUTF8 call.
     if (fonts.length == 1 || isAscii(str))
     {
         char[512] buf = void;
@@ -319,7 +319,7 @@ void r_present()
     SDL_UpdateWindowSurface(window);
 }
 
-// Primary font candidates — first one that opens becomes fonts[0] and
+// Primary font candidates,  first one that opens becomes fonts[0] and
 // defines the UI metrics (ascent, height). Ordered by visual preference,
 // not by Unicode coverage.
 version(Windows)
@@ -333,7 +333,7 @@ version(Windows)
 else
 {
     private static immutable string[] primaryFontPaths = [
-        // Liberation Sans — preferred primary (looks nicer than Noto Sans)
+        // Liberation Sans,  preferred primary (looks nicer than Noto Sans)
         "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
         "/usr/share/fonts/TTF/LiberationSans-Regular.ttf",
         // Noto Sans
@@ -348,17 +348,17 @@ else
     ];
 }
 
-// Coverage fonts — every one that exists is opened and appended after the
+// Coverage fonts,  every one that exists is opened and appended after the
 // primary. Each entry covers a script the primary likely doesn't provide
 // (Thai, Arabic, CJK, etc.). Missing files are silently skipped.
 version(Windows)
 {
     private static immutable string[] coverageFontPaths = [
         `C:\Windows\Fonts\tahoma.ttf`,      // Thai, Arabic, Hebrew
-        `C:\Windows\Fonts\msyh.ttc`,        // Microsoft YaHei — Simplified Chinese
-        `C:\Windows\Fonts\msjh.ttc`,        // Microsoft JhengHei — Traditional Chinese
-        `C:\Windows\Fonts\meiryo.ttc`,      // Meiryo — Japanese
-        `C:\Windows\Fonts\malgun.ttf`,      // Malgun Gothic — Korean
+        `C:\Windows\Fonts\msyh.ttc`,        // Microsoft YaHei,  Simplified Chinese
+        `C:\Windows\Fonts\msjh.ttc`,        // Microsoft JhengHei,  Traditional Chinese
+        `C:\Windows\Fonts\meiryo.ttc`,      // Meiryo,  Japanese
+        `C:\Windows\Fonts\malgun.ttf`,      // Malgun Gothic,  Korean
         `C:\Windows\Fonts\seguiemj.ttf`,    // Segoe UI Emoji
     ];
 }
@@ -381,7 +381,7 @@ else
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
-        // GNU Unifont — last-resort BMP coverage (looks bitmappy but renders)
+        // GNU Unifont,  last-resort BMP coverage (looks bitmappy but renders)
         "/usr/share/fonts/truetype/unifont/unifont.ttf",
         "/usr/share/fonts/misc/unifont.ttf",
     ];

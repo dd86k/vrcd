@@ -89,7 +89,7 @@ If the file doesn't exist, the server will prompt for credentials interactively 
 1. If `cookies.txt` has a valid session, skip login entirely
 2. Otherwise read `credentials.json` (or prompt interactively)
 3. Login via VRChat Basic Auth
-4. Handle 2FA if required (TOTP, OTP, or email — interactive when on a TTY, delegated to a connected client when headless)
+4. Handle 2FA if required (TOTP, OTP, or email,  interactive when on a TTY, delegated to a connected client when headless)
 5. Fetch WebSocket auth token
 
 ## Architecture
