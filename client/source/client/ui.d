@@ -1034,8 +1034,9 @@ private void drawToolsTab(mu_Context* ctx, AppState* state)
     static immutable int[1] fullCol = [-1];
     mu_begin_panel(ctx, "ToolsPanel");
 
-    mu_layout_row(ctx, 1, fullCol.ptr, 60);
+    sectionHeader(ctx, "Pictures");
 
+    mu_layout_row(ctx, 1, fullCol.ptr, 60);
     if (mu_button(ctx, "Open Pictures Folder"))
     {
         import client.directories : vrchatPicturesDir;
@@ -1043,12 +1044,15 @@ private void drawToolsTab(mu_Context* ctx, AppState* state)
     }
 
     mu_layout_row(ctx, 1, fullCol.ptr, 60);
-
     if (mu_button(ctx, "Strip Metadata"))
     {
         state.stripMetadataPage = true;
     }
 
+    spacer(ctx);
+    sectionHeader(ctx, "Debugging");
+
+    mu_layout_row(ctx, 1, fullCol.ptr, 60);
     if (mu_button(ctx, "Open Logs Folder"))
     {
         import client.directories : vrchatLogDir;
