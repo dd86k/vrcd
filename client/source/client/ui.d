@@ -99,7 +99,7 @@ private void drawTabBar(mu_Context* ctx)
     // Highlight active tab by drawing a colored background.
     drawTabButton(ctx, "FEED",          Tab.feed);
     drawTabButton(ctx, "ONLINE",        Tab.online);
-    drawTabButton(ctx, "NOTIFICATIONS", Tab.notifications);
+    drawTabButton(ctx, "INBOX",         Tab.notifications);
     drawTabButton(ctx, "TOOLS",         Tab.tools);
     drawTabButton(ctx, "SETTINGS",      Tab.settings);
 }
