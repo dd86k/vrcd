@@ -50,6 +50,12 @@ private __gshared ServerConnection conn;
 /// Persisted settings (used for notification dispatch).
 private Settings saved;
 
+/// False until the server has finished streaming backlogged events. Used
+/// to silence dispatchNotification for catch-up traffic so the user does
+/// not get flooded with toasts for events that happened while they were
+/// away. Local log events are unaffected.
+private bool catchUpComplete;
+
 /// Accumulated scroll delta from mouse wheel, applied to active panel.
 private int pendingScrollY;
 
@@ -99,6 +105,7 @@ int runGui(string host, ushort port, string secret, long sinceId,
     appState.feedPageSize = saved.feedPageSize;
 
     // Load notification settings into appState (bool -> int).
+    appState.notifyMute = cast(int) saved.notifyMute;
     appState.notifyXSOverlay = cast(int) saved.notifyXSOverlay;
     appState.notifyOVRToolkit = cast(int) saved.notifyOVRToolkit;
     appState.notifyDesktop = cast(int) saved.notifyDesktop;
@@ -680,7 +687,8 @@ private void drainNetworkMessages()
                     }
 
                     appState.addFeedEntry(id, prettyEventType(eventType), user, detail, receivedAt, rawContent, isSelfEvent);
-                    dispatchNotification(eventType, user, detail, saved);
+                    if (catchUpComplete)
+                        dispatchNotification(eventType, user, detail, saved);
 
                     // Store actionable notifications.
                     storeNotification(eventType, msg, user, receivedAt);
@@ -688,7 +696,9 @@ private void drainNetworkMessages()
                     // Detect "player joining" from friend-location events:
                     // when a friend's location is "traveling" and their
                     // travelingToLocation matches our current instance.
-                    if (eventType == "friend-location" &&
+                    // Gated on catch-up so replayed history doesn't toast.
+                    if (catchUpComplete &&
+                        eventType == "friend-location" &&
                         appState.currentLocation.length > 0)
                     {
                         checkPlayerJoining(msg, user);
@@ -703,6 +713,7 @@ private void drainNetworkMessages()
                         saved.lastEventId = lastId;
                     saveSettings(saved);
                     appState.addFeedEntry(0, "system", "", "Caught up to event #" ~ lastId.to!string, "");
+                    catchUpComplete = true;
                     break;
 
                 case "event_older":
@@ -1485,6 +1496,9 @@ private void doReconnect()
     // Reset queue state for the new connection.
     msgQueue = new MessageQueue();
 
+    // Silence notifications until the fresh catch-up completes.
+    catchUpComplete = false;
+
     logDebugging("doReconnect: connecting to %s:%d", host, port);
     appState.serverStatus = "Connecting...";
     appState.connected = false;
@@ -1514,6 +1528,7 @@ private void doReconnect()
 /// without requiring the user to click "Save Settings".
 private void syncNotifySettings()
 {
+    saved.notifyMute        = appState.notifyMute != 0;
     saved.notifyXSOverlay   = appState.notifyXSOverlay != 0;
     saved.notifyOVRToolkit  = appState.notifyOVRToolkit != 0;
     saved.notifyDesktop     = appState.notifyDesktop != 0;
@@ -1543,6 +1558,7 @@ private void doSaveSettings()
     s.feedPageSize = appState.feedPageSize;
 
     // Notification settings (int -> bool).
+    s.notifyMute = appState.notifyMute != 0;
     s.notifyXSOverlay = appState.notifyXSOverlay != 0;
     s.notifyOVRToolkit = appState.notifyOVRToolkit != 0;
     s.notifyDesktop = appState.notifyDesktop != 0;

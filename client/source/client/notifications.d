@@ -135,6 +135,12 @@ void dispatchNotification(string eventType, string user, string detail, Settings
         return;
     }
 
+    if (settings.notifyMute)
+    {
+        logTrace("dispatchNotification: muted, skipping event=%s", eventType);
+        return;
+    }
+
     // Check per-event-type filter.
     int idx = filterIndex(eventType);
     if (idx >= 0 && idx < cast(int) settings.notifyEventFilter.length)

@@ -23,6 +23,7 @@ struct Settings
     float feedPageSize = 25.0f;
 
     // VR notification backends
+    bool notifyMute;
     bool notifyXSOverlay = true;
     bool notifyOVRToolkit;
     bool notifyDesktop;
@@ -94,6 +95,8 @@ Settings loadSettings()
             s.feedPageSize = cast(float) json["feed_page_size"].get!long;
 
         // VR notification settings
+        if ("notify_mute" in json && json["notify_mute"].type == JSONType.true_)
+            s.notifyMute = true;
         if ("notify_xsoverlay" in json && json["notify_xsoverlay"].type == JSONType.true_)
             s.notifyXSOverlay = true;
         else if ("notify_xsoverlay" in json)
@@ -174,6 +177,7 @@ void saveSettings(Settings s)
         json["feed_page_size"] = s.feedPageSize;
 
         // VR notification settings
+        json["notify_mute"] = s.notifyMute;
         json["notify_xsoverlay"] = s.notifyXSOverlay;
         json["notify_ovrtoolkit"] = s.notifyOVRToolkit;
         json["notify_desktop"] = s.notifyDesktop;

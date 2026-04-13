@@ -1274,6 +1274,10 @@ private void drawSettingsTab(mu_Context* ctx, AppState* state, int scrollDelta)
     sectionHeader(ctx, "VR Notifications");
 
     mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
+    mu_label(ctx, "Mute (silence all)");
+    mu_checkbox(ctx, "", &state.notifyMute);
+
+    mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
     mu_label(ctx, "XSOverlay / WayVR");
     mu_checkbox(ctx, "", &state.notifyXSOverlay);
 

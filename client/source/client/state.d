@@ -165,6 +165,7 @@ struct AppState
     string currentLocation; // e.g. "wrld_xxx:12345~region(us)"
 
     // VR notification settings (int for mu_checkbox compatibility)
+    int notifyMute;
     int notifyXSOverlay = 1;
     int notifyOVRToolkit;
     int notifyDesktop;
