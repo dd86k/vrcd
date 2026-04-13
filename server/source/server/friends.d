@@ -342,6 +342,16 @@ private:
         if (const(JSONValue)* v = "platform" in c)
             f.platform = v.str;
 
+        // Status/statusDescription live under content.user; without this
+        // a friend-offline → friend-online transition leaves status="offline"
+        // and buildFriendsMessage keeps the friend in the offline bucket.
+        string newStatus = extractNestedUserString(c, "status");
+        if (newStatus.length > 0)
+            f.status = newStatus;
+        string newStatusDesc = extractNestedUserString(c, "statusDescription");
+        if (newStatusDesc.length > 0)
+            f.statusDescription = newStatusDesc;
+
         if (const(JSONValue)* v = "location" in c)
         {
             if (v.str.length > 0)
@@ -383,6 +393,14 @@ private:
         f.displayName = extractDisplayName(c, f.displayName);
         if (const(JSONValue)* v = "platform" in c)
             f.platform = v.str;
+
+        string newStatus = extractNestedUserString(c, "status");
+        if (newStatus.length > 0)
+            f.status = newStatus;
+        string newStatusDesc = extractNestedUserString(c, "statusDescription");
+        if (newStatusDesc.length > 0)
+            f.statusDescription = newStatusDesc;
+
         // friend-active means on the website, no world location.
         f.location = "private";
         f.worldName = "";
@@ -398,6 +416,13 @@ private:
 
         FriendState* f = getOrCreate(userId);
         f.displayName = extractDisplayName(c, f.displayName);
+
+        string newStatus = extractNestedUserString(c, "status");
+        if (newStatus.length > 0)
+            f.status = newStatus;
+        string newStatusDesc = extractNestedUserString(c, "statusDescription");
+        if (newStatusDesc.length > 0)
+            f.statusDescription = newStatusDesc;
 
         string loc;
         if (const(JSONValue)* v = "location" in c)
@@ -602,6 +627,19 @@ private:
                 if (const(JSONValue)* wn = "name" in *v)
                     return wn.str;
 
+        return "";
+    }
+
+    /// Read a nested user field from event content as a string.
+    /// friend-online/active/location carry the full User object under
+    /// "user", so status/statusDescription live at content.user.<field>.
+    static string extractNestedUserString(JSONValue c, string field)
+    {
+        if (const(JSONValue)* v = "user" in c)
+            if (v.type == JSONType.object)
+                if (const(JSONValue)* f = field in *v)
+                    if (f.type == JSONType.string)
+                        return f.str;
         return "";
     }
 
