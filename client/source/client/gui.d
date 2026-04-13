@@ -403,7 +403,14 @@ private void eventLoop(mu_Context* uictx)
                 case SDL_DROPFILE:
                     string path = cast(string) fromStringz(e.drop.file).idup;
                     SDL_free(e.drop.file);
-                    appState.droppedFilePath = path;
+                    // Append to queue, skipping duplicates.
+                    bool dup;
+                    foreach (string p; appState.droppedFiles)
+                    {
+                        if (p == path) { dup = true; break; }
+                    }
+                    if (dup == false)
+                        appState.droppedFiles ~= path;
                     break;
 
                 default:

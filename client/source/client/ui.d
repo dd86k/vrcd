@@ -1049,7 +1049,6 @@ private void drawToolsTab(mu_Context* ctx, AppState* state)
     if (mu_button(ctx, "Strip Metadata"))
     {
         state.stripMetadataPage = true;
-        state.stripStatus = null;
     }
 
     if (mu_button(ctx, "Open Logs Folder"))
@@ -1061,9 +1060,12 @@ private void drawToolsTab(mu_Context* ctx, AppState* state)
     mu_end_panel(ctx);
 }
 
-/// Strip metadata sub-page: drop a PNG, strip iTXt chunks.
+/// Strip metadata sub-page: drop PNGs, batch-strip iTXt chunks.
 private void drawStripMetadataPage(mu_Context* ctx, AppState* state)
 {
+    import std.path : baseName;
+    import std.format : format;
+
     static immutable int[1] fullCol = [-1];
 
     mu_begin_panel(ctx, "StripMetadataPanel");
@@ -1077,31 +1079,43 @@ private void drawStripMetadataPage(mu_Context* ctx, AppState* state)
         return;
     }
 
-    static immutable int[2] labelValCols = [80, -1];
-
-    // Input path.
-    mu_layout_row(ctx, 2, labelValCols.ptr, 0);
-    mu_label(ctx, "Input:");
-    if (state.droppedFilePath.length > 0)
-        mu_label(ctx, state.droppedFilePath);
+    // Header line.
+    mu_layout_row(ctx, 1, fullCol.ptr, 0);
+    if (state.droppedFiles.length == 0)
+        mu_label(ctx, "Drop one or more PNG files onto this window.");
     else
-        mu_label(ctx, "Drop a PNG file onto this window");
+        mu_label(ctx, format("Queue: %d file(s)", state.droppedFiles.length));
 
-    // Output path preview.
-    mu_layout_row(ctx, 2, labelValCols.ptr, 0);
-    mu_label(ctx, "Output:");
-    if (state.droppedFilePath.length > 0)
-        mu_label(ctx, stripOutputPath(state.droppedFilePath));
-    else
-        mu_label(ctx, "-");
-
-    // Strip + Open folder buttons side by side.
-    int halfWidth = mu_get_current_container(ctx).body_.w / 2;
-    int[2] halfCols = [halfWidth, -1];
-    mu_layout_row(ctx, 2, halfCols.ptr, 60);
-    if (mu_button(ctx, "Strip"))
+    // Queue list: one row per file with a remove button.
+    int[2] queueCols = [-80, -1];
+    size_t removeIndex = size_t.max;
+    foreach (size_t i, string path; state.droppedFiles)
     {
-        stripDroppedFile(state);
+        mu_push_id(ctx, &i, i.sizeof);
+        mu_layout_row(ctx, 2, queueCols.ptr, 40);
+        mu_label(ctx, baseName(path));
+        if (mu_button(ctx, "X"))
+            removeIndex = i;
+        mu_pop_id(ctx);
+    }
+    if (removeIndex != size_t.max)
+    {
+        state.droppedFiles = state.droppedFiles[0 .. removeIndex]
+            ~ state.droppedFiles[removeIndex + 1 .. $];
+    }
+
+    // Strip + Clear + Open folder buttons.
+    int third = mu_get_current_container(ctx).body_.w / 3;
+    int[3] thirdCols = [third, third, -1];
+    mu_layout_row(ctx, 3, thirdCols.ptr, 60);
+    if (mu_button(ctx, "Strip All"))
+    {
+        stripDroppedFiles(state);
+    }
+    if (mu_button(ctx, "Clear"))
+    {
+        state.droppedFiles = null;
+        state.stripStatus = null;
     }
     if (mu_button(ctx, "Open Folder"))
     {
@@ -1133,46 +1147,69 @@ private string stripOutputPath(string path)
     return buildPath(dir, base[0 .. $ - 4] ~ "-stripped.png");
 }
 
-/// Strip iTXt metadata from the dropped PNG file.
-private void stripDroppedFile(AppState* state)
+/// Strip iTXt metadata from every queued PNG. Successful entries are removed.
+private void stripDroppedFiles(AppState* state)
 {
     import client.png : PNG;
+    import std.format : format;
 
-    if (state.droppedFilePath.length == 0)
+    if (state.droppedFiles.length == 0)
     {
-        state.stripStatus = "No file selected. Drop a PNG file onto this window.";
+        state.stripStatus = "Queue is empty. Drop PNG files onto this window.";
         return;
     }
 
-    string outputPath = stripOutputPath(state.droppedFilePath);
-    if (outputPath is null)
+    string[] remaining;
+    size_t okCount;
+    size_t failCount;
+    string firstError;
+
+    foreach (string path; state.droppedFiles)
     {
-        state.stripStatus = "Not a PNG file.";
-        return;
+        string outputPath = stripOutputPath(path);
+        if (outputPath is null)
+        {
+            failCount++;
+            if (firstError.length == 0)
+                firstError = "Not a PNG: " ~ path;
+            remaining ~= path;
+            continue;
+        }
+
+        try
+        {
+            PNG png = PNG(path);
+            png.strip(outputPath);
+            png.close();
+            okCount++;
+        }
+        catch (Exception e)
+        {
+            failCount++;
+            if (firstError.length == 0)
+                firstError = e.msg;
+            remaining ~= path;
+        }
     }
 
-    try
-    {
-        PNG png = PNG(state.droppedFilePath);
-        png.strip(outputPath);
-        png.close();
-        state.stripStatus = "Saved: " ~ outputPath;
-    }
-    catch (Exception e)
-    {
-        state.stripStatus = "Error: " ~ e.msg;
-    }
+    state.droppedFiles = remaining;
+
+    if (failCount == 0)
+        state.stripStatus = format("Stripped %d file(s).", okCount);
+    else
+        state.stripStatus = format("Stripped %d, failed %d. First error: %s",
+            okCount, failCount, firstError);
 }
 
-/// Open the folder containing the dropped file.
+/// Open the folder containing the first queued file.
 private void openDroppedFileFolder(AppState* state)
 {
     import std.path : dirName;
 
-    if (state.droppedFilePath.length == 0)
+    if (state.droppedFiles.length == 0)
         return;
 
-    openFolder( dirName(state.droppedFilePath) );
+    openFolder( dirName(state.droppedFiles[0]) );
 }
 
 /// Settings tab: application configuration.

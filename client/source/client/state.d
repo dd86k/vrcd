@@ -173,7 +173,7 @@ struct AppState
 
     // Tools tab,  strip metadata
     bool stripMetadataPage;
-    string droppedFilePath;
+    string[] droppedFiles;
     string stripStatus;
 
     // Auth delegation dialog
