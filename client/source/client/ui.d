@@ -11,7 +11,7 @@ import std.format : sformat;
 
 import ddui;
 
-import client.notifications : notifyEventLabels;
+import client.notifications : notifyEventLabels, feedEventLabels;
 import client.renderer : window_width, window_height;
 import client.gui : wasClick;
 import client.state;
@@ -27,23 +27,6 @@ private size_t searchLen;
 // --- Feed pagination state ---
 private int feedPage;            // 0-indexed current page
 private string lastSearchQuery;  // track changes to reset page
-
-/// All event types that can appear in the feed.
-private immutable string[] eventTypeLabels = [
-    "Online", "Offline", "Active",
-    "Friend Add", "Friend Remove", "Friend Update", "Friend Location",
-    "Update", "Location",
-    "Notification", "Notif Delete", "Notif Update",
-    "Group Joined", "Group Left", "Group Role", "Group Member",
-    "Content Refresh", "Queue Position",
-    "Player Joining", "Player Joined", "Player Left",
-];
-
-/// 1 = shown, 0 = hidden. All visible by default.
-private int[eventTypeLabels.length] eventTypeVisible = 1;
-
-/// 1 = hide self events (user-update, user-location, self avatar changes, etc).
-private int hideSelfEvents;
 
 /// Draw the full-window UI layout.
 void drawFullWindow(mu_Context* ctx, AppState* state, int scrollDelta)
@@ -100,7 +83,7 @@ void drawFullWindow(mu_Context* ctx, AppState* state, int scrollDelta)
     }
 
     // Filter popup must be outside the main window to render on top.
-    drawFeedFilterPopup(ctx);
+    drawFeedFilterPopup(ctx, state);
 
     // Auth delegation dialog (modal, on top of everything).
     drawAuthDialog(ctx, state);
@@ -162,7 +145,7 @@ private void drawFeedSearchBar(mu_Context* ctx)
 }
 
 /// Draw the filter popup as a standalone window.
-private void drawFeedFilterPopup(mu_Context* ctx)
+private void drawFeedFilterPopup(mu_Context* ctx, AppState* state)
 {
     if (filterPopupOpen == false)
         return;
@@ -173,9 +156,11 @@ private void drawFeedFilterPopup(mu_Context* ctx)
         // Keep popup above the full-screen main window so it receives input.
         mu_bring_to_front(ctx, mu_get_current_container(ctx));
         enum cols = 2;
-        enum totalItems = eventTypeLabels.length;
+        enum totalItems = feedEventLabels.length;
         enum rows = (totalItems + cols - 1) / cols;
         static immutable int[cols] filterCols = [160, 160];
+
+        bool changed;
 
         foreach (size_t row; 0 .. rows)
         {
@@ -184,7 +169,12 @@ private void drawFeedFilterPopup(mu_Context* ctx)
             {
                 size_t i = col * rows + row;
                 if (i < totalItems)
-                    mu_checkbox(ctx, eventTypeLabels[i], &eventTypeVisible[i]);
+                {
+                    int prev = state.feedEventVisible[i];
+                    mu_checkbox(ctx, feedEventLabels[i], &state.feedEventVisible[i]);
+                    if (state.feedEventVisible[i] != prev)
+                        changed = true;
+                }
                 else
                     mu_layout_next(ctx); // empty cell
             }
@@ -192,26 +182,34 @@ private void drawFeedFilterPopup(mu_Context* ctx)
 
         static immutable int[1] selfCol = [320];
         mu_layout_row(ctx, 1, selfCol.ptr, 0);
-        int prevHideSelf = hideSelfEvents;
-        mu_checkbox(ctx, "Hide self events", &hideSelfEvents);
-        if (hideSelfEvents != prevHideSelf)
+        int prevHideSelf = state.feedHideSelfEvents;
+        mu_checkbox(ctx, "Hide self events", &state.feedHideSelfEvents);
+        if (state.feedHideSelfEvents != prevHideSelf)
+        {
             feedPage = 0;
+            changed = true;
+        }
 
         static immutable int[2] btnCols = [160, 160];
         mu_layout_row(ctx, 2, btnCols.ptr, 30);
         if (mu_button(ctx, "All On"))
         {
-            eventTypeVisible[] = 1;
+            state.feedEventVisible[] = 1;
             feedPage = 0;
+            changed = true;
         }
         if (mu_button(ctx, "All Off"))
         {
-            eventTypeVisible[] = 0;
+            state.feedEventVisible[] = 0;
             feedPage = 0;
+            changed = true;
         }
 
         if (mu_button(ctx, "Close"))
             filterPopupOpen = false;
+
+        if (changed)
+            state.saveSettingsRequested = true;
 
         mu_end_window(ctx);
     }
@@ -275,7 +273,7 @@ private void drawFeedTab(mu_Context* ctx, AppState* state, int scrollDelta)
 
         foreach (ref FeedEntry entry; state.feedEntries)
         {
-            if (passesFilter(entry, searchQuery) == false)
+            if (passesFilter(entry, searchQuery, state) == false)
                 continue;
 
             if (filteredCount >= skipStart && filteredCount < skipEnd)
@@ -503,7 +501,7 @@ private void drawFeedPagination(mu_Context* ctx, AppState* state)
     int filteredCount;
     foreach (ref FeedEntry entry; state.feedEntries)
     {
-        if (passesFilter(entry, searchQuery))
+        if (passesFilter(entry, searchQuery, state))
             filteredCount++;
     }
 
@@ -626,19 +624,19 @@ private string searchStr()
 }
 
 /// Check whether a feed entry passes the current filters.
-private bool passesFilter(ref FeedEntry entry, string query)
+private bool passesFilter(ref FeedEntry entry, string query, AppState* state)
 {
     // Hide self events (user-update, user-location, self avatar changes, etc).
-    if (hideSelfEvents != 0 && entry.isSelf)
+    if (state.feedHideSelfEvents != 0 && entry.isSelf)
         return false;
 
     // Event type filter.
     bool typeAllowed = true;
-    foreach (size_t i, string label; eventTypeLabels)
+    foreach (size_t i, string label; feedEventLabels)
     {
         if (entry.eventType == label)
         {
-            typeAllowed = eventTypeVisible[i] != 0;
+            typeAllowed = state.feedEventVisible[i] != 0;
             break;
         }
     }

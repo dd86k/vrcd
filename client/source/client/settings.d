@@ -10,7 +10,7 @@ import std.path : buildPath, dirName;
 
 import ddlogger;
 
-import client.notifications : notifyEventLabels;
+import client.notifications : notifyEventLabels, feedEventLabels;
 
 /// Persistent application settings, saved as JSON.
 struct Settings
@@ -31,6 +31,10 @@ struct Settings
     float notifyOpacity = 1.0f;
     bool notifySound = true;
     bool[notifyEventLabels.length] notifyEventFilter = true;
+
+    // Feed tab filter (which event types appear in the feed list).
+    bool[feedEventLabels.length] feedEventVisible = true;
+    bool feedHideSelfEvents;
 
     // Highest event id processed from the server. Used on reconnect
     // to resume catch-up instead of replaying the entire event store.
@@ -123,6 +127,19 @@ Settings loadSettings()
                     s.notifyEventFilter[i] = arr[i].type == JSONType.true_;
             }
         }
+        if ("feed_event_visible" in json && json["feed_event_visible"].type == JSONType.array)
+        {
+            JSONValue[] arr = json["feed_event_visible"].array;
+            foreach (size_t i; 0 .. feedEventLabels.length)
+            {
+                if (i < arr.length)
+                    s.feedEventVisible[i] = arr[i].type == JSONType.true_;
+            }
+        }
+        if ("feed_hide_self_events" in json && json["feed_hide_self_events"].type == JSONType.true_)
+            s.feedHideSelfEvents = true;
+        else if ("feed_hide_self_events" in json)
+            s.feedHideSelfEvents = false;
         if ("last_event_id" in json && json["last_event_id"].type == JSONType.integer)
             s.lastEventId = json["last_event_id"].get!long;
     }
@@ -168,6 +185,12 @@ void saveSettings(Settings s)
         foreach (size_t i; 0 .. notifyEventLabels.length)
             filterArr ~= JSONValue(s.notifyEventFilter[i]);
         json["notify_event_filter"] = filterArr;
+
+        JSONValue[] feedArr;
+        foreach (size_t i; 0 .. feedEventLabels.length)
+            feedArr ~= JSONValue(s.feedEventVisible[i]);
+        json["feed_event_visible"] = feedArr;
+        json["feed_hide_self_events"] = s.feedHideSelfEvents;
 
         json["last_event_id"] = s.lastEventId;
 

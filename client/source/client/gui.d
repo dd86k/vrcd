@@ -109,6 +109,11 @@ int runGui(string host, ushort port, string secret, long sinceId,
     foreach (size_t i; 0 .. notifyEventLabels.length)
         appState.notifyEventFilter[i] = cast(int) saved.notifyEventFilter[i];
 
+    // Load feed filter settings into appState (bool -> int).
+    foreach (size_t i; 0 .. feedEventLabels.length)
+        appState.feedEventVisible[i] = cast(int) saved.feedEventVisible[i];
+    appState.feedHideSelfEvents = cast(int) saved.feedHideSelfEvents;
+
     // Load SDL2.
     SDLSupport sdlStatus = loadSDL();
     if (sdlStatus == SDLSupport.noLibrary)
@@ -1547,6 +1552,11 @@ private void doSaveSettings()
     s.notifySound = appState.notifySound != 0;
     foreach (size_t i; 0 .. notifyEventLabels.length)
         s.notifyEventFilter[i] = appState.notifyEventFilter[i] != 0;
+
+    // Feed filter settings (int -> bool).
+    foreach (size_t i; 0 .. feedEventLabels.length)
+        s.feedEventVisible[i] = appState.feedEventVisible[i] != 0;
+    s.feedHideSelfEvents = appState.feedHideSelfEvents != 0;
 
     // Preserve the runtime-tracked event cursor; the Settings tab
     // doesn't expose it and we don't want to reset it to 0.

@@ -10,6 +10,18 @@ import ddlogger;
 
 import client.settings;
 
+/// Event types shown in the feed tab filter popup.
+/// Order matches feedEventVisible arrays in Settings and AppState.
+immutable string[] feedEventLabels = [
+    "Online", "Offline", "Active",
+    "Friend Add", "Friend Remove", "Friend Update", "Friend Location",
+    "Update", "Location",
+    "Notification", "Notif Delete", "Notif Update",
+    "Group Joined", "Group Left", "Group Role", "Group Member",
+    "Content Refresh", "Queue Position",
+    "Player Joining", "Player Joined", "Player Left",
+];
+
 /// Event types that can trigger VR notifications.
 /// Order matches notifyEventFilter arrays in Settings and AppState.
 immutable string[] notifyEventLabels = [
