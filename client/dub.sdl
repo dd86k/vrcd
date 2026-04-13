@@ -7,7 +7,7 @@ license "BSD-3-Clause-Clear"
 
 dependency "ddlogger" repository="git+https://github.com/dd86k/ddlogger.git" version="4ec9bc06bb90c4a7844f62fcfc1429bc7cdb1378"
 dependency "bindbc-sdl" version="~>1.5.2"
-dependency "ddui" repository="git+https://github.com/dd86k/ddui.git" version="106ff4bdd26cfa07953acff559c195fb228909f5"
+dependency "ddui" repository="git+https://github.com/dd86k/ddui.git" version="f33c4d246b40a26d560dad492a36ca532f331b94"
 
 stringImportPaths ".."
 versions "SDL" "SDL_2022" "SDL_TTF_2_22" "SDL_Image_200"

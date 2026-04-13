@@ -1597,5 +1597,6 @@ private immutable ubyte[256] keyMap = () {
     m[SDLK_RETURN    & 0xff] = MU_KEY_RETURN;
     m[SDLK_KP_ENTER  & 0xff] = MU_KEY_RETURN;
     m[SDLK_BACKSPACE & 0xff] = MU_KEY_BACKSPACE;
+    m[SDLK_TAB       & 0xff] = MU_KEY_TAB;
     return m;
 }();
