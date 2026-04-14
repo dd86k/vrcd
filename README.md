@@ -1,4 +1,4 @@
-# vrcd
+# ![speech bubble logo with D-like lettering](res/vrcd-logo-32.png) vcrd
 
 ![Main feed with details](res/main1.png)
 
@@ -15,7 +15,7 @@ Features:
 
 Status: Most features present. A few more to do from my TODO list.
 
-Get ready to frequently pull, upgrade dependencies, and build otherwise!
+Otherwise, get ready to frequently pull, upgrade dependencies, and build!
 
 ```text
 + ~ ~ ~ ~ ~ ~ ~ ~+
@@ -40,11 +40,13 @@ Targets Windows and Linux.
 Related projects:
 - [vrcd-server-container](https://github.com/ArcaneDisgea/vrcd-server-container) by ArcaneDisgea.
 
-# Quick Start
+# Compiling
 
 See each component's README for dependencies, configuration, and architecture details.
 
-In short, client needs SDL2 dynamic libraries (SDL2, SDL2_ttf, SDL_image). Server needs libcurl and sqlite static libraries.
+In short:
+- Client needs SDL2 dynamic libraries (SDL2, SDL2_ttf, SDL2_image).
+- Server needs libcurl and sqlite static libraries.
 
 ```bash
 # Build server and client
