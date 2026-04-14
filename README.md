@@ -1,17 +1,18 @@
 # ![speech bubble logo with D-like lettering](res/vrcd-logo-32.png) vcrd
 
-A little companion suite for VRChat, written in D.
+A little companion suite for VRChat to help you track friend activity, manage photos,
+and receive VR/desktop notifications.
 
 Features:
 - VR friendly UI
-- Server-client architecture to avoid having multiple connections to VRC APIs
-- Relatively light client using software rendering; Hardware CLI switch available
-- Simple API with "catch up" request (that's for my FOMO!) and fetching older events
-- Embed world and player metadata into VRChat photos
-- Strip VRChat and other `iTXt` chunk metadata from VRChat photos
+- Server-client architecture, to avoid having multiple connections to VRC APIs
+- Relatively light client using software rendering; Hardware option available
+- Event-stream API: Requests 'catch-up' events at startup to avoid missing activity
+- Embed world and player metadata into VRChat photos automatically
+- Strip VRChat and other metadata from VRChat photos
 - VR overlay notifications (XSOverlay, OVR Toolkit) and desktop notifications
 
-Status: Most features present. A few more to do from my TODO list.
+Status: Most features present. Stable for daily use; active development.
 
 Otherwise, get ready to frequently pull, upgrade dependencies, and build!
 
@@ -19,11 +20,13 @@ Otherwise, get ready to frequently pull, upgrade dependencies, and build!
 
 ### Feed Page
 
-![Main feed with details](res/shot-feed.png)
+![Feed with event's date, type, user, and detail columns](res/shot-feed.png)
 
 ### Online Page
 
-![Main feed with details](res/shot-online.png)
+![List of instances (current and capacity) and friends in each of them with color indicators](res/shot-online.png)
+
+# For Developers
 
 ## Architecture
 
@@ -50,7 +53,7 @@ Targets Windows and Linux.
 Related projects:
 - [vrcd-server-container](https://github.com/ArcaneDisgea/vrcd-server-container) by ArcaneDisgea.
 
-# Compiling
+## Compiling
 
 See each component's README for dependencies, configuration, and architecture details.
 
@@ -66,9 +69,19 @@ dub build :client
 # Unit tests
 dub test :server
 dub test :client
+
+# Run server, see server/README.md for configuration options
+./server/vrcd_server
+# Run client, see client/README.md for its architecture
+./client/vrcd_client
 ```
 
 See [API.md](./API.md) for server-client API details.
+
+# Contributing
+
+At this time, it's best to write Issues for bugs and feature requests, or start
+a Discussion.
 
 # Disclaimer
 
@@ -80,3 +93,7 @@ or opinions of VRChat. It is only an external tool using the VRChat API.
 Users are still responsible for complying with VRChat's Terms of Service.
 
 VRChat is copyrighted work of VRChat Inc.
+
+# License
+
+Both the server and client components are licensed BSD-3-Clause-Clear.
