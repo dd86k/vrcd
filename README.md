@@ -1,7 +1,5 @@
 # ![speech bubble logo with D-like lettering](res/vrcd-logo-32.png) vcrd
 
-![Main feed with details](res/main1.png)
-
 A little companion suite for VRChat, written in D.
 
 Features:
@@ -16,6 +14,18 @@ Features:
 Status: Most features present. A few more to do from my TODO list.
 
 Otherwise, get ready to frequently pull, upgrade dependencies, and build!
+
+## Screenshots
+
+### Feed Page
+
+![Main feed with details](res/shot-feed.png)
+
+### Online Page
+
+![Main feed with details](res/shot-online.png)
+
+## Architecture
 
 ```text
 + ~ ~ ~ ~ ~ ~ ~ ~+
