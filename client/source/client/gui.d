@@ -152,6 +152,19 @@ int runGui(string host, ushort port, string secret, long sinceId,
         logError("SDL2_ttf library too old");
         return 1;
     }
+    
+    // Load SDL2_image
+    SDLImageSupport imgStatus = loadSDLImage(); // includes libSDL2_image-2.0.so.0
+    if (imgStatus == SDLImageSupport.noLibrary)
+    {
+        logError("No SDL2_image library found");
+        return 1;
+    }
+    if (imgStatus == SDLImageSupport.badLibrary)
+    {
+        logError("SDL2_image library too old");
+        return 1;
+    }
 
     // Init SDL. Software framebuffer is the default; --hardware opts into
     // SDL's accelerated window-surface path when the backend supports it.
@@ -200,6 +213,14 @@ int runGui(string host, ushort port, string secret, long sinceId,
                 "Install a TTF font (e.g. fonts-liberation).";
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "vrcd: No font found", msg.ptr, window);
         return 2;
+    }
+    
+    // Load icon
+    SDL_Surface *icon = IMG_Load("res/vrcd-logo.png");
+    if (icon)
+    {
+        SDL_SetWindowIcon(window, icon);
+        SDL_FreeSurface(icon); // SDL2/SDL3 keeps its own copy
     }
 
     // Init UI context (heap-allocated since mu_Context is ~4 MB, far too
