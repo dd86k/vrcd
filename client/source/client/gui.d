@@ -733,7 +733,7 @@ private void drainNetworkMessages()
                     if (lastId > saved.lastEventId)
                         saved.lastEventId = lastId;
                     saveSettings(saved);
-                    appState.addFeedEntry(0, "system", "", "Caught up to event #" ~ lastId.to!string, "");
+                    appState.addFeedEntry(0, "system", "", "Caught up to event #" ~ lastId.to!string, timeNow());
                     catchUpComplete = true;
                     break;
 
@@ -784,7 +784,7 @@ private void drainNetworkMessages()
                     {
                         appState.noOlderEvents = true;
                         appState.addFeedEntry(0, "system", "",
-                            "No events older than #" ~ beforeId.to!string, "");
+                            "No events older than #" ~ beforeId.to!string, timeNow());
                     }
                     else
                     {
@@ -823,7 +823,7 @@ private void drainNetworkMessages()
                     string errMsg;
                     if (const(JSONValue)* v = "message" in msg)
                         errMsg = v.str;
-                    appState.addFeedEntry(0, "error", "", "Server error: " ~ errMsg, "");
+                    appState.addFeedEntry(0, "error", "", "Server error: " ~ errMsg, timeNow());
                     break;
 
                 case "log-event":
@@ -854,14 +854,14 @@ private void drainNetworkMessages()
                             url = v.str;
                         if (const(JSONValue)* v = "display_name" in msg)
                             urlUser = v.str;
-                        appState.addFeedEntry(0, prettyEventType(logEventType), urlUser, url, "");
+                        appState.addFeedEntry(0, prettyEventType(logEventType), urlUser, url, timeNow());
                     }
                     else
                     {
                         string logUser;
                         if (const(JSONValue)* v = "display_name" in msg)
                             logUser = v.str;
-                        appState.addFeedEntry(0, prettyEventType(logEventType), logUser, "", "");
+                        appState.addFeedEntry(0, prettyEventType(logEventType), logUser, "", timeNow());
                         dispatchNotification(logEventType, logUser, "", saved);
                     }
                     break;
@@ -898,7 +898,7 @@ private void drainNetworkMessages()
                             if (const(JSONValue)* v = "error" in msg)
                                 errMsg = v.str;
                             appState.addFeedEntry(0, "error", "",
-                                "Notification action failed: " ~ errMsg, "");
+                                "Notification action failed: " ~ errMsg, timeNow());
                         }
                         else if (resultAction == "hide")
                         {
@@ -1241,6 +1241,7 @@ private void storeNotification(string eventType, JSONValue msg, string user, str
         {
             case "notification":
             case "notification-v2":
+                // I wonder what's up with this?
                 JSONValue c = msg["content"];
                 if (c.type == JSONType.string)
                     c = parseJSON(c.str);
@@ -1362,7 +1363,7 @@ private void checkPlayerJoining(JSONValue msg, string user)
             return;
 
         // Friend is traveling to our instance.
-        appState.addFeedEntry(0, "Player Joining", user, "", "");
+        appState.addFeedEntry(0, "Player Joining", user, timeNow(), "");
         dispatchNotification("player-joining", user, "", saved);
     }
     catch (Exception e)
@@ -1454,6 +1455,23 @@ private string formatTimestamp(string isoTimestamp)
     return isoTimestamp;
 }
 
+// Get current local time and format as "MM-DD HH:MM:SS" for display.
+private string timeNow()
+{
+    import std.datetime : Clock, SysTime;
+    
+    try
+    {
+        SysTime t = Clock.currTime();
+        return format!"%02d-%02d %02d:%02d:%02d"(t.month, t.day, t.hour, t.minute, t.second);
+    }
+    catch (Exception ex)
+    {
+        logError("timeNow error: %s", ex.msg);
+    }
+    
+    return "";
+}
 
 private import std.string : fromStringz;
 
@@ -1492,9 +1510,9 @@ private void doReconnect()
     logDebugging("doReconnect: tearing down existing connection");
 
     // Close existing connection and wait for network thread.
-    if (conn !is null)
+    if (conn)
         conn.close();
-    if (netThread !is null)
+    if (netThread)
     {
         netThread.join();
         netThread = null;

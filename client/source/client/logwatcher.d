@@ -227,7 +227,7 @@ class LogWatcher
         // Does not have a [Behaviour] marker, so handle before the fast-path.
         enum string authMarker = "User Authenticated: ";
         ptrdiff_t authIdx = indexOf(line, authMarker);
-        if (authIdx == 34)
+        if (authIdx == 34) // should only happen once
         {
             string rest = stripRight(line[authIdx + authMarker.length .. $]);
             string displayName;
@@ -609,7 +609,7 @@ class LogWatcher
     {
         if (silent)
             return;
-        JSONValue msg = JSONValue(string[string].init);
+        JSONValue msg;
         msg["type"] = "log-event";
         msg["event_type"] = cast(string) event;
         msg["display_name"] = displayName;
@@ -623,7 +623,7 @@ class LogWatcher
     {
         if (silent)
             return;
-        JSONValue msg = JSONValue(string[string].init);
+        JSONValue msg; // curious why it was init to JSONValue(string[string].init);
         msg["type"] = "log-event";
         msg["event_type"] = cast(string) LogEvent.locationChange;
         msg["location"] = location;
@@ -637,7 +637,7 @@ class LogWatcher
     {
         if (silent)
             return;
-        JSONValue msg = JSONValue(string[string].init);
+        JSONValue msg;
         msg["type"] = "log-event";
         msg["event_type"] = cast(string) LogEvent.photoTaken;
         msg["path"] = path;
@@ -651,7 +651,7 @@ class LogWatcher
     {
         if (silent)
             return;
-        JSONValue msg = JSONValue(string[string].init);
+        JSONValue msg;
         msg["type"] = "log-event";
         msg["event_type"] = cast(string) event;
         msg["url"] = url;
