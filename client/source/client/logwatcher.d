@@ -565,8 +565,10 @@ class LogWatcher
     {
         Thread t = new Thread({
             logDebugging("startMetadataWrite: spawning writer for %s", path);
-            // Retry for ~10 seconds while VRChat holds the file.
-            foreach (int i; 0 .. 20)
+            
+            // Retry 10 times with 2 second sleeps
+            string emsg;
+            foreach (int i; 0 .. 10)
             {
                 try
                 {
@@ -574,14 +576,27 @@ class LogWatcher
                     logInfo("Wrote screenshot metadata: %s", path);
                     return;
                 }
-                catch (Exception e)
+                catch (Exception ex)
                 {
-                    logTrace("startMetadataWrite: attempt %d failed for %s: %s",
-                        i + 1, path, e.msg);
-                    Thread.sleep(500.msecs);
+                    Thread.sleep(2000.msecs);
+                    emsg = ex.msg; // only last is meaningful
                 }
             }
-            logError("Failed to write screenshot metadata after retries: %s", path);
+            logError("Failed to write picture metadata to '%s': %s", path, emsg);
+            
+            // At least try writing metadata next to the file
+            import std.file : write;
+            string jsonpath = path~".json";
+            try
+            {
+                write(jsonpath, jsonText);
+                logInfo("Wrote metadata fallback to '%s'", jsonpath);
+            }
+            catch (Exception ex)
+            {
+                // At this point, we can only scream
+                logError("Failed to write metadata fallback to '%s': %s", jsonpath, ex.msg);
+            }
         });
         t.isDaemon = true;
         t.start();
