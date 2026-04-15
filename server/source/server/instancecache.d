@@ -90,7 +90,7 @@ class InstanceCache
     /// API mutex if one is configured.
     InstanceInfo resolve(string location)
     {
-        if (apiMutex !is null)
+        if (apiMutex)
         {
             synchronized (apiMutex)
                 return resolveLocked(location);
@@ -111,7 +111,7 @@ class InstanceCache
         synchronized (cacheMutex)
         {
             CacheEntry* entry = location in cache;
-            if (entry !is null && entry.expiresAt > now)
+            if (entry && entry.expiresAt > now)
             {
                 logTrace("resolve: cache hit for %s (%d/%d ok=%s)",
                     location, entry.nUsers, entry.capacity, entry.ok);
@@ -170,7 +170,7 @@ private:
     bool fetchInstance(string location, out CacheEntry entry)
     {
         // Skip fetch if rate-limited.
-        if (rateLimiter !is null && rateLimiter.isBlocked())
+        if (rateLimiter && rateLimiter.isBlocked())
         {
             logWarn("Skipping instance fetch for %s: rate limited", location);
             return false;
@@ -181,7 +181,7 @@ private:
         {
             HTTPResponse resp = client.get("/instances/" ~ location);
             logDebugging("fetchInstance: %s -> HTTP %d", location, resp.code);
-            if (rateLimiter !is null)
+            if (rateLimiter)
                 rateLimiter.update(resp);
             if (resp.code != 200)
             {

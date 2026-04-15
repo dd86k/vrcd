@@ -4,13 +4,14 @@
 /// License: BSD-3-Clause-Clear
 module server.vrchat.auth;
 
-import std.json;
 import std.base64;
-import std.uri : encodeComponent;
-import std.string : strip;
-import std.stdio : stdin, stderr, write, writeln, readln;
+import std.conv : text;
 import std.file : exists, readText, mkdirRecurse;
+import std.json;
 import std.path : dirName;
+import std.stdio : stdin, stderr, write, writeln, readln;
+import std.string : strip;
+import std.uri : encodeComponent;
 
 import ddlogger;
 import ddcurl;
@@ -122,7 +123,7 @@ AuthState fullLogin(ref Config config, HTTPClient client, AuthDelegator delegato
         if (const(JSONValue)* v = "password" in creds)
             password = v.str;
     }
-    else if (delegator !is null)
+    else if (delegator)
     {
         logInfo("No credentials file found. Requesting credentials from client...");
         AuthResponse resp = delegator.requestFromClient(
@@ -150,7 +151,7 @@ AuthState fullLogin(ref Config config, HTTPClient client, AuthDelegator delegato
     HTTPResponse configResp = client.get("/config");
     logDebugging("GET /config -> HTTP %d", configResp.code);
     if (configResp.code != 200)
-        throw new Exception("Failed to fetch API config: HTTP " ~ intToStr(configResp.code));
+        throw new Exception(text("Failed to fetch API config: HTTP ", configResp.code));
 
     // Step 2: Login with Basic auth.
     logInfo("Logging in as %s...", username);
@@ -166,7 +167,7 @@ AuthState fullLogin(ref Config config, HTTPClient client, AuthDelegator delegato
     if (loginResp.code == 401)
         throw new Exception("Login failed: invalid credentials");
     if (loginResp.code != 200)
-        throw new Exception("Login failed: HTTP " ~ intToStr(loginResp.code));
+        throw new Exception(text("Login failed: HTTP ", loginResp.code));
 
     JSONValue loginJson = parseJSON(loginResp.text);
 
@@ -217,7 +218,7 @@ void handle2FA(HTTPClient client, JSONValue loginJson, AuthDelegator delegator)
     foreach (attempt; 0 .. MAX_ATTEMPTS)
     {
         string code;
-        if (delegator !is null)
+        if (delegator)
         {
             logInfo("Requesting 2FA code from client (attempt %d/%d)...",
                 attempt + 1, MAX_ATTEMPTS);
@@ -250,14 +251,14 @@ void handle2FA(HTTPClient client, JSONValue loginJson, AuthDelegator delegator)
             resp.code, attempt + 1, MAX_ATTEMPTS);
     }
 
-    throw new Exception("2FA verification failed after " ~ intToStr(MAX_ATTEMPTS) ~ " attempts");
+    throw new Exception(text("2FA verification failed after ", MAX_ATTEMPTS, " attempts"));
 }
 
 AuthState reAuthUser(HTTPClient client)
 {
     HTTPResponse userResp = client.get("/auth/user");
     if (userResp.code != 200)
-        throw new Exception("Failed to get user after 2FA: HTTP " ~ intToStr(userResp.code));
+        throw new Exception(text("Failed to get user after 2FA: HTTP ", userResp.code));
     JSONValue userJson = parseJSON(userResp.text);
     string reAuthDisplayName;
     if (const(JSONValue)* v = "displayName" in userJson)
@@ -273,7 +274,7 @@ AuthState finishAuth(HTTPClient client, JSONValue userJson)
     HTTPResponse authResp = client.get("/auth");
     logDebugging("GET /auth -> HTTP %d", authResp.code);
     if (authResp.code != 200)
-        throw new Exception("Failed to get auth token: HTTP " ~ intToStr(authResp.code));
+        throw new Exception(text("Failed to get auth token: HTTP ", authResp.code));
 
     JSONValue authJson = parseJSON(authResp.text);
     string token;
@@ -307,10 +308,4 @@ void saveCredentials(string path, string username, string password)
     JSONValue creds = JSONValue(["username": JSONValue(username), "password": JSONValue(password)]);
     write(path, creds.toPrettyString());
     logInfo("Credentials saved to %s", path);
-}
-
-string intToStr(int v)
-{
-    import std.conv : to;
-    return to!string(v);
 }

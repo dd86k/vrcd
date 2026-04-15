@@ -194,9 +194,9 @@ void sendTestNotification(Settings settings)
     }
 }
 
-// ---------------------------------------------------------------------------
+//
 // XSOverlay UDP backend
-// ---------------------------------------------------------------------------
+//
 
 /// Send a notification via XSOverlay UDP protocol (127.0.0.1:42069).
 /// Also compatible with WayVR on Linux.
@@ -237,9 +237,9 @@ private void sendXSOverlay(string title, string body_, Settings settings)
     }
 }
 
-// ---------------------------------------------------------------------------
+//
 // OVR Toolkit WebSocket backend (Windows only)
-// ---------------------------------------------------------------------------
+//
 
 version (Windows)
 {
@@ -298,6 +298,7 @@ version (Windows)
 
         try
         {
+            // Yes... Manual WebSocket creation to avoid a dependencing
             ovrtSocket = new TcpSocket();
             ovrtSocket.connect(new InternetAddress("127.0.0.1", 11450));
 
@@ -395,7 +396,7 @@ version (Windows)
     private void closeOVRT()
     {
         ovrtConnected = false;
-        if (ovrtSocket !is null)
+        if (ovrtSocket)
         {
             try ovrtSocket.close();
             catch (Exception) {}
@@ -404,9 +405,9 @@ version (Windows)
     }
 }
 
-// ---------------------------------------------------------------------------
+//
 // freedesktop Desktop Notifications (Linux only)
-// ---------------------------------------------------------------------------
+//
 
 version (linux)
 {

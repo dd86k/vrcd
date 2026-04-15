@@ -138,7 +138,7 @@ private:
                 {
                     notifyStatus(false, "Auth token invalid or expired");
 
-                    if (onReAuth !is null)
+                    if (onReAuth)
                     {
                         try
                         {
@@ -179,7 +179,7 @@ private:
 
     void notifyStatus(bool status, string error)
     {
-        if (onStatusChange !is null)
+        if (onStatusChange)
             onStatusChange(status, error);
     }
 

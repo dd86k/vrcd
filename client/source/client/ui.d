@@ -1,10 +1,10 @@
-/// UI components
+/// UI components and layout
 ///
 /// Copyright: dd86k <dd@dax.moe>
 /// License: BSD-3-Clause-Clear
 module client.ui;
 
-import core.stdc.string : strlen, memchr;
+import core.stdc.string : memchr;
 import std.string : toStringz;
 import std.uni : toLower;
 import std.format : sformat;
@@ -20,11 +20,11 @@ import client.state;
 enum Tab { feed, online, notifications, tools, settings }
 private Tab activeTab = Tab.feed;
 
-// --- Feed filter state ---
+// Feed filter state
 private char[128] searchBuf = '\0';
 private size_t searchLen;
 
-// --- Feed pagination state ---
+// Feed pagination state
 private int feedPage;            // 0-indexed current page
 private string lastSearchQuery;  // track changes to reset page
 
@@ -37,10 +37,10 @@ void drawFullWindow(mu_Context* ctx, AppState* state, int scrollDelta)
         mu_Container* win = mu_get_current_container(ctx);
         win.rect = mu_Rect(0, 0, window_width, window_height);
 
-        // --- Tab bar ---
+        // Tab bar
         drawTabBar(ctx);
 
-        // --- Content area (fills remaining space minus status bar) ---
+        // Content area (fills remaining space minus status bar)
         static immutable int[1] fullCol = [-1];
 
         if (activeTab == Tab.feed)
@@ -75,7 +75,7 @@ void drawFullWindow(mu_Context* ctx, AppState* state, int scrollDelta)
             }
         }
 
-        // --- Status bar ---
+        // Status bar
         mu_layout_row(ctx, 1, fullCol.ptr, 25);
         drawStatusBar(ctx, state);
 
@@ -218,7 +218,7 @@ private void drawFeedFilterPopup(mu_Context* ctx, AppState* state)
 /// Feed tab: scrollable list of events (newest first).
 private void drawFeedTab(mu_Context* ctx, AppState* state, int scrollDelta)
 {
-    if (state.selectedFeedEntry !is null)
+    if (state.selectedFeedEntry)
     {
         drawFeedDetail(ctx, state, scrollDelta);
         return;
@@ -725,7 +725,7 @@ private void gridCell(mu_Context* ctx, string text, mu_Color lineColor, bool las
 /// Online tab: friends grouped by instance, or profile view.
 private void drawOnlineTab(mu_Context* ctx, AppState* state, int scrollDelta)
 {
-    if (state.selectedFriend !is null)
+    if (state.selectedFriend)
     {
         drawFriendProfile(ctx, state, scrollDelta);
         return;
@@ -1365,19 +1365,19 @@ private void drawSettingsTab(mu_Context* ctx, AppState* state, int scrollDelta)
     mu_label(ctx, "Compiler");
     mu_label(ctx, COMPILER);
     
-    // BUG: Can't scroll to bottom, so add empty row
+    // BUG: Can't scroll to bottom 100% flush, so add empty row for now
     mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
     mu_label(ctx, "");
 
     mu_end_panel(ctx);
 }
 
-/// Open a specific folder the system file manager.
+/// Open a specific folder with the system's file manager.
 private void openFolder(string path)
 {
     import std.process : spawnProcess;
 
-    if (path.length == 0)
+    if (path is null || path.length == 0)
         return;
     version (Windows)
         try spawnProcess(["explorer", path]); catch (Exception) {}

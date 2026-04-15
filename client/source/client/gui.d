@@ -1,12 +1,14 @@
-/// GUI logic
+/// GUI logic, including loop
 ///
 /// Copyright: dd86k <dd@dax.moe>
 /// License: BSD-3-Clause-Clear
 module client.gui;
 
 import std.algorithm.sorting : sort;
+import std.conv : to;
 import std.format : format;
 import std.json;
+import std.string : fromStringz;
 
 import core.thread;
 
@@ -59,7 +61,9 @@ private bool catchUpComplete;
 /// Accumulated scroll delta from mouse wheel, applied to active panel.
 private int pendingScrollY;
 
-/// --- Touch/drag scroll state ---
+//
+// Touch/drag scroll state
+//
 
 /// Drag detection state machine.
 private enum DragState { idle, pending, dragging }
@@ -283,8 +287,6 @@ int runGui(string host, ushort port, string secret, long sinceId,
 /// __chkstk failures on Windows when a single function is too large).
 private void eventLoop(mu_Context* uictx)
 {
-    import std.string : fromStringz;
-
     bool running = true;
     SDL_Event e;
 
@@ -416,7 +418,7 @@ private void eventLoop(mu_Context* uictx)
                         e.key.keysym.sym == SDLK_v)
                     {
                         char* clip = SDL_GetClipboardText();
-                        if (clip !is null)
+                        if (clip)
                         {
                             mu_input_text(uictx, clip);
                             SDL_free(clip);
@@ -487,7 +489,7 @@ private void eventLoop(mu_Context* uictx)
         if (appState.refreshFriendsRequested)
         {
             appState.refreshFriendsRequested = false;
-            if (conn !is null && appState.connected)
+            if (conn && appState.connected)
                 conn.requestFriends();
         }
 
@@ -495,7 +497,7 @@ private void eventLoop(mu_Context* uictx)
         if (appState.fetchOlderRequested)
         {
             appState.fetchOlderRequested = false;
-            if (conn !is null && appState.connected && appState.fetchingOlder == false)
+            if (conn && appState.connected && appState.fetchingOlder == false)
             {
                 // Cursor: smallest id currently in feed, or lastEventId+1
                 // if the feed hasn't loaded any server events yet.
@@ -518,7 +520,7 @@ private void eventLoop(mu_Context* uictx)
             import core.stdc.string : memchr;
             const(char)[] fontPath;
             const(char)* nul = cast(const(char)*) memchr(appState.settingsFontPath.ptr, 0, appState.settingsFontPath.length);
-            if (nul !is null)
+            if (nul)
                 fontPath = appState.settingsFontPath[0 .. nul - appState.settingsFontPath.ptr];
             if (initFont(fontPath, cast(int) appState.settingsFontSize) == false)
                 logError("Failed to load font");
@@ -527,7 +529,7 @@ private void eventLoop(mu_Context* uictx)
         // Drain pending notification actions.
         if (appState.pendingActions.length > 0)
         {
-            if (conn !is null && appState.connected)
+            if (conn && appState.connected)
             {
                 foreach (ref NotificationAction act; appState.pendingActions)
                     conn.sendNotificationAction(act.notificationId, act.action);
@@ -540,7 +542,7 @@ private void eventLoop(mu_Context* uictx)
         {
             appState.authDialogSubmit = false;
             appState.authDialogVisible = false;
-            if (conn !is null)
+            if (conn)
             {
                 if (appState.authDialogKind == AppState.AuthDialogKind.credentials)
                 {
@@ -569,7 +571,7 @@ private void eventLoop(mu_Context* uictx)
         {
             appState.authDialogCancel = false;
             appState.authDialogVisible = false;
-            if (conn !is null)
+            if (conn)
             {
                 conn.sendAuthResponse(JSONValue([
                     "type": JSONValue("auth_response"),
@@ -596,7 +598,7 @@ private void eventLoop(mu_Context* uictx)
             doSaveSettings();
         }
 
-        // Build and render UI.
+        // Build UI
         mu_begin(uictx);
         drawFullWindow(uictx, &appState, pendingScrollY);
         pendingScrollY = 0;
@@ -612,6 +614,7 @@ private void eventLoop(mu_Context* uictx)
             SDL_PushEvent(&wakeEv);
         }
 
+        // Render UI
         r_clear(mu_Color(30, 30, 35, 255));
         foreach (ref mu_Command cmd; mu_command_range(uictx))
         {
@@ -639,9 +642,9 @@ private void guiCleanup()
     }
     if (timerID)
         SDL_RemoveTimer(timerID);
-    if (conn !is null)
+    if (conn)
         conn.close();
-    if (netThread !is null)
+    if (netThread)
     {
         netThread.join();
         netThread = null;
@@ -673,266 +676,260 @@ private void drainNetworkMessages()
 
             logTrace("drainNetworkMessages: type=%s", msgType);
 
-            switch (msgType)
-            {
-                case "event":
-                    long id;
-                    if (const(JSONValue) *jid = "id" in msg)
-                        id = jid.integer;
+            switch (msgType) {
+            case "event":
+                long id;
+                if (const(JSONValue) *jid = "id" in msg)
+                    id = jid.integer;
 
-                    if (id > saved.lastEventId)
-                        saved.lastEventId = id;
+                if (id > saved.lastEventId)
+                    saved.lastEventId = id;
 
-                    string eventType;
-                    if (const(JSONValue)* v = "event_type" in msg)
-                        eventType = v.str;
-                    string rawReceivedAt;
-                    if (const(JSONValue)* v = "received_at" in msg)
-                        rawReceivedAt = v.str;
-                    string receivedAt = formatTimestamp(rawReceivedAt);
-                    string user;
-                    string detail;
-                    extractEventFields(eventType, msg, user, detail);
+                string eventType;
+                if (const(JSONValue)* v = "event_type" in msg)
+                    eventType = v.str;
+                string rawReceivedAt;
+                if (const(JSONValue)* v = "received_at" in msg)
+                    rawReceivedAt = v.str;
+                string receivedAt = formatTimestamp(rawReceivedAt);
+                string user;
+                string detail;
+                extractEventFields(eventType, msg, user, detail);
 
-                    // Store raw content JSON for the detail view.
-                    string rawContent;
-                    bool isSelfEvent = isSelfEventType(eventType);
-                    if (const(JSONValue) *content = "content" in msg)
-                    {
-                        rawContent = content.toString(); // full json
-                        // avatar-change carries isSelf in its content.
-                        if (eventType == "avatar-change" && content.type == JSONType.object)
-                            if (const(JSONValue)* v = "isSelf" in *content)
-                                if (v.type == JSONType.true_)
-                                    isSelfEvent = true;
-                    }
+                // Store raw content JSON for the detail view.
+                string rawContent;
+                bool isSelfEvent = isSelfEventType(eventType);
+                if (const(JSONValue) *content = "content" in msg)
+                {
+                    rawContent = content.toString(); // full json
+                    // avatar-change carries isSelf in its content.
+                    if (eventType == "avatar-change" && content.type == JSONType.object)
+                        if (const(JSONValue)* v = "isSelf" in *content)
+                            if (v.type == JSONType.true_)
+                                isSelfEvent = true;
+                }
 
-                    appState.addFeedEntry(id, prettyEventType(eventType), user, detail, receivedAt, rawContent, isSelfEvent);
-                    if (catchUpComplete)
-                        dispatchNotification(eventType, user, detail, saved);
+                appState.addFeedEntry(id, prettyEventType(eventType), user, detail, receivedAt, rawContent, isSelfEvent);
+                if (catchUpComplete)
+                    dispatchNotification(eventType, user, detail, saved);
 
-                    // Store actionable notifications.
-                    storeNotification(eventType, msg, user, receivedAt);
+                // Store actionable notifications.
+                storeNotification(eventType, msg, user, receivedAt);
 
-                    // Detect "player joining" from friend-location events:
-                    // when a friend's location is "traveling" and their
-                    // travelingToLocation matches our current instance.
-                    // Gated on catch-up so replayed history doesn't toast.
-                    if (catchUpComplete &&
-                        eventType == "friend-location" &&
-                        appState.currentLocation.length > 0)
-                    {
-                        checkPlayerJoining(msg, user);
-                    }
-                    break;
+                // Detect "player joining" from friend-location events:
+                // when a friend's location is "traveling" and their
+                // travelingToLocation matches our current instance.
+                // Gated on catch-up so replayed history doesn't toast.
+                if (catchUpComplete &&
+                    eventType == "friend-location" &&
+                    appState.currentLocation.length > 0)
+                {
+                    checkPlayerJoining(msg, user);
+                }
+                break;
 
-                case "caught_up":
-                    long lastId;
-                    if (const(JSONValue) *last_id = "last_id" in msg)
-                        lastId = last_id.integer;
-                    if (lastId > saved.lastEventId)
-                        saved.lastEventId = lastId;
-                    saveSettings(saved);
-                    appState.addFeedEntry(0, "system", "", "Caught up to event #" ~ lastId.to!string, timeNow());
-                    catchUpComplete = true;
-                    break;
+            case "caught_up":
+                long lastId;
+                if (const(JSONValue) *last_id = "last_id" in msg)
+                    lastId = last_id.integer;
+                if (lastId > saved.lastEventId)
+                    saved.lastEventId = lastId;
+                saveSettings(saved);
+                appState.addFeedEntry(0, "system", "", "Caught up to event #" ~ lastId.to!string, timeNow());
+                catchUpComplete = true;
+                break;
 
-                case "event_older":
-                    // Back-filled event from a fetch_older request. Append to
-                    // the tail of the feed (oldest position). Do NOT touch
-                    // saved.lastEventId — that's the high-water mark for live
-                    // catch-up, not the oldest.
-                    long id;
-                    if (const(JSONValue) *jid = "id" in msg)
-                        id = jid.integer;
+            case "event_older":
+                // Back-filled event from a fetch_older request. Append to
+                // the tail of the feed (oldest position). Do NOT touch
+                // saved.lastEventId — that's the high-water mark for live
+                // catch-up, not the oldest.
+                long id;
+                if (const(JSONValue) *jid = "id" in msg)
+                    id = jid.integer;
 
-                    string eventType;
-                    if (const(JSONValue)* v = "event_type" in msg)
-                        eventType = v.str;
-                    string rawReceivedAt;
-                    if (const(JSONValue)* v = "received_at" in msg)
-                        rawReceivedAt = v.str;
-                    string receivedAt = formatTimestamp(rawReceivedAt);
-                    string user;
-                    string detail;
-                    extractEventFields(eventType, msg, user, detail);
+                string eventType;
+                if (const(JSONValue)* v = "event_type" in msg)
+                    eventType = v.str;
+                string rawReceivedAt;
+                if (const(JSONValue)* v = "received_at" in msg)
+                    rawReceivedAt = v.str;
+                string receivedAt = formatTimestamp(rawReceivedAt);
+                string user;
+                string detail;
+                extractEventFields(eventType, msg, user, detail);
 
-                    string rawContent;
-                    bool isSelfEvent = isSelfEventType(eventType);
-                    if (const(JSONValue) *content = "content" in msg)
-                    {
-                        rawContent = content.toString();
-                        if (eventType == "avatar-change" && content.type == JSONType.object)
-                            if (const(JSONValue)* v = "isSelf" in *content)
-                                if (v.type == JSONType.true_)
-                                    isSelfEvent = true;
-                    }
+                string rawContent;
+                bool isSelfEvent = isSelfEventType(eventType);
+                if (const(JSONValue) *content = "content" in msg)
+                {
+                    rawContent = content.toString();
+                    if (eventType == "avatar-change" && content.type == JSONType.object)
+                        if (const(JSONValue)* v = "isSelf" in *content)
+                            if (v.type == JSONType.true_)
+                                isSelfEvent = true;
+                }
 
-                    appState.appendOldFeedEntry(id, prettyEventType(eventType),
-                        user, detail, receivedAt, rawContent, isSelfEvent);
-                    break;
+                appState.appendOldFeedEntry(id, prettyEventType(eventType),
+                    user, detail, receivedAt, rawContent, isSelfEvent);
+                break;
 
-                case "older_fetched":
-                    long count;
-                    if (const(JSONValue) *c = "count" in msg)
-                        count = c.integer;
-                    long beforeId;
-                    if (const(JSONValue) *b = "before_id" in msg)
-                        beforeId = b.integer;
-                    appState.fetchingOlder = false;
-                    if (count == 0)
-                    {
-                        appState.noOlderEvents = true;
-                        appState.addFeedEntry(0, "system", "",
-                            "No events older than #" ~ beforeId.to!string, timeNow());
-                    }
+            case "older_fetched":
+                long count;
+                if (const(JSONValue) *c = "count" in msg)
+                    count = c.integer;
+                long beforeId;
+                if (const(JSONValue) *b = "before_id" in msg)
+                    beforeId = b.integer;
+                appState.fetchingOlder = false;
+                if (count == 0)
+                {
+                    appState.noOlderEvents = true;
+                    appState.addFeedEntry(0, "system", "",
+                        "No events older than #" ~ beforeId.to!string, timeNow());
+                }
+                else
+                {
+                    appState.noOlderEvents = false;
+                }
+                break;
+
+            case "status":
+                if (const(JSONValue) *vrchat_connected = "vrchat_connected" in msg)
+                {
+                    bool vrchatUp = vrchat_connected.boolean;
+                    string lastError;
+                if (const(JSONValue)* v = "vrchat_last_error" in msg)
+                    lastError = v.str;
+                    if (vrchatUp)
+                        appState.vrchatStatus = "Connected";
+                    else if (lastError.length > 0)
+                        appState.vrchatStatus = "Disconnected (" ~ lastError ~ ")";
                     else
-                    {
-                        appState.noOlderEvents = false;
-                    }
-                    break;
+                        appState.vrchatStatus = "Disconnected";
+                }
+                if (const(JSONValue) *ratelimit_remaining = "ratelimit_remaining" in msg)
+                    appState.rateLimitRemaining = ratelimit_remaining.integer;
+                if (const(JSONValue) *ratelimit_max = "ratelimit_max" in msg)
+                    appState.rateLimitMax = ratelimit_max.integer;
+                
+                if (const(JSONValue) *rate_limited = "rate_limited" in msg)
+                    appState.rateLimited = rate_limited.boolean;
+                break;
 
-                case "status":
-                    if (const(JSONValue) *vrchat_connected = "vrchat_connected" in msg)
-                    {
-                        bool vrchatUp = vrchat_connected.boolean;
-                        string lastError;
-                    if (const(JSONValue)* v = "vrchat_last_error" in msg)
-                        lastError = v.str;
-                        if (vrchatUp)
-                            appState.vrchatStatus = "Connected";
-                        else if (lastError.length > 0)
-                            appState.vrchatStatus = "Disconnected (" ~ lastError ~ ")";
-                        else
-                            appState.vrchatStatus = "Disconnected";
-                    }
-                    if (const(JSONValue) *ratelimit_remaining = "ratelimit_remaining" in msg)
-                        appState.rateLimitRemaining = ratelimit_remaining.integer;
-                    if (const(JSONValue) *ratelimit_max = "ratelimit_max" in msg)
-                        appState.rateLimitMax = ratelimit_max.integer;
-                    
-                    if (const(JSONValue) *rate_limited = "rate_limited" in msg)
-                        appState.rateLimited = rate_limited.boolean;
-                    break;
+            case "friends":
+                applyFriendsSnapshot(msg);
+                break;
 
-                case "friends":
-                    applyFriendsSnapshot(msg);
-                    break;
+            case "error":
+                string errMsg;
+                if (const(JSONValue)* v = "message" in msg)
+                    errMsg = v.str;
+                appState.addFeedEntry(0, "error", "", "Server error: " ~ errMsg, timeNow());
+                break;
 
-                case "error":
-                    string errMsg;
-                    if (const(JSONValue)* v = "message" in msg)
-                        errMsg = v.str;
-                    appState.addFeedEntry(0, "error", "", "Server error: " ~ errMsg, timeNow());
+            case "log-event":
+                string logEventType;
+                if (const(JSONValue)* v = "event_type" in msg)
+                    logEventType = v.str;
+                logDebugging("log-event received: %s", logEventType);
+                switch (logEventType) {
+                case "location-change":
+                    // Update current instance from local log.
+                    if (const(JSONValue)* v = "location" in msg)
+                        appState.currentLocation = v.str;
                     break;
-
-                case "log-event":
-                    string logEventType;
-                    if (const(JSONValue)* v = "event_type" in msg)
-                        logEventType = v.str;
-                    logDebugging("log-event received: %s", logEventType);
-                    if (logEventType == "location-change")
-                    {
-                        // Update current instance from local log.
-                        if (const(JSONValue)* v = "location" in msg)
-                            appState.currentLocation = v.str;
-                    }
-                    else if (logEventType == "photo-taken")
-                    {
-                        string photoPath;
-                        if (const(JSONValue)* v = "path" in msg)
-                            photoPath = v.str;
-                        dispatchNotification(logEventType, "", photoPath, saved);
-                    }
-                    else if (logEventType == "url-video" ||
-                        logEventType == "url-string" ||
-                        logEventType == "url-image")
-                    {
-                        string url;
-                        string urlUser;
-                        if (const(JSONValue)* v = "url" in msg)
-                            url = v.str;
-                        if (const(JSONValue)* v = "display_name" in msg)
-                            urlUser = v.str;
-                        appState.addFeedEntry(0, prettyEventType(logEventType), urlUser, url, timeNow());
-                    }
-                    else
-                    {
-                        string logUser;
-                        if (const(JSONValue)* v = "display_name" in msg)
-                            logUser = v.str;
-                        appState.addFeedEntry(0, prettyEventType(logEventType), logUser, "", timeNow());
-                        dispatchNotification(logEventType, logUser, "", saved);
-                    }
+                case "photo-taken":
+                    string photoPath;
+                    if (const(JSONValue)* v = "path" in msg)
+                        photoPath = v.str;
+                    dispatchNotification(logEventType, "", photoPath, saved);
                     break;
-
-                case "notification_action_result":
-                    string notifId;
-                    if (const(JSONValue)* v = "notification_id" in msg)
-                        notifId = v.str;
-                    string resultAction;
-                    if (const(JSONValue)* v = "action" in msg)
-                        resultAction = v.str;
-                    bool success = "success" in msg && msg["success"].type == JSONType.true_;
-                    if (success)
-                    {
-                        appState.removeNotification(notifId);
-                    }
-                    else
-                    {
-                        // Check whether the notification is still in state.
-                        // For fire-and-forget "hide", it was already removed
-                        // optimistically,  suppress the error to avoid noise.
-                        bool stillPresent;
-                        foreach (ref NotificationEntry n; appState.notifications)
-                        {
-                            if (n.notificationId == notifId)
-                            {
-                                n.actionPending = false;
-                                stillPresent = true;
-                            }
-                        }
-                        if (stillPresent)
-                        {
-                            string errMsg;
-                            if (const(JSONValue)* v = "error" in msg)
-                                errMsg = v.str;
-                            appState.addFeedEntry(0, "error", "",
-                                "Notification action failed: " ~ errMsg, timeNow());
-                        }
-                        else if (resultAction == "hide")
-                        {
-                            logDebugging("notification_action_result: hide for already-removed id=%s, suppressing", notifId);
-                        }
-                    }
+                case "url-video", "url-string", "url-image":
+                    string url;
+                    string urlUser;
+                    if (const(JSONValue)* v = "url" in msg)
+                        url = v.str;
+                    if (const(JSONValue)* v = "display_name" in msg)
+                        urlUser = v.str;
+                    appState.addFeedEntry(0, prettyEventType(logEventType), urlUser, url, timeNow());
                     break;
-
-                case "auth_request":
-                    string kind;
-                    if (const(JSONValue)* v = "kind" in msg)
-                        kind = v.str;
-                    logDebugging("auth_request: kind=%s", kind);
-                    if (kind == "credentials")
-                    {
-                        appState.authDialogKind = AppState.AuthDialogKind.credentials;
-                    }
-                    else if (kind == "two_factor")
-                    {
-                        appState.authDialogKind = AppState.AuthDialogKind.twoFactor;
-                        if (const(JSONValue)* v = "method" in msg)
-                            appState.authDialogMethod = v.str;
-                    }
-                    if (const(JSONValue)* v = "error" in msg)
-                        appState.authDialogError = v.str;
-                    appState.authDialogVisible = true;
-                    // Clear previous input.
-                    appState.authUsername[] = '\0';
-                    appState.authPassword[] = '\0';
-                    appState.authCode[] = '\0';
-                    break;
-
                 default:
-                    break;
+                    string logUser;
+                    if (const(JSONValue)* v = "display_name" in msg)
+                        logUser = v.str;
+                    appState.addFeedEntry(0, prettyEventType(logEventType), logUser, "", timeNow());
+                    dispatchNotification(logEventType, logUser, "", saved);
+                }
+                break;
+
+            case "notification_action_result":
+                string notifId;
+                if (const(JSONValue)* v = "notification_id" in msg)
+                    notifId = v.str;
+                string resultAction;
+                if (const(JSONValue)* v = "action" in msg)
+                    resultAction = v.str;
+                bool success = "success" in msg && msg["success"].type == JSONType.true_;
+                if (success)
+                {
+                    appState.removeNotification(notifId);
+                }
+                else
+                {
+                    // Check whether the notification is still in state.
+                    // For fire-and-forget "hide", it was already removed
+                    // optimistically,  suppress the error to avoid noise.
+                    bool stillPresent;
+                    foreach (ref NotificationEntry n; appState.notifications)
+                    {
+                        if (n.notificationId == notifId)
+                        {
+                            n.actionPending = false;
+                            stillPresent = true;
+                        }
+                    }
+                    if (stillPresent)
+                    {
+                        string errMsg;
+                        if (const(JSONValue)* v = "error" in msg)
+                            errMsg = v.str;
+                        appState.addFeedEntry(0, "error", "",
+                            "Notification action failed: " ~ errMsg, timeNow());
+                    }
+                    else if (resultAction == "hide")
+                    {
+                        logDebugging("notification_action_result: hide for already-removed id=%s, suppressing", notifId);
+                    }
+                }
+                break;
+
+            case "auth_request":
+                string kind;
+                if (const(JSONValue)* v = "kind" in msg)
+                    kind = v.str;
+                logDebugging("auth_request: kind=%s", kind);
+                if (kind == "credentials")
+                {
+                    appState.authDialogKind = AppState.AuthDialogKind.credentials;
+                }
+                else if (kind == "two_factor")
+                {
+                    appState.authDialogKind = AppState.AuthDialogKind.twoFactor;
+                    if (const(JSONValue)* v = "method" in msg)
+                        appState.authDialogMethod = v.str;
+                }
+                if (const(JSONValue)* v = "error" in msg)
+                    appState.authDialogError = v.str;
+                appState.authDialogVisible = true;
+                // Clear previous input.
+                appState.authUsername[] = '\0';
+                appState.authPassword[] = '\0';
+                appState.authCode[] = '\0';
+                break;
+
+            default:
+                break;
             }
         }
         catch (Exception e)
@@ -1140,6 +1137,19 @@ private void applyFriendsSnapshot(JSONValue msg)
     appState.selectedFriend = null; // Reset selection on refresh.
 }
 
+// Friend comparison function
+private bool friendLess(ref const FriendInfo a, ref const FriendInfo b)
+{
+    // First, try ranking by status if those differ
+    int ra = statusRank(a.status);
+    int rb = statusRank(b.status);
+    if (ra != rb)
+        return ra < rb;
+    // Then, rank by name if their status rank is the same
+    import std.uni : icmp;
+    return icmp(a.displayName, b.displayName) < 0;
+}
+
 /// Status rank for sorting: Join Me, Online, Ask Me, Busy, then anything else,
 /// with Offline last. Ties fall back to case-insensitive display name.
 private int statusRank(string status)
@@ -1153,16 +1163,6 @@ private int statusRank(string status)
         case "offline": return 5;
         default:        return 4;
     }
-}
-
-private bool friendLess(ref const FriendInfo a, ref const FriendInfo b)
-{
-    int ra = statusRank(a.status);
-    int rb = statusRank(b.status);
-    if (ra != rb)
-        return ra < rb;
-    import std.uni : icmp;
-    return icmp(a.displayName, b.displayName) < 0;
 }
 
 /// Parse a FriendInfo from a JSON friend object.
@@ -1456,6 +1456,7 @@ private string formatTimestamp(string isoTimestamp)
 }
 
 // Get current local time and format as "MM-DD HH:MM:SS" for display.
+// This function is used for local log events, to be consistent with VRC events.
 private string timeNow()
 {
     import std.datetime : Clock, SysTime;
@@ -1472,10 +1473,6 @@ private string timeNow()
     
     return "";
 }
-
-private import std.string : fromStringz;
-
-private import std.conv : to;
 
 /// SDL timer callback -- pushes a user event to wake the main loop.
 private extern(C) uint timerCallback(uint interval, void* param) nothrow
@@ -1586,7 +1583,6 @@ private void doSaveSettings()
     Settings s;
     s.host = cast(string) appState.settingsHost[0 .. strlen(appState.settingsHost.ptr)].idup;
     s.port = {
-        import std.conv : to;
         string p = cast(string) appState.settingsPort[0 .. strlen(appState.settingsPort.ptr)].idup;
         try return p.to!ushort;
         catch (Exception) return cast(ushort) 9700;
@@ -1625,8 +1621,8 @@ private void doSaveSettings()
 private void initSettingsBuf(char[] buf, string value)
 {
     assert(buf);
-    assert(buf.length);
-    size_t len = value.length < buf.length ? value.length : buf.length - 1;
+    assert(buf.length); // len>0, so safe to do len-1
+    size_t len = value.length < buf.length ? value.length : buf.length - 1; // @suppress(dscanner.suspicious.length_subtraction)
     buf[0 .. len] = value[0 .. len];
     buf[len] = 0;
 }

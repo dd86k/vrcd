@@ -8,7 +8,7 @@ import core.sync.mutex : Mutex;
 import core.time : MonoTime;
 
 import std.getopt;
-import std.json : JSONValue, JSONType, parseJSON;
+import std.json;
 import std.stdio : stderr, writeln, writefln;
 
 import ddlogger;
@@ -199,8 +199,7 @@ template DVER(uint ver)
 
 // Hack to get arsd-official version at compile-time
 enum string arsdVersion = () {
-    import std.json;
-    // string import resolved at compile time                           
+    // string import resolved at compile time
     enum selectionsJson = import("dub.selections.json");
     enum parsed = parseJSON(selectionsJson);                            
     enum ver = parsed["versions"]["arsd-official"].str;
@@ -248,8 +247,6 @@ void doReseed(HTTPClient client, RateLimitTracker rateLimiter,
     Mutex vrcApiMutex, WorldCache worldCache, InstanceCache instanceCache,
     FriendsTracker tracker)
 {
-    import std.json : JSONValue, JSONType, parseJSON;
-
     logInfo("Re-seed: starting pass");
 
     JSONValue[] allFriends;
@@ -289,7 +286,6 @@ void doReseed(HTTPClient client, RateLimitTracker rateLimiter,
 /// Caller must hold vrcApiMutex.
 private JSONValue[] fetchAllFriendsLocked(HTTPClient client, RateLimitTracker rateLimiter)
 {
-    import std.json : JSONValue, JSONType, parseJSON;
     import std.format : format;
 
     enum int PAGE_SIZE = 100;
@@ -302,13 +298,13 @@ private JSONValue[] fetchAllFriendsLocked(HTTPClient client, RateLimitTracker ra
         int offset;
         while (true)
         {
-            if (rateLimiter !is null)
+            if (rateLimiter)
                 rateLimiter.waitIfNeeded();
 
             string path = format!"/auth/user/friends?offset=%d&n=%d&offline=%s"(
                 offset, PAGE_SIZE, offlinePage ? "true" : "false");
             HTTPResponse resp = client.get(path);
-            if (rateLimiter !is null)
+            if (rateLimiter)
                 rateLimiter.update(resp);
 
             if (resp.code != 200)
@@ -350,8 +346,6 @@ private void repairBrokenFriendsLocked(ref JSONValue[] friendsArr,
     HTTPClient client, RateLimitTracker rateLimiter,
     out int repairedCount, out int mismatchCount)
 {
-    import std.json : JSONValue, JSONType, parseJSON;
-
     if (rateLimiter)
     {
         if (rateLimiter.isBlocked())
@@ -417,13 +411,13 @@ private void repairBrokenFriendsLocked(ref JSONValue[] friendsArr,
 
         ++mismatchCount;
 
-        if (rateLimiter !is null)
+        if (rateLimiter)
             rateLimiter.waitIfNeeded();
 
         try
         {
             HTTPResponse resp = client.get("/users/" ~ userId);
-            if (rateLimiter !is null)
+            if (rateLimiter)
                 rateLimiter.update(resp);
             if (resp.code != 200)
             {
@@ -451,8 +445,6 @@ private void repairBrokenFriendsLocked(ref JSONValue[] friendsArr,
 private int backfillWorldNamesLocked(JSONValue[] friendsArr,
     WorldCache worldCache, RateLimitTracker rateLimiter)
 {
-    import std.json : JSONValue;
-
     if (worldCache is null)
         return 0;
 
@@ -472,7 +464,7 @@ private int backfillWorldNamesLocked(JSONValue[] friendsArr,
             continue;
         seen[worldId] = true;
 
-        if (rateLimiter !is null)
+        if (rateLimiter)
         {
             if (rateLimiter.isBlocked())
             {
@@ -503,8 +495,6 @@ private int backfillWorldNamesLocked(JSONValue[] friendsArr,
 private int backfillInstancesLocked(JSONValue[] friendsArr,
     InstanceCache instanceCache, RateLimitTracker rateLimiter)
 {
-    import std.json : JSONValue;
-
     if (instanceCache is null)
         return 0;
 
@@ -523,7 +513,7 @@ private int backfillInstancesLocked(JSONValue[] friendsArr,
             continue;
         seen[location] = true;
 
-        if (rateLimiter !is null)
+        if (rateLimiter)
         {
             if (rateLimiter.isBlocked())
             {
@@ -620,13 +610,13 @@ int main(string[] args)
     if (helpConfig)
     {
         import std.file : exists;
-        import std.conv : to;
+        import std.conv : text;
         printline("Config file", config.configPath ~
             (exists(config.configPath) ? " (loaded)" : " (not found)"));
         printline("Database", config.dbPath);
         printline("Credentials", config.credentialsPath);
         printline("Cookie jar", config.cookieJarPath);
-        printline("Listen", config.listenAddr ~ ":" ~ to!string(config.listenPort));
+        printline("Listen", text(config.listenAddr, ":", config.listenPort));
         printline("Secret", config.apiSecret.length > 0 ? "(set)" : "(not set)");
         printline("Log file", config.logFilePath.length > 0 ? config.logFilePath : "(not set)");
         printline("Verbose", config.verbose ? "true" : "false");
@@ -648,8 +638,7 @@ int main(string[] args)
         }
         catch (Exception ex)
         {
-            stderr.writeln("error: could not open log file '",
-                config.logFilePath, "': ", ex.msg);
+            stderr.writeln("error: could not open log file '", config.logFilePath, "': ", ex.msg);
             return 1;
         }
     }

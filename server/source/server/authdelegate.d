@@ -80,7 +80,7 @@ class AuthDelegator
         response = null;
 
         // Broadcast to connected clients.
-        if (broadcastFn !is null)
+        if (broadcastFn)
         {
             JSONValue msg = buildAuthRequestMessage(req);
             broadcastFn(msg);

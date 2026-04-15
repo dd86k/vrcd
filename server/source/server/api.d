@@ -5,7 +5,7 @@
 module server.api;
 
 import core.thread;
-import core.time : Duration, dur, MonoTime;
+import core.time : Duration, MonoTime;
 import core.sync.mutex;
 import core.sync.condition;
 
@@ -579,7 +579,7 @@ private class ClientHandler
             logInfo("Client authenticated");
 
             // If there is a pending VRChat auth request, send it to this client.
-            if (server.authDelegator !is null && server.authDelegator.hasPendingRequest())
+            if (server.authDelegator && server.authDelegator.hasPendingRequest())
             {
                 JSONValue authReq = server.authDelegator.getPendingRequestMessage();
                 if (authReq.type != JSONType.null_)
@@ -770,7 +770,7 @@ private class ClientHandler
         }
 
         string worldName = worldId;
-        if (server.worldCache !is null)
+        if (server.worldCache)
             worldName = server.worldCache.resolve(worldId);
 
         logDebugging("handleGetWorld: worldId=%s resolved=%s", worldId, worldName);
@@ -938,7 +938,3 @@ JSONValue buildEventMessage(VRCEvent event, long eventId)
         "content": event.content,
     ]);
 }
-
-
-private import std.datetime.timezone : UTC;
-private import std.datetime.systime : SysTime;

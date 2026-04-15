@@ -196,7 +196,7 @@ class ServerConnection
     /// any thread blocked on receive().
     void close()
     {
-        if (sock !is null)
+        if (sock)
         {
             try sock.shutdown(SocketShutdown.BOTH);
             catch (Exception) {}
@@ -343,7 +343,7 @@ private:
             switch (msgType)
             {
                 case "event":
-                    if (onEvent !is null)
+                    if (onEvent)
                         onEvent(msg);
                     break;
                 case "caught_up":
@@ -368,7 +368,7 @@ private:
                     if (const(JSONValue)* v = "message" in msg)
                         errMsg = v.str;
                     logError("Server error: %s", errMsg);
-                    if (onError !is null)
+                    if (onError)
                         onError(errMsg);
                     break;
                 case "ping":

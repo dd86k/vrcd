@@ -9,7 +9,7 @@
 module server.ratelimit;
 
 import core.thread : Thread;
-import core.time : dur;
+import core.time : Duration, dur;
 
 import std.conv : to;
 import std.datetime.systime : Clock;
@@ -29,19 +29,19 @@ class RateLimitTracker
         string* limit     = "X-RateLimit-Limit" in resp.headers;
         string* retryStr  = "Retry-After" in resp.headers;
 
-        if (limit !is null)
+        if (limit)
         {
             try rateLimitMax = (*limit).to!int;
             catch (Exception) {}
         }
 
-        if (remaining !is null)
+        if (remaining)
         {
             try rateLimitRemaining = (*remaining).to!int;
             catch (Exception) {}
         }
 
-        if (reset !is null)
+        if (reset)
         {
             try rateLimitReset = (*reset).to!long;
             catch (Exception) {}
@@ -54,7 +54,7 @@ class RateLimitTracker
         {
             long retryAfter = 60; // Default: wait 60s if no header.
 
-            if (retryStr !is null)
+            if (retryStr)
             {
                 try retryAfter = (*retryStr).to!long;
                 catch (Exception) {}
@@ -88,7 +88,10 @@ class RateLimitTracker
 
         // Sleep in 1-second increments so we stay responsive.
         while (blockedUntil > Clock.currTime.toUnixTime())
-            Thread.sleep(dur!"seconds"(1));
+        {
+            static immutable Duration TIMEOUT = dur!"seconds"(1);
+            Thread.sleep(TIMEOUT);
+        }
 
         return true;
     }

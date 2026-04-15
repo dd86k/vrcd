@@ -7,6 +7,7 @@ module server.worldcache;
 import core.sync.mutex : Mutex;
 
 import std.json;
+import std.datetime;
 
 import ddlogger;
 import ddcurl;
@@ -49,10 +50,9 @@ class WorldCache
     /// Safe to call from any thread without holding the API mutex.
     string tryGet(string worldId)
     {
-        import core.stdc.time : time;
         if (worldId.length == 0)
             return "";
-        long now = time(null);
+        long now = Clock.currTime.toUnixTime!long();
         synchronized (cacheMutex)
         {
             CacheEntry* entry = worldId in cache;
@@ -69,7 +69,7 @@ class WorldCache
     /// Acquires the shared API mutex if one is configured.
     string resolve(string worldId)
     {
-        if (apiMutex !is null)
+        if (apiMutex)
         {
             synchronized (apiMutex)
                 return resolveLocked(worldId);
@@ -81,13 +81,12 @@ class WorldCache
     /// API mutex. Use from paths that batch multiple VRChat API calls.
     string resolveLocked(string worldId)
     {
-        import core.stdc.time : time;
-        long now = time(null);
+        long now = Clock.currTime.toUnixTime!long();
 
         synchronized (cacheMutex)
         {
             CacheEntry* entry = worldId in cache;
-            if (entry !is null && entry.expiresAt > now)
+            if (entry && entry.expiresAt > now)
             {
                 logTrace("resolve: cache hit for %s -> %s", worldId, entry.name);
                 return entry.name;
@@ -166,7 +165,7 @@ private:
     string fetchWorldName(string worldId)
     {
         // Skip fetch if rate-limited.
-        if (rateLimiter !is null && rateLimiter.isBlocked())
+        if (rateLimiter && rateLimiter.isBlocked())
         {
             logWarn("Skipping world fetch for %s: rate limited", worldId);
             return "";
@@ -177,7 +176,7 @@ private:
         {
             HTTPResponse resp = client.get("/worlds/" ~ worldId);
             logDebugging("fetchWorldName: %s -> HTTP %d", worldId, resp.code);
-            if (rateLimiter !is null)
+            if (rateLimiter)
                 rateLimiter.update(resp);
             if (resp.code != 200)
             {
