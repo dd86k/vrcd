@@ -92,9 +92,13 @@ void drawFullWindow(mu_Context* ctx, AppState* state, int scrollDelta)
 /// Draw the tab bar with large VR-friendly buttons.
 private void drawTabBar(mu_Context* ctx)
 {
-    int tabWidth = window_width / 5;
-    int[5] tabCols = [tabWidth, tabWidth, tabWidth, tabWidth, -1];
-    mu_layout_row(ctx, 5, tabCols.ptr, 60);
+    // NOTE: Take padding into the calculation to make settings button slightly more equal
+    //       With my testing, this makes 187px for first four and 186px wide for SETTINGS
+    enum BUTTONS = 5;
+    enum PADDING = 4; // default style has margin=4
+    int tabWidth = (window_width - (PADDING * (BUTTONS+1))) / BUTTONS;
+    int[BUTTONS] tabCols = [tabWidth, tabWidth, tabWidth, tabWidth, -1];
+    mu_layout_row(ctx, BUTTONS, tabCols.ptr, 60);
 
     // Highlight active tab by drawing a colored background.
     drawTabButton(ctx, "FEED",          Tab.feed);
