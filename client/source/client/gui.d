@@ -1149,14 +1149,22 @@ private void applyFriendsSnapshot(JSONValue msg)
     }
     sort!friendLess(activeElsewhere);
 
-    // Parse offline friends.
+    // Parse offline friends. Web-platform friends with a non-offline status
+    // are active on the website but may have an empty location in the API
+    // seed, causing the server to bucket them as offline. Re-route them to
+    // "Active elsewhere" so they appear in the correct section.
     if ("offline" in msg && msg["offline"].type == JSONType.array)
     {
         foreach (ref JSONValue fVal; msg["offline"].array)
         {
-            offlineFriends ~= parseFriendInfo(fVal);
+            FriendInfo fi = parseFriendInfo(fVal);
+            if (fi.platform == "web" && fi.status != "offline")
+                activeElsewhere ~= fi;
+            else
+                offlineFriends ~= fi;
         }
     }
+    sort!friendLess(activeElsewhere);
     sort!friendLess(offlineFriends);
 
     appState.instances = instances;
