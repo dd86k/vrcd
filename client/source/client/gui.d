@@ -723,7 +723,7 @@ private void drainNetworkMessages()
                                 isSelfEvent = true;
                 }
 
-                appState.addFeedEntry(id, prettyEventType(eventType), user, detail, receivedAt, rawContent, isSelfEvent);
+                appState.addFeedEntry(id, prettyEventType(eventType), user, detail, receivedAt, rawContent, isSelfEvent, EventSource.server);
                 if (catchUpComplete)
                     dispatchNotification(eventType, user, detail, saved);
 
@@ -749,7 +749,7 @@ private void drainNetworkMessages()
                 if (lastId > saved.lastEventId)
                     saved.lastEventId = lastId;
                 saveSettings(saved);
-                appState.addFeedEntry(0, "system", "", "Caught up to event #" ~ lastId.to!string, timeNow());
+                appState.addFeedEntry(0, "system", "", "Caught up to event #" ~ lastId.to!string, timeNow(), "", false, EventSource.system);
                 catchUpComplete = true;
                 break;
 
@@ -785,7 +785,7 @@ private void drainNetworkMessages()
                 }
 
                 appState.appendOldFeedEntry(id, prettyEventType(eventType),
-                    user, detail, receivedAt, rawContent, isSelfEvent);
+                    user, detail, receivedAt, rawContent, isSelfEvent, EventSource.server);
                 break;
 
             case "older_fetched":
@@ -800,7 +800,7 @@ private void drainNetworkMessages()
                 {
                     appState.noOlderEvents = true;
                     appState.addFeedEntry(0, "system", "",
-                        "No events older than #" ~ beforeId.to!string, timeNow());
+                        "No events older than #" ~ beforeId.to!string, timeNow(), "", false, EventSource.system);
                 }
                 else
                 {
@@ -839,7 +839,7 @@ private void drainNetworkMessages()
                 string errMsg;
                 if (const(JSONValue)* v = "message" in msg)
                     errMsg = v.str;
-                appState.addFeedEntry(0, "error", "", "Server error: " ~ errMsg, timeNow());
+                appState.addFeedEntry(0, "error", "", "Server error: " ~ errMsg, timeNow(), "", false, EventSource.system);
                 break;
 
             case "log-event":
@@ -866,14 +866,14 @@ private void drainNetworkMessages()
                         url = v.str;
                     if (const(JSONValue)* v = "display_name" in msg)
                         urlUser = v.str;
-                    appState.addFeedEntry(0, prettyEventType(logEventType), urlUser, url, timeNow());
+                    appState.addFeedEntry(0, prettyEventType(logEventType), urlUser, url, timeNow(), "", false, EventSource.local);
                     break;
                 default:
                     string logUser;
                     if (const(JSONValue)* v = "display_name" in msg)
                         logUser = v.str;
                     bool logIsSelf = "is_self" in msg && msg["is_self"].type == JSONType.true_;
-                    appState.addFeedEntry(0, prettyEventType(logEventType), logUser, "", timeNow(), "", logIsSelf);
+                    appState.addFeedEntry(0, prettyEventType(logEventType), logUser, "", timeNow(), "", logIsSelf, EventSource.local);
                     dispatchNotification(logEventType, logUser, "", saved);
                 }
                 break;
@@ -910,7 +910,7 @@ private void drainNetworkMessages()
                         if (const(JSONValue)* v = "error" in msg)
                             errMsg = v.str;
                         appState.addFeedEntry(0, "error", "",
-                            "Notification action failed: " ~ errMsg, timeNow());
+                            "Notification action failed: " ~ errMsg, timeNow(), "", false, EventSource.system);
                     }
                     else if (resultAction == "hide")
                     {
@@ -1377,7 +1377,7 @@ private void checkPlayerJoining(JSONValue msg, string user)
             return;
 
         // Friend is traveling to our instance.
-        appState.addFeedEntry(0, "Player Joining", user, "", timeNow());
+        appState.addFeedEntry(0, "Player Joining", user, "", timeNow(), "", false, EventSource.local);
         dispatchNotification("player-joining", user, "", saved);
     }
     catch (Exception e)

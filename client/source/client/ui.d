@@ -299,8 +299,11 @@ private void drawFeedTab(mu_Context* ctx, AppState* state, int scrollDelta)
                 if (wasClick && mouseOver)
                     state.selectedFeedEntry = &entry;
 
+                // Source accent strip on the left edge.
+                mu_draw_rect(ctx, mu_Rect(rowRect.x, rowRect.y, 4, rowRect.h), sourceColor(entry.source));
+
                 // Draw cell text at column offsets within the row rect.
-                int x = rowRect.x;
+                int x = rowRect.x + 8; // leave gap after accent strip
                 int h = rowRect.h;
                 int y = rowRect.y;
 
@@ -853,6 +856,17 @@ private void drawFriendCard(mu_Context* ctx, AppState* state, ref FriendInfo f)
 
     if (wasClick && mouseOver)
         state.selectedFriend = &f;
+}
+
+/// Map feed event source to an accent colour for the row strip.
+private mu_Color sourceColor(EventSource source)
+{
+    final switch (source)
+    {
+        case EventSource.server: return mu_Color(70, 140, 220, 255); // blue
+        case EventSource.local:  return mu_Color(70, 200, 90,  255); // green
+        case EventSource.system: return mu_Color(90, 90,  100, 255); // gray
+    }
 }
 
 /// Map VRChat status to an accent colour for the friend card strip.

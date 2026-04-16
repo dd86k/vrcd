@@ -52,6 +52,9 @@ class MessageQueue
     }
 }
 
+/// Origin of a feed entry, used to colour the accent strip.
+enum EventSource { server, local, system }
+
 /// A single event entry for the feed tab.
 struct FeedEntry
 {
@@ -60,8 +63,9 @@ struct FeedEntry
     string user;
     string detail;
     string receivedAt;
-    string rawContent; // raw JSON content for detail view
-    bool isSelf;       // event about the logged-in user (for the "hide self" filter)
+    string rawContent;   // raw JSON content for detail view
+    bool isSelf;         // event about the logged-in user (for the "hide self" filter)
+    EventSource source;
 }
 
 /// Friend info as received from server.
@@ -195,12 +199,12 @@ struct AppState
     bool authDialogCancel;
 
     void addFeedEntry(long id, string eventType, string user, string detail, string receivedAt,
-        string rawContent = "", bool isSelf = false)
+        string rawContent = "", bool isSelf = false, EventSource source = EventSource.server)
     {
         // Prepend (newest first), cap at 2000 entries.
         if (feedEntries.length >= 2000)
             feedEntries = feedEntries[0 .. 1999];
-        feedEntries = FeedEntry(id, eventType, user, detail, receivedAt, rawContent, isSelf) ~ feedEntries;
+        feedEntries = FeedEntry(id, eventType, user, detail, receivedAt, rawContent, isSelf, source) ~ feedEntries;
         if (id > 0 && id < oldestLoadedEventId)
             oldestLoadedEventId = id;
     }
@@ -208,9 +212,9 @@ struct AppState
     /// Append an older event at the tail (oldest position).
     /// Used by `fetch_older` back-fill — does not cap.
     void appendOldFeedEntry(long id, string eventType, string user, string detail, string receivedAt,
-        string rawContent = "", bool isSelf = false)
+        string rawContent = "", bool isSelf = false, EventSource source = EventSource.server)
     {
-        feedEntries ~= FeedEntry(id, eventType, user, detail, receivedAt, rawContent, isSelf);
+        feedEntries ~= FeedEntry(id, eventType, user, detail, receivedAt, rawContent, isSelf, source);
         if (id > 0 && id < oldestLoadedEventId)
             oldestLoadedEventId = id;
     }
