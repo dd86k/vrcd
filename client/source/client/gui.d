@@ -988,17 +988,14 @@ private void extractEventFields(string eventType, JSONValue msg, out string user
                 return;
 
             case "friend-update":
-                if (const(JSONValue)* v = "statusDescription" in c)
+                // Status fields are nested inside the "user" sub-object.
+                if (const(JSONValue)* userObj = "user" in c)
+                if (userObj.type == JSONType.object)
                 {
-                    if (v.str.length > 0)
-                    {
-                        detail = v.str;
-                        return;
-                    }
+                    if (const(JSONValue)* v = "status" in *userObj)
+                        if (v.str.length > 0)
+                            detail = prettyStatus(v.str);
                 }
-                if (const(JSONValue)* v = "status" in c)
-                    if (v.str.length > 0)
-                        detail = prettyStatus(v.str);
                 return;
 
             case "friend-location":
