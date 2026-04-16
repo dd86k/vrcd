@@ -1399,7 +1399,7 @@ private void checkPlayerJoining(JSONValue msg, string user)
             return;
 
         // Friend is traveling to our instance.
-        appState.addFeedEntry(0, "Player Joining", user, timeNow(), "");
+        appState.addFeedEntry(0, "Player Joining", user, "", timeNow());
         dispatchNotification("player-joining", user, "", saved);
     }
     catch (Exception e)
