@@ -11,13 +11,59 @@ module client.directories;
 
 import std.array : replace;
 import std.file : exists, readText;
-import std.path : buildPath;
+import std.path : buildPath, expandTilde;
 import std.process : environment;
 
 import ddlogger;
 
+//
+// vrcd client paths
+//
+
+/// Return the settings file path ("settings.json")
+string settingsFilePath()
+{
+    return vrcdConfigPath("settings.json");
+}
+
+/// Create a new vrcd config path with given end filename
+string vrcdConfigPath(string filename = null)
+{
+    // null is OK with buildPath, tested with dmd-2.112, gdc-13.3 (dmd-fe-2.103)
+    version (Windows)
+    {
+        string appdata = environment.get("APPDATA", ".");
+        return buildPath(appdata, "vrcd", filename);
+    }
+    else version (linux)
+    {
+        string configDir = expandTilde("~/.config/vrcd");
+        return buildPath(configDir, filename);
+    }
+}
+
+/// Create a new vrcd user app data path with given end filename
+string vrcdAppDataPath(string filename = null)
+{
+    // null is OK with buildPath, tested with dmd-2.112, gdc-13.3 (dmd-fe-2.103)
+    version (Windows)
+    {
+        string localappdata = environment.get("LOCALAPPDATA", ".");
+        return buildPath(localappdata, "vrcd", filename);
+    }
+    else version (linux)
+    {
+        string appdir = expandTilde("~/.local/share/vrcd");
+        return buildPath(appdir, filename);
+    }
+}
+
+//
+// VRChat paths
+//
+
 /// VRChat Steam app ID.
-enum string VRCHAT_APP_ID = "438100";
+static immutable string VRCHAT_APP_ID = "438100";
 
 private __gshared string cachedLogDir;
 private __gshared string cachedPicturesDir;
@@ -47,7 +93,7 @@ string translateVRChatPath(string logPath)
     {
         return logPath;
     }
-    else
+    else version (linux)
     {
         resolve();
         if (logPath.length < 3 || logPath[1] != ':')
@@ -67,14 +113,9 @@ private void resolve()
 
     version (Windows)
     {
-        string localAppData = environment.get("LOCALAPPDATA", "");
-        if (localAppData.length)
-            cachedLogDir = buildPath(localAppData ~ "Low", "VRChat", "VRChat");
-        string userProfile = environment.get("USERPROFILE", "");
-        if (userProfile.length)
-            cachedPicturesDir = buildPath(userProfile, "Pictures", "VRChat");
+        resolveWindows();
     }
-    else
+    else version (linux)
     {
         resolveLinux();
     }
@@ -82,6 +123,18 @@ private void resolve()
     resolved = true;
 }
 
+version (Windows)
+private void resolveWindows()
+{
+    string localAppData = environment.get("LOCALAPPDATA", "");
+    if (localAppData.length)
+        cachedLogDir = buildPath(localAppData ~ "Low", "VRChat", "VRChat");
+    string userProfile = environment.get("USERPROFILE", "");
+    if (userProfile.length)
+        cachedPicturesDir = buildPath(userProfile, "Pictures", "VRChat");
+}
+
+version (linux)
 private void resolveLinux()
 {
     string home = environment.get("HOME", "");
@@ -96,8 +149,7 @@ private void resolveLinux()
     string[] steamRoots = [
         buildPath(home, ".steam", "steam"),
         buildPath(home, ".local", "share", "Steam"),
-        buildPath(home, ".var", "app", "com.valvesoftware.Steam",
-            ".local", "share", "Steam"),
+        buildPath(home, ".var", "app", "com.valvesoftware.Steam", ".local", "share", "Steam"),
     ];
 
     string libraryPath;
@@ -299,9 +351,9 @@ unittest
 
 unittest
 {
-    // Missing libraryfolders block → empty result, no exception.
+    // Missing libraryfolders block to empty result, no exception.
     assert(findLibraryForApp(`"other" { "path" "/x" }`, "438100") == "");
-    // Malformed input → empty result, no exception.
+    // Malformed input to empty result, no exception.
     assert(findLibraryForApp(`"libraryfolders" {`, "438100") == "");
     assert(findLibraryForApp("", "438100") == "");
 }

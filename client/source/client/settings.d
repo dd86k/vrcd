@@ -10,6 +10,7 @@ import std.path : buildPath, dirName;
 
 import ddlogger;
 
+import client.directories : settingsFilePath;
 import client.notifications : notifyEventLabels, feedEventLabels;
 
 /// Persistent application settings, saved as JSON.
@@ -40,23 +41,6 @@ struct Settings
     // Highest event id processed from the server. Used on reconnect
     // to resume catch-up instead of replaying the entire event store.
     long lastEventId;
-}
-
-/// Return the settings file path per platform.
-string settingsFilePath()
-{
-    version (Windows)
-    {
-        import std.process : environment;
-        string appdata = environment.get("APPDATA", ".");
-        return buildPath(appdata, "vrcd", "settings.json");
-    }
-    else
-    {
-        import std.path : expandTilde;
-        string configDir = expandTilde("~/.config/vrcd");
-        return buildPath(configDir, "settings.json");
-    }
 }
 
 /// Load settings from disk. Returns defaults if file is missing or invalid.

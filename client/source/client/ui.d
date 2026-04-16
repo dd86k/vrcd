@@ -1057,10 +1057,15 @@ private void drawToolsTab(mu_Context* ctx, AppState* state)
     sectionHeader(ctx, "Debugging");
 
     mu_layout_row(ctx, 1, fullCol.ptr, 60);
-    if (mu_button(ctx, "Open Logs Folder"))
+    if (mu_button(ctx, "Open VRChat Logs Folder"))
     {
         import client.directories : vrchatLogDir;
         openFolder(vrchatLogDir());
+    }
+    if (mu_button(ctx, "Open VRCD Logs Folder"))
+    {
+        import client.directories : vrcdAppDataPath;
+        openFolder(vrcdAppDataPath());
     }
 
     mu_end_panel(ctx);
@@ -1368,6 +1373,8 @@ private void drawSettingsTab(mu_Context* ctx, AppState* state, int scrollDelta)
     mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
     mu_label(ctx, "Compiler");
     mu_label(ctx, COMPILER);
+    
+    // TODO: Compile/runtime settings (compiler, package versions, SDL2 versions, etc.)
     
     // BUG: Can't scroll to bottom 100% flush, so add empty row for now
     mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);

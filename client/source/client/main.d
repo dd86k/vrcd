@@ -17,7 +17,10 @@ import ddlogger;
 
 import client.connection;
 import client.gui;
+import client.directories;
 
+// TODO: Move CLI mode to its own subpackage
+// Part of CLI mode
 void cmdStream(string host, ushort port, string secret, long sinceId)
 {
     ServerConnection conn = new ServerConnection(host, port, secret);
@@ -56,12 +59,41 @@ void cmdStream(string host, ushort port, string secret, long sinceId)
     conn.run();
 }
 
+// Setup file logger
+void setuplogging(LogLevel loglevel, string logpath = null)
+{
+    import client.directories : vrcdAppDataPath;
+    import std.path : dirName;
+    import std.datetime : Clock, SysTime;
+    import std.format : format;
+    import std.file : mkdirRecurse;
+    
+    SysTime time = Clock.currTime();
+    
+    if (logpath is null)
+    {
+        logpath = vrcdAppDataPath( format("vrcd_%04d%02d%02d_%02d%02d.log",
+            time.year, time.month, time.day, time.hour, time.minute) );
+    }
+    
+    string logdir  = dirName( logpath ); // slice, no allocation
+    
+    mkdirRecurse(logdir);
+    
+    FileAppender fileAppender = new FileAppender(logpath);
+    fileAppender.setLogLevel(loglevel);
+    logAddAppender(fileAppender);
+    
+    logInfo("New launch at %s", time);
+}
+
 void printLine(string name, const(char)[] val)
 {
     enum WIDTH = -15;
     writefln("%*s %s", WIDTH, name ? name : "", val);
 }
 
+// TODO: Once client becomes "true GUI", move this to CLI subpackage
 void cmdVersion()
 {
     import std.format : format, sformat;
@@ -191,6 +223,7 @@ int main(string[] args)
     
     // HACK: Hide console window on Windows
     //       - "/SUBSYSTEM:WINDOWS" is proper but leads to linker errors
+    // TODO: WinMain wrapper to startvrcd(string args[])
     version (Windows)
     {
         import core.sys.windows.windows : ShowWindow, GetConsoleWindow, SW_HIDE, FreeConsole, FALSE;
@@ -200,22 +233,15 @@ int main(string[] args)
 
     // Set up logging.
     LogLevel logLevel = verbose ? LogLevel.trace : LogLevel.info;
-    ConsoleAppender logAppender = new ConsoleAppender();
-    logAppender.setLogLevel(logLevel);
-    logAddAppender(logAppender);
-    if (logFilePath.length > 0)
+    try setuplogging(logLevel, logFilePath);
+    catch (Exception ex)
     {
-        try
-        {
-            FileAppender fileAppender = new FileAppender(logFilePath);
-            fileAppender.setLogLevel(logLevel);
-            logAddAppender(fileAppender);
-        }
-        catch (Exception ex)
-        {
-            stderr.writeln("error: could not open log file '", logFilePath, "': ", ex.msg);
-            return 1;
-        }
+        // Fallback to console logging
+        ConsoleAppender logAppender = new ConsoleAppender();
+        logAppender.setLogLevel(logLevel);
+        logAddAppender(logAppender);
+        
+        logWarn("Failed to init file logs: %s", ex.msg);
     }
 
     // Detect which args were explicitly provided on the CLI.
@@ -232,8 +258,8 @@ int main(string[] args)
     if (sinceSet == false)
         sinceId = 0;
 
-    logDebugging("main: host=%s port=%d sinceId=%d sinceSet=%s cliMode=%s verbose=%s hardwareAccel=%s",
-        host, port, sinceId, sinceSet, cliMode, verbose, hardwareAccel);
+    logDebugging("main: host=%s port=%d sinceId=%d sinceSet=%s verbose=%s hardware=%s",
+        host, port, sinceId, sinceSet, verbose, hardwareAccel);
 
     if (cliMode)
     {
@@ -241,6 +267,12 @@ int main(string[] args)
         return 0;
     }
 
-    return runGui(host, port, secret, sinceId, hostSet, postSet, secretSet, sinceSet, hardwareAccel);
+    try return runGui(host, port, secret, sinceId, hostSet, postSet, secretSet, sinceSet, hardwareAccel);
+    catch (Exception ex)
+    {
+        // File logger or console logger can pick this up
+        logCritical("Fatal: %s", ex);
+        return 2;
+    }
 }
 
