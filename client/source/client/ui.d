@@ -747,7 +747,9 @@ private void drawOnlineTab(mu_Context* ctx, AppState* state, int scrollDelta)
 
     mu_layout_row(ctx, 1, fullCol.ptr, 0);
 
-    if (state.instances.length == 0 && state.offlineFriends.length == 0)
+    if (state.instances.length == 0 &&
+        state.activeElsewhereFriends.length == 0 &&
+        state.offlineFriends.length == 0)
     {
         mu_label(ctx, "No friend data yet.");
     }
@@ -783,9 +785,19 @@ private void drawOnlineTab(mu_Context* ctx, AppState* state, int scrollDelta)
             }
         }
 
+        if (state.activeElsewhereFriends.length > 0)
+        {
+            if (mu_header_ex(ctx, "Active elsewhere", 0))
+            {
+                foreach (ref FriendInfo f; state.activeElsewhereFriends)
+                    drawFriendCard(ctx, state, f);
+                mu_layout_row(ctx, 1, fullCol.ptr, 0);
+            }
+        }
+
         if (state.offlineFriends.length > 0)
         {
-            if (mu_header(ctx, "Offline"))
+            if (mu_header_ex(ctx, "Offline", 0))
             {
                 foreach (ref FriendInfo f; state.offlineFriends)
                     drawFriendCard(ctx, state, f);
@@ -1466,6 +1478,7 @@ private string prettyPlatform(string platform)
         case "standalonewindows": return "PC";
         case "android":          return "Quest";
         case "ios":              return "iOS";
+        case "web":              return "Website";
         default:                 return platform;
     }
 }

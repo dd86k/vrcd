@@ -154,6 +154,7 @@ struct AppState
 
     // Friends tab
     InstanceGroup[] instances;
+    FriendInfo[] activeElsewhereFriends; // online but not in a visible/joinable world
     FriendInfo[] offlineFriends;
     FriendInfo* selectedFriend; // null = list view, non-null = profile view
 

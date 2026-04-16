@@ -1093,6 +1093,8 @@ private void extractEventFields(string eventType, JSONValue msg, out string user
 private void applyFriendsSnapshot(JSONValue msg)
 {
     InstanceGroup[] instances;
+    FriendInfo[] privateGroup; // in VRChat but private/traveling
+    FriendInfo[] activeElsewhere; // online on web (or other platform), not in VRChat
     FriendInfo[] offlineFriends;
 
     // Parse instances.
@@ -1118,9 +1120,34 @@ private void applyFriendsSnapshot(JSONValue msg)
                     ig.friends ~= parseFriendInfo(fVal);
             }
             sort!friendLess(ig.friends);
-            instances ~= ig;
+
+            // "private" and "traveling" are not joinable world instances.
+            // Split by platform: web-only friends go to "Active elsewhere";
+            // game-platform friends go to the "Private" section.
+            if (ig.instanceId == "private" || ig.instanceId == "traveling")
+            {
+                foreach (ref FriendInfo f; ig.friends)
+                {
+                    if (f.platform == "web")
+                        activeElsewhere ~= f;
+                    else
+                        privateGroup ~= f;
+                }
+            }
+            else
+                instances ~= ig;
         }
     }
+
+    if (privateGroup.length > 0)
+    {
+        sort!friendLess(privateGroup);
+        InstanceGroup pg;
+        pg.instanceId = "private";
+        pg.friends = privateGroup;
+        instances ~= pg;
+    }
+    sort!friendLess(activeElsewhere);
 
     // Parse offline friends.
     if ("offline" in msg && msg["offline"].type == JSONType.array)
@@ -1133,6 +1160,7 @@ private void applyFriendsSnapshot(JSONValue msg)
     sort!friendLess(offlineFriends);
 
     appState.instances = instances;
+    appState.activeElsewhereFriends = activeElsewhere;
     appState.offlineFriends = offlineFriends;
     appState.selectedFriend = null; // Reset selection on refresh.
 }
