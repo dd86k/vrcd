@@ -118,7 +118,12 @@ class FriendsTracker
                 state.platform = v.str;
 
             string loc = state.location;
-            state.online = loc.length > 0 && loc != "offline" && loc != "";
+            // A web-platform friend with a non-offline status is active on
+            // the website even when location is empty (the API omits it).
+            bool activeOnWeb = state.platform == "web" && state.status != "offline";
+            state.online = (loc.length > 0 && loc != "offline" && loc != "") || activeOnWeb;
+            if (activeOnWeb && state.location.length == 0)
+                state.location = "private";
 
             if (const(JSONValue)* v = "worldName" in f)
                 state.worldName = v.str;
