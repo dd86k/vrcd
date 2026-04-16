@@ -965,7 +965,7 @@ private void extractEventFields(string eventType, JSONValue msg, out string user
                 if (v.type == JSONType.object)
                     if (const(JSONValue)* dn = "displayName" in *v)
                         user = dn.str;
-
+        
         switch (eventType)
         {
             case "friend-online":
@@ -1226,45 +1226,6 @@ private FriendInfo parseFriendInfo(JSONValue f)
     return fi;
 }
 
-/// Map VRChat platform strings to readable names.
-private string prettyPlatform(string platform)
-{
-    switch (platform)
-    {
-        case "standalonewindows": return "PC";
-        case "android":          return "Quest";
-        case "ios":              return "iOS";
-        default:                 return platform;
-    }
-}
-
-/// Map VRChat status enum values to readable names.
-private string prettyStatus(string status)
-{
-    switch (status)
-    {
-        case "active":       return "Online";
-        case "join me":      return "Join Me";
-        case "ask me":       return "Ask Me";
-        case "busy":         return "Do Not Disturb";
-        case "offline":      return "Offline";
-        default:             return status;
-    }
-}
-
-/// Map notification type strings to readable names.
-private string prettyNotifType(string notifType)
-{
-    switch (notifType)
-    {
-        case "invite":              return "Invite";
-        case "requestInvite":       return "Request Invite";
-        case "requestInviteResponse": return "Invite Response";
-        case "friendRequest":       return "Friend Request";
-        case "votetokick":          return "Vote to Kick";
-        default:                    return notifType;
-    }
-}
 
 /// Actionable notification types that get stored in the notifications tab.
 private immutable string[] actionableNotifTypes = [
@@ -1431,51 +1392,6 @@ private bool isSelfEventType(string eventType)
     }
 }
 
-private string prettyEventType(string eventType)
-{
-    switch (eventType)
-    {
-        case "friend-online":   return "Online";
-        case "friend-offline":  return "Offline";
-        case "friend-active":   return "Active";
-        case "friend-add":      return "Friend Add";
-        case "friend-delete":   return "Friend Remove";
-        case "friend-update":   return "Friend Update";
-        case "friend-location": return "Friend Location";
-        case "user-update":           return "Update";
-        case "user-location":         return "Location";
-        case "user-badge-assigned":   return "Badge Assigned";
-        case "user-badge-unassigned": return "Badge Unassigned";
-        case "notification":
-        case "notification-v2": return "Notification";
-        case "notification-v2-delete": return "Notif Delete";
-        case "notification-v2-update": return "Notif Update";
-        case "see-notification":      return "Notif Seen";
-        case "hide-notification":     return "Notif Hidden";
-        case "response-notification": return "Notif Response";
-        case "group-joined":        return "Group Joined";
-        case "group-left":          return "Group Left";
-        case "group-role-updated":  return "Group Role";
-        case "group-member-updated": return "Group Member";
-        case "instance-queue-joined":   return "Queue Joined";
-        case "instance-queue-position": return "Queue Position";
-        case "instance-queue-ready":    return "Queue Ready";
-        case "instance-queue-left":     return "Queue Left";
-        case "instance-closed":         return "Instance Closed";
-        case "avatar-change":   return "Avatar Change";
-        case "content-refresh": return "Content Refresh";
-        case "player-joining":  return "Player Joining";
-        case "player-joined":   return "Player Joined";
-        case "player-left":     return "Player Left";
-        case "photo-taken":     return "Photo Taken";
-        case "url-video":       return "URL Video";
-        case "url-string":      return "URL String";
-        case "url-image":       return "URL Image";
-        case "system":          return "System";
-        case "error":           return "Error";
-        default:                return eventType;
-    }
-}
 
 /// Format an ISO 8601 timestamp into "MM-DD HH:MM:SS" for display.
 private string formatTimestamp(string isoTimestamp)
