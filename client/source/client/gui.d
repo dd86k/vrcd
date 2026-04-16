@@ -1076,6 +1076,11 @@ private void extractEventFields(string eventType, JSONValue msg, out string user
                         detail = v.str;
                 return;
 
+            case "avatar-change":
+                // user already extracted from content.displayName above.
+                // Avatar IDs/URLs are opaque; name lookup isn't available.
+                return;
+
             case "content-refresh":
                 if (const(JSONValue)* v = "contentType" in c)
                     if (v.str.length > 0)
@@ -1456,6 +1461,7 @@ private string prettyEventType(string eventType)
         case "instance-queue-ready":    return "Queue Ready";
         case "instance-queue-left":     return "Queue Left";
         case "instance-closed":         return "Instance Closed";
+        case "avatar-change":   return "Avatar Change";
         case "content-refresh": return "Content Refresh";
         case "player-joining":  return "Player Joining";
         case "player-joined":   return "Player Joined";

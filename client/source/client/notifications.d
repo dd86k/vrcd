@@ -20,6 +20,7 @@ immutable string[] feedEventLabels = [
     "Group Joined", "Group Left", "Group Role", "Group Member",
     "Content Refresh", "Queue Position",
     "Player Joining", "Player Joined", "Player Left",
+    "Avatar Change",
 ];
 
 /// Event types that can trigger VR notifications.
