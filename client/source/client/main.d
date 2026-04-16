@@ -188,6 +188,15 @@ int main(string[] args)
         cmdVersion();
         return 0;
     }
+    
+    // HACK: Hide console window on Windows
+    //       - "/SUBSYSTEM:WINDOWS" is proper but leads to linker errors
+    version (Windows)
+    {
+        import core.sys.windows.windows : ShowWindow, GetConsoleWindow, SW_HIDE, FreeConsole, FALSE;
+        if (FreeConsole() == FALSE)
+            ShowWindow(GetConsoleWindow(), SW_HIDE); // Fallback
+    }
 
     // Set up logging.
     LogLevel logLevel = verbose ? LogLevel.trace : LogLevel.info;
