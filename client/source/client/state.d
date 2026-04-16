@@ -5,6 +5,7 @@
 module client.state;
 
 import core.sync.mutex;
+import core.time : MonoTime;
 
 import client.notifications : notifyEventLabels, feedEventLabels;
 
@@ -197,6 +198,10 @@ struct AppState
     char[16] authCode = '\0';
     bool authDialogSubmit;
     bool authDialogCancel;
+
+    // Status bar transient flash for user-action feedback.
+    string statusFlash;
+    MonoTime statusFlashEnd;
 
     void addFeedEntry(long id, string eventType, string user, string detail, string receivedAt,
         string rawContent = "", bool isSelf = false, EventSource source = EventSource.server)

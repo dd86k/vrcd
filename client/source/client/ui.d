@@ -5,6 +5,7 @@
 module client.ui;
 
 import core.stdc.string : memchr;
+import core.time : MonoTime;
 import std.string : toStringz;
 import std.uni : toLower;
 import std.format : sformat;
@@ -27,6 +28,15 @@ private size_t searchLen;
 // Feed pagination state
 private int feedPage;            // 0-indexed current page
 private string lastSearchQuery;  // track changes to reset page
+
+/// Set a transient status bar message that expires after `ms` milliseconds.
+/// Used for user-action feedback (copy, save, refresh, etc.).
+private void setStatusFlash(AppState* state, string msg, int ms = 1500)
+{
+    import core.time : dur;
+    state.statusFlash = msg;
+    state.statusFlashEnd = MonoTime.currTime + dur!"msecs"(ms);
+}
 
 /// Draw the full-window UI layout.
 void drawFullWindow(mu_Context* ctx, AppState* state, int scrollDelta)
@@ -388,21 +398,21 @@ private void drawFeedDetail(mu_Context* ctx, AppState* state, int scrollDelta)
     {
         mu_layout_row(ctx, 2, labelValCols.ptr, 0);
         mu_label(ctx, "Date");
-        clickableValue(ctx, e.receivedAt);
+        clickableValue(ctx, state, e.receivedAt);
     }
 
     if (e.user.length > 0)
     {
         mu_layout_row(ctx, 2, labelValCols.ptr, 0);
         mu_label(ctx, "User");
-        clickableValue(ctx, e.user);
+        clickableValue(ctx, state, e.user);
     }
 
     if (e.detail.length > 0)
     {
         mu_layout_row(ctx, 2, labelValCols.ptr, 0);
         mu_label(ctx, "Detail");
-        clickableValue(ctx, e.detail);
+        clickableValue(ctx, state, e.detail);
     }
 
     if (e.id != 0)
@@ -411,7 +421,7 @@ private void drawFeedDetail(mu_Context* ctx, AppState* state, int scrollDelta)
         mu_label(ctx, "Event ID");
 
         import std.conv : to;
-        clickableValue(ctx, e.id.to!string);
+        clickableValue(ctx, state, e.id.to!string);
     }
 
     // Raw content fields (parsed from JSON).
@@ -448,7 +458,7 @@ private void drawFeedDetail(mu_Context* ctx, AppState* state, int scrollDelta)
 
                     mu_layout_row(ctx, 2, labelValCols.ptr, 0);
                     mu_label(ctx, key);
-                    clickableValue(ctx, valStr);
+                    clickableValue(ctx, state, valStr);
                 }
             }
         }
@@ -682,7 +692,7 @@ private void sectionHeader(mu_Context* ctx, string label)
 
 /// A label whose value can be copied to the clipboard on click.
 /// Highlights on hover to hint interactivity.
-private void clickableValue(mu_Context* ctx, string text)
+private void clickableValue(mu_Context* ctx, AppState* state, string text)
 {
     import bindbc.sdl : SDL_SetClipboardText;
 
@@ -697,6 +707,7 @@ private void clickableValue(mu_Context* ctx, string text)
     if (wasClick && mouseOver)
     {
         SDL_SetClipboardText(toStringz(text));
+        setStatusFlash(state, "  Copied to clipboard");
         wasClick = false;
     }
 }
@@ -747,7 +758,10 @@ private void drawOnlineTab(mu_Context* ctx, AppState* state, int scrollDelta)
     // Refresh button inside the panel.
     mu_layout_row(ctx, 1, fullCol.ptr, 30);
     if (mu_button(ctx, "Refresh"))
+    {
         state.refreshFriendsRequested = true;
+        setStatusFlash(state, "  Refreshing friends...");
+    }
 
     mu_layout_row(ctx, 1, fullCol.ptr, 0);
 
@@ -918,35 +932,35 @@ private void drawFriendProfile(mu_Context* ctx, AppState* state, int scrollDelta
     {
         mu_layout_row(ctx, 2, labelValCols.ptr, 0);
         mu_label(ctx, "Status");
-        clickableValue(ctx, prettyStatus(f.status));
+        clickableValue(ctx, state, prettyStatus(f.status));
     }
 
     if (f.statusDescription.length > 0)
     {
         mu_layout_row(ctx, 2, labelValCols.ptr, 0);
         mu_label(ctx, "Bio");
-        clickableValue(ctx, f.statusDescription);
+        clickableValue(ctx, state, f.statusDescription);
     }
 
     if (f.platform.length > 0)
     {
         mu_layout_row(ctx, 2, labelValCols.ptr, 0);
         mu_label(ctx, "Platform");
-        clickableValue(ctx, prettyPlatform(f.platform));
+        clickableValue(ctx, state, prettyPlatform(f.platform));
     }
 
     if (f.location.length > 0)
     {
         mu_layout_row(ctx, 2, labelValCols.ptr, 0);
         mu_label(ctx, "Location");
-        clickableValue(ctx, f.location == "offline" ? "Offline" : f.location);
+        clickableValue(ctx, state, f.location == "offline" ? "Offline" : f.location);
     }
 
     if (f.userId.length > 0)
     {
         mu_layout_row(ctx, 2, labelValCols.ptr, 0);
         mu_label(ctx, "User ID");
-        clickableValue(ctx, f.userId);
+        clickableValue(ctx, state, f.userId);
     }
 
     mu_end_panel(ctx);
@@ -1298,7 +1312,10 @@ private void drawSettingsTab(mu_Context* ctx, AppState* state, int scrollDelta)
 
     mu_layout_row(ctx, 1, fullCol.ptr, 60);
     if (mu_button(ctx, "Apply Font"))
+    {
         state.fontReloadRequested = true;
+        setStatusFlash(state, "  Font applied");
+    }
 
     // Section: Feed settings.
     spacer(ctx);
@@ -1371,7 +1388,10 @@ private void drawSettingsTab(mu_Context* ctx, AppState* state, int scrollDelta)
 
     mu_layout_row(ctx, 1, fullCol.ptr, 60);
     if (mu_button(ctx, "Save Settings"))
+    {
         state.saveSettingsRequested = true;
+        setStatusFlash(state, "  Settings saved");
+    }
 
     // About this project.
     spacer(ctx);
@@ -1434,6 +1454,13 @@ private void drawStatusBar(mu_Context* ctx, AppState* state)
     //       Worried about constrast
     mu_draw_rect(ctx, r, mu_Color(20, 20, 25, 255));
 
+    // Show transient action-feedback flash when active.
+    if (state.statusFlash.length > 0 && MonoTime.currTime < state.statusFlashEnd)
+    {
+        mu_draw_control_text(ctx, state.statusFlash, r, MU_COLOR_TEXT, 0);
+        return;
+    }
+
     char[256] buf = void;
     // NOTE: Consider sending a VR notification when rate limited
     //       Toggle option
@@ -1441,18 +1468,18 @@ private void drawStatusBar(mu_Context* ctx, AppState* state)
     if (state.rateLimited)
     {
         s = sformat(buf, "  Server: %s | VRChat: %s | RATE LIMITED",
-            state.serverStatus, state.serverStatus);
+            state.serverStatus, state.vrchatStatus);
     }
     else if (state.rateLimitRemaining >= 0 && state.rateLimitMax > 0)
     {
         s = sformat(buf, "  Server: %s | VRChat: %s | API: %d/%d",
-            state.serverStatus, state.serverStatus,
+            state.serverStatus, state.vrchatStatus,
             state.rateLimitRemaining, state.rateLimitMax);
     }
     else
     {
         s = sformat(buf, "  Server: %s | VRChat: %s",
-            state.serverStatus, state.serverStatus);
+            state.serverStatus, state.vrchatStatus);
     }
     if (s) mu_draw_control_text(ctx, s.ptr, r, MU_COLOR_TEXT, 0, cast(int) s.length);
 }
