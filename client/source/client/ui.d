@@ -13,7 +13,7 @@ import ddui;
 
 import client.notifications : notifyEventLabels, feedEventLabels;
 import client.renderer : window_width, window_height;
-import client.gui : wasClick;
+import client.gui : wasClick, requestRepaint;
 import client.state;
 
 /// Active tab selection.
@@ -367,6 +367,7 @@ private void drawFeedDetail(mu_Context* ctx, AppState* state, int scrollDelta)
     if (clickButton(ctx, "< Back"))
     {
         state.selectedFeedEntry = null;
+        requestRepaint();
         mu_end_panel(ctx);
         return;
     }
@@ -1100,6 +1101,7 @@ private void drawStripMetadataPage(mu_Context* ctx, AppState* state)
     if (clickButton(ctx, "< Back"))
     {
         state.stripMetadataPage = false;
+        requestRepaint();
         mu_end_panel(ctx);
         return;
     }

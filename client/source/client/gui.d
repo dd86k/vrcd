@@ -90,6 +90,14 @@ private enum MOMENTUM_MIN = 0.5f;
 /// True for one frame after a non-drag mouseup (a real click).
 bool wasClick;
 
+/// Request a repaint on the next iteration.  Call from ui.d when navigation
+/// changes state that was already committed this frame (e.g. clicking Back).
+void requestRepaint()
+{
+    wakeRequested = true;
+}
+private bool wakeRequested;
+
 int runGui(string host, ushort port, string secret, long sinceId,
     bool hostExplicit, bool portExplicit, bool secretExplicit, bool sinceExplicit,
     bool hardwareAccel)
@@ -604,18 +612,21 @@ private void eventLoop(mu_Context* uictx)
         pendingScrollY = 0;
         mu_end(uictx);
 
-        // If a click happened this frame, push a wake event so the next
-        // iteration renders updated state (e.g. tab change, checkbox toggle)
-        // instead of waiting indefinitely in SDL_WaitEvent.  Tab buttons in
-        // particular change activeTab at the bottom of drawFullWindow, after
-        // the content area was already drawn with the old tab — so the visual
-        // update only lands on the following frame.
-        if (wasClick || appState.pendingActions.length > 0)
+        // Push a wake event when the UI mutated state that won't be visible
+        // until the next frame.  Three sources:
+        //   wasClick:       tab switches and other mu_button changes (activeTab
+        //                   is set at the bottom of drawFullWindow, after the
+        //                   content area was already rendered with the old tab)
+        //   wakeRequested:  clickButton-based navigation (Back buttons) that
+        //                   consumes wasClick before we can see it here
+        //   pendingActions: optimistic notification dismiss
+        if (wasClick || wakeRequested || appState.pendingActions.length > 0)
         {
             SDL_Event wakeEv;
             wakeEv.type = networkEventType;
             SDL_PushEvent(&wakeEv);
         }
+        wakeRequested = false;
 
         // Render UI
         r_clear(mu_Color(30, 30, 35, 255));
