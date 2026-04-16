@@ -650,16 +650,32 @@ private:
 
     static string extractCurrentAvatar(JSONValue c)
     {
+        // Top-level avatar ID (self user-update events send this)
         if (const(JSONValue)* v = "currentAvatar" in c)
             if (v.type == JSONType.string && v.str.length > 0)
                 return v.str;
 
+        // Top-level image URL fallback
+        if (const(JSONValue)* v = "currentAvatarImageUrl" in c)
+            if (v.type == JSONType.string && v.str.length > 0)
+                return v.str;
+
+        // Nested under "user" sub-object. Friend events (friend-update,
+        // friend-location, friend-online, etc.) carry the full User object
+        // here. VRChat omits the avatar ID for friends but includes
+        // currentAvatarImageUrl, so we check both.
         if (const(JSONValue)* v = "user" in c)
+        {
             if (v.type == JSONType.object)
+            {
                 if (const(JSONValue)* ca = "currentAvatar" in *v)
                     if (ca.type == JSONType.string && ca.str.length > 0)
                         return ca.str;
-
+                if (const(JSONValue)* ca = "currentAvatarImageUrl" in *v)
+                    if (ca.type == JSONType.string && ca.str.length > 0)
+                        return ca.str;
+            }
+        }
         return "";
     }
 }
