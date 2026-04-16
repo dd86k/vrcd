@@ -858,7 +858,8 @@ private void drainNetworkMessages()
                     string logUser;
                     if (const(JSONValue)* v = "display_name" in msg)
                         logUser = v.str;
-                    appState.addFeedEntry(0, prettyEventType(logEventType), logUser, "", timeNow());
+                    bool logIsSelf = "is_self" in msg && msg["is_self"].type == JSONType.true_;
+                    appState.addFeedEntry(0, prettyEventType(logEventType), logUser, "", timeNow(), "", logIsSelf);
                     dispatchNotification(logEventType, logUser, "", saved);
                 }
                 break;

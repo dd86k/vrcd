@@ -628,6 +628,8 @@ class LogWatcher
         msg["type"] = "log-event";
         msg["event_type"] = cast(string) event;
         msg["display_name"] = displayName;
+        if (localUser.displayName.length > 0 && displayName == localUser.displayName)
+            msg["is_self"] = true;
 
         queue.pushMessage(msg.toString());
         pushWakeEvent();
