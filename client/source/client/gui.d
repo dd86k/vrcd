@@ -604,10 +604,13 @@ private void eventLoop(mu_Context* uictx)
         pendingScrollY = 0;
         mu_end(uictx);
 
-        // If a button click mutated state this frame (e.g. an optimistic
-        // dismiss), push a wake event so the next iteration renders the
-        // updated state instead of waiting indefinitely in SDL_WaitEvent.
-        if (appState.pendingActions.length > 0)
+        // If a click happened this frame, push a wake event so the next
+        // iteration renders updated state (e.g. tab change, checkbox toggle)
+        // instead of waiting indefinitely in SDL_WaitEvent.  Tab buttons in
+        // particular change activeTab at the bottom of drawFullWindow, after
+        // the content area was already drawn with the old tab — so the visual
+        // update only lands on the following frame.
+        if (wasClick || appState.pendingActions.length > 0)
         {
             SDL_Event wakeEv;
             wakeEv.type = networkEventType;
