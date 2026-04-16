@@ -182,6 +182,9 @@ struct AppState
     int[notifyEventLabels.length] notifyEventFilter = 1;
     bool testNotifyRequested;
 
+    // Picture metadata insertion toggle (int for mu_checkbox compatibility).
+    int insertPictureMetadata = 1;
+
     // Tools tab,  strip metadata
     bool stripMetadataPage;
     string[] droppedFiles;

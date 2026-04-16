@@ -1325,6 +1325,14 @@ private void drawSettingsTab(mu_Context* ctx, AppState* state, int scrollDelta)
     mu_label(ctx, "Page Size");
     mu_slider_ex(ctx, &state.feedPageSize, 10.0f, 100.0f, 5.0f, "%.0f", MU_OPT_ALIGNCENTER);
 
+    // Section: Pictures.
+    spacer(ctx);
+    sectionHeader(ctx, "Pictures");
+
+    mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
+    mu_label(ctx, "Insert picture metadata");
+    mu_checkbox(ctx, "", &state.insertPictureMetadata);
+
     // Section: VR notifications.
     spacer(ctx);
     sectionHeader(ctx, "VR Notifications");

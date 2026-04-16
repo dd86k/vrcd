@@ -133,6 +133,9 @@ int runGui(string host, ushort port, string secret, long sinceId,
         appState.feedEventVisible[i] = cast(int) saved.feedEventVisible[i];
     appState.feedHideSelfEvents = cast(int) saved.feedHideSelfEvents;
 
+    // Load picture metadata setting into appState (bool -> int).
+    appState.insertPictureMetadata = cast(int) saved.insertPictureMetadata;
+
     // Load SDL2.
     SDLSupport sdlStatus = loadSDL();
     if (sdlStatus == SDLSupport.noLibrary)
@@ -591,6 +594,10 @@ private void eventLoop(mu_Context* uictx)
         // Sync notification settings from UI state so toggles take
         // effect immediately without requiring a manual save.
         syncNotifySettings();
+
+        // Sync picture metadata toggle to logWatcher immediately.
+        if (logWatcher)
+            logWatcher.writeMetadata = appState.insertPictureMetadata != 0;
 
         // Handle test notification request from Settings tab.
         if (appState.testNotifyRequested)
@@ -1578,6 +1585,9 @@ private void doSaveSettings()
     foreach (size_t i; 0 .. feedEventLabels.length)
         s.feedEventVisible[i] = appState.feedEventVisible[i] != 0;
     s.feedHideSelfEvents = appState.feedHideSelfEvents != 0;
+
+    // Picture metadata setting (int -> bool).
+    s.insertPictureMetadata = appState.insertPictureMetadata != 0;
 
     // Preserve the runtime-tracked event cursor; the Settings tab
     // doesn't expose it and we don't want to reset it to 0.

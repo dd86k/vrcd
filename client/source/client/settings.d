@@ -34,6 +34,9 @@ struct Settings
     bool notifySound = true;
     bool[notifyEventLabels.length] notifyEventFilter = true;
 
+    // Picture metadata
+    bool insertPictureMetadata = true;
+
     // Feed tab filter (which event types appear in the feed list).
     bool[feedEventLabels.length] feedEventVisible = true;
     bool feedHideSelfEvents;
@@ -123,6 +126,10 @@ Settings loadSettings()
                     s.feedEventVisible[i] = arr[i].type == JSONType.true_;
             }
         }
+        if ("insert_picture_metadata" in json && json["insert_picture_metadata"].type == JSONType.true_)
+            s.insertPictureMetadata = true;
+        else if ("insert_picture_metadata" in json)
+            s.insertPictureMetadata = false;
         if ("feed_hide_self_events" in json && json["feed_hide_self_events"].type == JSONType.true_)
             s.feedHideSelfEvents = true;
         else if ("feed_hide_self_events" in json)
@@ -178,6 +185,7 @@ void saveSettings(Settings s)
         foreach (size_t i; 0 .. feedEventLabels.length)
             feedArr ~= JSONValue(s.feedEventVisible[i]);
         json["feed_event_visible"] = feedArr;
+        json["insert_picture_metadata"] = s.insertPictureMetadata;
         json["feed_hide_self_events"] = s.feedHideSelfEvents;
 
         json["last_event_id"] = s.lastEventId;

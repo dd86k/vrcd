@@ -45,6 +45,7 @@ class LogWatcher
 {
     private Thread thread;
     private shared bool running;
+    shared bool writeMetadata = true;
     private MessageQueue queue;
     private uint sdlEventType;
 
@@ -480,13 +481,16 @@ class LogWatcher
                 return;
 
             string localPath = translateVRChatPath(logPath);
-            string metaJson = buildMetadataJson();
-            logDebugging("LogWatcher: photo-taken logPath=%s localPath=%s metaLen=%d",
-                logPath, localPath, metaJson.length);
+            logDebugging("LogWatcher: photo-taken logPath=%s localPath=%s writeMetadata=%s",
+                logPath, localPath, writeMetadata);
 
             // Write metadata in a background thread so the log watcher keeps up
             // with events while we wait for VRChat to release the file lock.
-            startMetadataWrite(localPath, metaJson);
+            if (writeMetadata)
+            {
+                string metaJson = buildMetadataJson();
+                startMetadataWrite(localPath, metaJson);
+            }
 
             pushPhotoEvent(localPath);
             return;
