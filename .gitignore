@@ -29,3 +29,6 @@ perso/
 # AppImage
 /vrcd-client.AppDir
 *.AppImage
+
+# Flatpak
+.flatpak-builder/

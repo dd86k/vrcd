@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=vrcd Client
+Exec=vrcd_client
+Icon=io.github.dd86k.vrcd
+Type=Application
+Categories=Utility;

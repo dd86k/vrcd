@@ -1,0 +1,189 @@
+app-id: io.github.dd86k.vrcd
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+command: vrcd_client
+
+# Getting Started:
+# - sudo apt install flatpak flatpak-builder
+# - flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+# - flatpak install --system flathub org.freedesktop.Platform//24.08 org.freedesktop.Sdk//24.08
+# - flatpak-builder build-dir --force-clean packaging/flatpak/io.github.dd86k.vrcd.yml
+#   - can add "--user --install" to install
+#   - can also just use "--run"
+# - flatpak-builder --run build-dir packaging/flatpak/io.github.dd86k.vrcd.yml vrcd_client
+
+finish-args:
+  # Display and rendering
+  - --share=ipc
+  - --socket=x11
+  - --socket=wayland
+  - --device=dri
+  # Network: server connection (TCP) and XSOverlay notifications (UDP/localhost)
+  - --share=network
+  # VRChat Steam data: log files and screenshot metadata (read+write).
+  # The actual VRChat compatdata lives inside the Steam library which may be at
+  # any of these standard locations. Custom library paths on other drives are
+  # not covered and would require --filesystem=host or a portal override.
+  - --filesystem=~/.steam
+  - --filesystem=~/.local/share/Steam
+  - --filesystem=~/.var/app/com.valvesoftware.Steam
+
+modules:
+
+  ## LDC2 D compiler (build-only)
+  # Pre-built binary tarball placed under /app/ldc2 and referenced via
+  # prepend-path in the client module. Removed from the final image by cleanup.
+  - name: ldc2
+    buildsystem: simple
+    build-commands:
+      - cp -rp . /app/ldc2
+    cleanup:
+      - /ldc2
+    sources:
+      - type: archive
+        url: https://github.com/ldc-developers/ldc/releases/download/v1.42.0/ldc2-1.42.0-linux-x86_64.tar.xz
+        sha256: a7bc9c956138f558cadf9c962352f59d41c80df6eb3ae3f8039f25be14a69303
+        strip-components: 1
+
+  ## SDL2_ttf
+  # Required for SDL_TTF_2_22 bindbc version. FreeType2 is provided by the SDK.
+  - name: SDL2_ttf
+    buildsystem: cmake-ninja
+    builddir: true
+    config-opts:
+      - -DSDL2TTF_SAMPLES=OFF
+    cleanup:
+      - /include
+      - /lib/cmake
+      - /lib/pkgconfig
+    sources:
+      - type: archive
+        url: https://github.com/libsdl-org/SDL_ttf/releases/download/release-2.22.0/SDL2_ttf-2.22.0.tar.gz
+        sha256: d48cbd1ce475b9e178206bf3b72d56b66d84d44f64ac05803328396234d67723
+
+  ## SDL2_image
+  # Required for SDL_Image_200 bindbc version.
+  - name: SDL2_image
+    buildsystem: cmake-ninja
+    builddir: true
+    config-opts:
+      - -DSDL2IMAGE_SAMPLES=OFF
+      - -DSDL2IMAGE_TESTS=OFF
+    cleanup:
+      - /include
+      - /lib/cmake
+      - /lib/pkgconfig
+    sources:
+      - type: archive
+        url: https://github.com/libsdl-org/SDL_image/releases/download/release-2.8.4/SDL2_image-2.8.4.tar.gz
+        sha256: f7c06a8783952cfe960adccdd3d8472b63ab31475b4390d10cfdcc1aea61238f
+
+  ## vrcd client
+  - name: vrcd-client
+    buildsystem: simple
+    build-options:
+      # Expose the LDC2 toolchain installed above
+      prepend-path: /app/ldc2/bin
+    build-commands:
+      # GitHub archives don't carry the registry-set version field; patch each
+      # package descriptor (dub.json or dub.sdl) so dub's path/version check passes.
+      # Also, DUB supports relaxed JSON (allows trailing commas), which trips up Python's
+      # json module... Read file manually
+      - |
+        python3 <<'PYEOF'
+        import re
+        patches = [
+            ('.dub/packages/bindbc-sdl/1.5.2/bindbc-sdl/dub.sdl',         '1.5.2', 'sdl'),
+            ('.dub/packages/bindbc-common/1.0.5/bindbc-common/dub.json',   '1.0.5', 'json'),
+            ('.dub/packages/bindbc-loader/1.1.5/bindbc-loader/dub.sdl',    '1.1.5', 'sdl'),
+        ]
+        for path, ver, fmt in patches:
+            t = open(path).read()
+            if fmt == 'json':
+                pat = r'"version"\s*:\s*"[^"]*"'
+                rep = '"version": "%s"' % ver
+                if re.search(pat, t):
+                    t = re.sub(pat, rep, t)
+                else:
+                    t = re.sub(r'\{', '{\n  "version": "%s",' % ver, t, count=1)
+            else:
+                pat = r'^version\s+"[^"]*"'
+                rep = 'version "%s"' % ver
+                if re.search(r'^version\s+', t, re.M):
+                    t = re.sub(pat, rep, t, flags=re.M)
+                else:
+                    t = rep + '\n' + t
+            open(path, 'w').write(t)
+        PYEOF
+
+      # --skip-registry=all only blocks the dub registry; git deps are fetched
+      # separately and there is no flag to suppress that. Rewrite them as path
+      # deps pointing at the pre-extracted archives, then drop the git entries
+      # from selections.json so there is no version conflict.
+      - sed -i 's|dependency "ddlogger" repository=.*|dependency "ddlogger" path="../.dub/packages/ddlogger/4ec9bc06bb90c4a7844f62fcfc1429bc7cdb1378/ddlogger"|' client/dub.sdl
+      - sed -i 's|dependency "ddui" repository=.*|dependency "ddui" path="../.dub/packages/ddui/e7eac1f742194be0ce4b8124309eb645e4f51834/ddui"|' client/dub.sdl
+      - |
+        python3 <<'PYEOF'
+        import json
+        with open('client/dub.selections.json', 'w') as f:
+            json.dump({"fileVersion": 1, "versions": {
+                "bindbc-common": "1.0.5",
+                "bindbc-loader": "1.1.5",
+                "bindbc-sdl":    "1.5.2",
+            }}, f, indent=2)
+        PYEOF
+
+      # Offline dub build: registry packages are in .dub/packages/ (--cache=local);
+      # git deps have been rewritten to path deps above.
+      - dub build :client --skip-registry=all --cache=local -b release --compiler=ldc2
+
+      # Install
+      - install -Dm755 client/vrcd_client /app/bin/vrcd_client
+      - install -Dm644 packaging/flatpak/io.github.dd86k.vrcd.desktop /app/share/applications/io.github.dd86k.vrcd.desktop
+      - install -Dm644 packaging/flatpak/io.github.dd86k.vrcd.png /app/share/icons/hicolor/512x512/apps/io.github.dd86k.vrcd.png
+    sources:
+      ## Project source
+      # For local development testing use type:dir. For a Flathub submission
+      # replace with type:git + tag + commit.
+      - type: dir
+        path: ../..
+
+      ## dub registry packages
+      # Each archive is extracted (strip-components:1 drops the top-level
+      # directory) directly into the path dub expects for --cache=local:
+      #   .dub/packages/<name>/<version>/<name>/
+      - type: archive
+        url: https://codeload.github.com/BindBC/bindbc-sdl/tar.gz/refs/tags/v1.5.2
+        sha256: 889a03fa6b014406a2c925bb45ece449a854ef4161c4c30d341e067a29b5885c
+        dest-filename: bindbc-sdl-1.5.2.tar.gz
+        dest: .dub/packages/bindbc-sdl/1.5.2/bindbc-sdl
+        strip-components: 1
+
+      - type: archive
+        url: https://codeload.github.com/BindBC/bindbc-common/tar.gz/refs/tags/v1.0.5
+        sha256: 737c8aafffa0ddd73e3f2efa20dc22354184b47608d39653e895c8a4f46182fc
+        dest-filename: bindbc-common-1.0.5.tar.gz
+        dest: .dub/packages/bindbc-common/1.0.5/bindbc-common
+        strip-components: 1
+
+      - type: archive
+        url: https://codeload.github.com/BindBC/bindbc-loader/tar.gz/refs/tags/v1.1.5
+        sha256: cd64a9fdd00d1ab08f8334747b0b2883d40ff0461ccb248d53e5c5c75058007a
+        dest-filename: bindbc-loader-1.1.5.tar.gz
+        dest: .dub/packages/bindbc-loader/1.1.5/bindbc-loader
+        strip-components: 1
+
+      ## dub git packages
+      # Pinned to the exact commits in client/dub.selections.json.
+      - type: archive
+        url: https://github.com/dd86k/ddlogger/archive/4ec9bc06bb90c4a7844f62fcfc1429bc7cdb1378.tar.gz
+        sha256: 7800c748bd7737b4c009c30a9c3f380b7734bbb17e1e5ec23c6d9aa24588971c
+        dest: .dub/packages/ddlogger/4ec9bc06bb90c4a7844f62fcfc1429bc7cdb1378/ddlogger
+        strip-components: 1
+
+      - type: archive
+        url: https://github.com/dd86k/ddui/archive/e7eac1f742194be0ce4b8124309eb645e4f51834.tar.gz
+        sha256: e626bbaa7464c4d67b9561c3889e88ecfd0f3eb3cd4b6249991b9bcf49ea50c0
+        dest: .dub/packages/ddui/e7eac1f742194be0ce4b8124309eb645e4f51834/ddui
+        strip-components: 1
