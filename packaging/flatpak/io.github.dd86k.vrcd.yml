@@ -1,14 +1,14 @@
 app-id: io.github.dd86k.vrcd
 runtime: org.freedesktop.Platform
-runtime-version: '24.08'
+runtime-version: '25.08'
 sdk: org.freedesktop.Sdk
 command: vrcd_client
 
 # Getting Started:
 # - sudo apt install flatpak flatpak-builder
 # - flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-# - flatpak install --system flathub org.freedesktop.Platform//24.08 org.freedesktop.Sdk//24.08
-# - flatpak-builder build-dir --force-clean packaging/flatpak/io.github.dd86k.vrcd.yml
+# - flatpak install --system flathub org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08
+# - flatpak-builder --force-clean build-dir packaging/flatpak/io.github.dd86k.vrcd.yml
 #   - can add "--user --install" to install
 #   - can also just use "--run"
 # - flatpak-builder --run build-dir packaging/flatpak/io.github.dd86k.vrcd.yml vrcd_client
@@ -53,6 +53,7 @@ modules:
     builddir: true
     config-opts:
       - -DSDL2TTF_SAMPLES=OFF
+      - -DCMAKE_INSTALL_LIBDIR=lib
     cleanup:
       - /include
       - /lib/cmake
@@ -70,6 +71,7 @@ modules:
     config-opts:
       - -DSDL2IMAGE_SAMPLES=OFF
       - -DSDL2IMAGE_TESTS=OFF
+      - -DCMAKE_INSTALL_LIBDIR=lib
     cleanup:
       - /include
       - /lib/cmake
