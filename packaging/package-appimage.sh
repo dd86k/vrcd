@@ -3,7 +3,7 @@
 # Usage: [DC=COMPILER] ./package-appimage.sh [-c COMPILER]
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION="$(cat "${SCRIPT_DIR}/VERSION")"
 BINARY="${SCRIPT_DIR}/client/vrcd_client"
 OUTPUT="${SCRIPT_DIR}/vrcd-client-${VERSION}-x86_64.AppImage"
