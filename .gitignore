@@ -25,3 +25,7 @@ vrcd-test-*
 perso/
 
 *.log
+
+# AppImage
+/vrcd-client.AppDir
+*.AppImage
