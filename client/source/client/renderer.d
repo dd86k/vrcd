@@ -336,6 +336,7 @@ else
         // Liberation Sans,  preferred primary (looks nicer than Noto Sans)
         "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
         "/usr/share/fonts/TTF/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/liberation-fonts/LiberationSans-Regular.ttf",   // freedesktop SDK
         // Noto Sans
         "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
         "/usr/share/fonts/noto/NotoSans-Regular.ttf",
@@ -343,8 +344,10 @@ else
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/TTF/DejaVuSans.ttf",
         "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",                          // freedesktop SDK
         // FreeSans
         "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+        "/usr/share/fonts/gnu-free/FreeSans.ttf",                          // freedesktop SDK
     ];
 }
 
