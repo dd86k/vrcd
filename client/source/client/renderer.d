@@ -309,8 +309,22 @@ void r_set_clip_rect(mu_Rect rect)
 void r_clear(mu_Color clr)
 {
     SDL_GetWindowSize(window, &window_width, &window_height);
-    surface = SDL_GetWindowSurface(window);
+    
+    // sdl2-compat quirk
+    SDL_Surface *newSurface = SDL_GetWindowSurface(window);
+    if (newSurface) surface = newSurface;
     clip = mu_Rect(0, 0, window_width, window_height);
+    
+    __gshared bool r_clear_logonce;
+    if (newSurface == null && r_clear_logonce == false)
+    {
+        import ddlogger : logError;
+        import std.string : fromStringz;
+        logError("SDL_GetWindowSurface failed: %s", fromStringz( SDL_GetError() ));
+        r_clear_logonce = true;
+    }
+    if (surface == null) return;
+    
     SDL_FillRect(surface, null, SDL_MapRGB(surface.format, clr.r, clr.g, clr.b));
 }
 
