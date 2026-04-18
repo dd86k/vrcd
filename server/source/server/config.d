@@ -27,6 +27,9 @@ struct Config
     string apiSecret; /// Shared secret for client auth. Empty = no auth required.
     string logFilePath; /// Optional file to append log output to. Empty = disabled.
     Duration reseedInterval = DEFAULT_RESEED_INTERVAL;
+    /// SQLite datetime modifier for event retention, e.g. "-3 months".
+    /// Empty = keep forever (default).
+    string pruneRetain;
     bool verbose;
 
     /// Bitmask constants for tracking which fields were set by CLI.
@@ -39,6 +42,7 @@ struct Config
         SET_COOKIE_JAR = 1 << 4,
         SET_VERBOSE    = 1 << 5,
         SET_LOG_FILE   = 1 << 6,
+        SET_PRUNE      = 1 << 7,
     }
 
     /// Resolve default paths based on platform.
@@ -149,6 +153,11 @@ struct Config
                         throw new Exception("Invalid value for reseed_interval: " ~ ex.msg);
                     }
                     break;
+                case "prune_retain":
+                    if ((cliSet & SET_PRUNE) == 0)
+                        // NOTE: SQLite format
+                        pruneRetain = parsePruneRetain(val);
+                    break;
                 default:
                     break;
             }
@@ -167,4 +176,100 @@ struct Config
             listenPort = val[sep + 1 .. $].to!ushort;
         }
     }
+}
+
+/// Parse a human-friendly retention string (e.g. "3 months") into a SQLite
+/// datetime modifier (e.g. "-3 months") suitable for use in
+/// `datetime('now', modifier)`. Throws on invalid input.
+///
+/// Supported units: days, weeks, months, years (singular or plural).
+/// Weeks are converted to days since SQLite has no native week modifier.
+string parsePruneRetain(string val)
+{
+    import std.conv : to, ConvException;
+    import std.format : format;
+    import std.string : split, strip;
+    import std.uni : toLower;
+
+    string[] parts = val.strip().split();
+    if (parts.length != 2)
+        throw new Exception("Expected format: AMOUNT UNIT (e.g. '3 months')");
+
+    // Get amount
+    long amount;
+    try
+        amount = parts[0].to!long;
+    catch (ConvException)
+        throw new Exception("Invalid amount '" ~ parts[0] ~ "': must be a positive integer");
+    if (amount <= 0)
+        throw new Exception("Retention amount must be greater than zero");
+
+    // Translate to SQLite happy words
+    string unit;
+    switch (parts[1].toLower())
+    {
+        case "day",   "days":   unit = "days";   break;
+        case "week",  "weeks":  unit = "days"; amount *= 7; break;
+        case "month", "months": unit = "months"; break;
+        case "year",  "years":  unit = "years";  break;
+        default:
+            throw new Exception("Unknown unit '" ~ parts[1] ~ "': use days, weeks, months, or years");
+    }
+
+    return format!"-%d %s"(amount, unit);
+}
+
+unittest
+{
+    // Plural forms.
+    assert(parsePruneRetain("3 months") == "-3 months");
+    assert(parsePruneRetain("30 days")  == "-30 days");
+    assert(parsePruneRetain("1 year")   == "-1 years");
+    assert(parsePruneRetain("2 years")  == "-2 years");
+
+    // Singular forms.
+    assert(parsePruneRetain("1 day")   == "-1 days");
+    assert(parsePruneRetain("1 month") == "-1 months");
+
+    // Weeks expand to days.
+    assert(parsePruneRetain("1 week")  == "-7 days");
+    assert(parsePruneRetain("2 weeks") == "-14 days");
+
+    // Case-insensitive units.
+    assert(parsePruneRetain("3 Months") == "-3 months");
+    assert(parsePruneRetain("5 DAYS")   == "-5 days");
+
+    // Leading/trailing whitespace is stripped.
+    assert(parsePruneRetain("  6 months  ") == "-6 months");
+    
+    // Invalid
+    try
+    {
+        parsePruneRetain("-6 months");
+        assert(false);
+    }
+    catch (Exception) {}
+}
+
+unittest
+{
+    import std.exception : assertThrown;
+
+    // Wrong number of tokens.
+    assertThrown(parsePruneRetain(""));
+    assertThrown(parsePruneRetain("3"));
+    assertThrown(parsePruneRetain("3 months extra"));
+
+    // Non-integer amount.
+    assertThrown(parsePruneRetain("abc months"));
+    assertThrown(parsePruneRetain("1.5 months"));
+
+    // Zero and negative amounts.
+    assertThrown(parsePruneRetain("0 days"));
+    assertThrown(parsePruneRetain("-1 months"));
+
+    // Unknown unit.
+    assertThrown(parsePruneRetain("3 hours"));
+    assertThrown(parsePruneRetain("3 minutes"));
+    assertThrown(parsePruneRetain("3 fortnights"));
 }

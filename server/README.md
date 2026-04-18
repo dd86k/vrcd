@@ -18,8 +18,9 @@ vrcd-server [command] [options]
     -l, --listen    Listen address (host:port, default: 127.0.0.1:9700)
         --secret    Shared secret for client authentication
     -a, --auth      Path to credentials file
-    -v, --verbose   Enable trace logging
-        --version   Show version info
+    -v, --verbose         Enable trace logging
+        --prune-retain    Delete events older than AMOUNT UNIT (e.g. '3 months')
+        --version         Show version info
 ```
 
 Config/data paths default to:
@@ -69,6 +70,11 @@ secret = changeme
 
 # Enable verbose logging
 # verbose = true
+
+# Delete events older than the given period on startup.
+# Supported units: days, weeks, months, years.
+# Unset by default — events are kept forever.
+# prune_retain = 3 months
 ```
 
 ### Credentials file (`credentials.json`)
@@ -96,9 +102,9 @@ If the file doesn't exist, the server will prompt for credentials interactively 
 
 ### Startup Sequence (`cmdRun`)
 
-1. Initialize EventStore (SQLite)
+1. Initialize database (SQLite)
 2. Authenticate with VRChat (credentials file or interactive prompt, 2FA support)
-3. Create per-user database tables
+3. Prune old events (if `prune_retain` is set)
 4. Start TCP API server
 5. Seed FriendsTracker from REST API (paginated)
 6. Initialize WorldCache
@@ -161,7 +167,7 @@ Events arrive from VRChat's WebSocket, get parsed and enriched with display name
 Entry point and command dispatcher. Parses CLI arguments, orchestrates startup, and wires the event callback chain (enrich -> store -> broadcast). Also implements `cmdAuth` for interactive login and `cmdEvents` for querying stored events.
 
 ### `config.d`
-Configuration struct with platform-specific defaults. Fields: listen address/port, database path, credentials path, cookie jar path, shared secret.
+Configuration struct with platform-specific defaults. Fields: listen address/port, database path, credentials path, cookie jar path, shared secret, prune retain period.
 
 ### `events.d`
 Event type definitions and parser.
@@ -186,23 +192,20 @@ All recognized events are stored in SQLite and broadcast to clients. Friend and 
 
 - `avatar-change` -- emitted when the cached `currentAvatar` on a tracked entry (friend or self) changes between updates. Content: `{ userId, displayName, previousAvatar, currentAvatar, isSelf }`. Clients can filter self-originated changes via the `isSelf` flag.
 
-### `store.d`
+### `database.d`
 SQLite persistence layer via arsd-official:sqlite.
 
 - `storeEvent()` -- insert into `ws_events`, returns auto-incremented ID
 - `queryEventsAfter(afterId)` -- fetch events for client catch-up
+- `queryEventsBefore(beforeId)` -- fetch older events for client back-fill
 - `queryRecentEvents()` -- fetch last N events for CLI viewer
-- `initUserTables(userId)` -- create per-user VRCX-compatible tables
+- `pruneOldEvents(modifier)` -- delete events older than a SQLite datetime modifier (e.g. `"-3 months"`); prunes both `ws_events` and `ws_connection_log`
 
 Database tables:
-- **`ws_events`** -- raw event log (id, received_at, event_type, content_json, raw_json)
-- **`ws_connection_log`** -- WebSocket connection/disconnection events
-- **`cache_world`**, **`cache_avatar`** -- VRCX-compatible global caches
-- **Per-user tables** (prefixed with sanitized user ID):
-  - `*_feed_gps`, `*_feed_status`, `*_feed_bio`, `*_feed_avatar` -- change logs
-  - `*_feed_online_offline` -- presence history
-  - `*_friend_log_current`, `*_friend_log_history` -- friend list tracking
-  - `*_notifications`, `*_moderation` -- notification and block/mute logs
+- **`ws_events`** -- canonical append-only event log (id, received_at, event_type, content_json, raw_json)
+- **`ws_connection_log`** -- WebSocket connect/disconnect events; used to detect gaps in the stream
+- **`server_state`** -- key-value store for persistent server state
+- **`cache_world`**, **`cache_avatar`** -- world and avatar metadata caches
 
 ### `friends.d`
 In-memory friend presence tracker. Also tracks the logged-in user (self) in the same map so self-originated events go through the same state-diff machinery; self is filtered out of the friends snapshot sent to clients.

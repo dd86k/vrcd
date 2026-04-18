@@ -72,6 +72,12 @@ void cmdRun(ref Config config)
     }
     logInfo("Authenticated as %s (%s)", authState.displayName, authState.userId);
 
+    if (config.pruneRetain)
+    {
+        long pruned = store.pruneOldEvents(config.pruneRetain);
+        logInfo("Pruned %d old event(s) (retain: %s)", pruned, config.pruneRetain);
+    }
+
     if (apiServer is null)
     {
         // Interactive mode: start API server after auth.
@@ -573,6 +579,11 @@ int main(string[] args)
             config.logFilePath = val;
             cliSet |= Config.SET_LOG_FILE;
         },
+        "prune-retain", "Delete events older than AMOUNT UNIT (e.g. '3 months')", (string _, string val) {
+            import server.config : parsePruneRetain;
+            config.pruneRetain = parsePruneRetain(val);
+            cliSet |= Config.SET_PRUNE;
+        },
         "version",  "Show version page and exit", &cliVersion,
         "help-config", "Show effective config paths and exit", &helpConfig,
     );
@@ -617,6 +628,7 @@ int main(string[] args)
         printline("Secret", config.apiSecret.length > 0 ? "(set)" : "(not set)");
         printline("Log file", config.logFilePath.length > 0 ? config.logFilePath : "(not set)");
         printline("Verbose", config.verbose ? "true" : "false");
+        printline("Prune retain", config.pruneRetain.length > 0 ? config.pruneRetain : "(disabled)");
         return 0;
     }
 

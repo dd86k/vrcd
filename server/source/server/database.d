@@ -125,6 +125,30 @@ class Database
         )) {}
     }
 
+    /// Prune events older than the cutoff expressed as a SQLite datetime
+    /// modifier (e.g. "-3 months"). Returns the number of rows deleted
+    /// across ws_events and ws_connection_log.
+    long pruneOldEvents(string modifier)
+    {
+        logInfo("Pruning events older than datetime('now', '%s')...", modifier);
+        foreach (_; db.query(
+            "DELETE FROM ws_events WHERE received_at < datetime('now', ?)",
+            modifier,
+        )) {}
+        long deleted;
+        foreach (row; db.query("SELECT changes()"))
+            deleted = row[0].to!long;
+
+        foreach (_; db.query(
+            "DELETE FROM ws_connection_log WHERE timestamp < datetime('now', ?)",
+            modifier,
+        )) {}
+        foreach (row; db.query("SELECT changes()"))
+            deleted += row[0].to!long;
+
+        return deleted;
+    }
+
     /// Close the database.
     void close()
     {
