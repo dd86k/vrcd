@@ -8,7 +8,7 @@ command: vrcd_client
 # - sudo apt install flatpak flatpak-builder
 # - flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 # - flatpak install --system flathub org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08
-# - flatpak-builder --force-clean build-dir packaging/flatpak/io.github.dd86k.vrcd.yml
+# - flatpak-builder --state-dir=/tmp/flatpak-state --force-clean /tmp/flatpak-build packaging/flatpak/io.github.dd86k.vrcd.yml
 #   - can add "--user --install" to install
 #   - can also just use "--run"
 # - flatpak-builder --run build-dir packaging/flatpak/io.github.dd86k.vrcd.yml vrcd_client

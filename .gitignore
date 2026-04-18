@@ -32,3 +32,5 @@ perso/
 
 # Flatpak
 .flatpak-builder/
+build-dir/
+run/

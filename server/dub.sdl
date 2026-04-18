@@ -9,6 +9,8 @@ dependency "ddlogger" repository="git+https://github.com/dd86k/ddlogger.git" ver
 dependency "ddcurl" repository="git+https://github.com/dd86k/ddcurl.git" version="92a15ecf80ba661a8f0da9d47b0e10e4fc76c874"
 dependency "arsd-official:sqlite" version="~>11.0"
 
+# "." for dub.selections.json
+# ".." for VERSION
 stringImportPaths "." ".."
 
 subConfiguration "ddcurl" "static"
