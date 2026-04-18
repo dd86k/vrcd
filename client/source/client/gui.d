@@ -181,9 +181,9 @@ int runGui(string host, ushort port, string secret, long sinceId,
         return 1;
     }
 
-    // Init SDL. Software framebuffer is the default; --hardware opts into
-    // SDL's accelerated window-surface path when the backend supports it.
-    SDL_SetHint(SDL_HINT_FRAMEBUFFER_ACCELERATION, hardwareAccel ? "1" : "0");
+    // NOTE: SDL_HINT_FRAMEBUFFER_ACCELERATION is not set because we use
+    //       SDL_CreateRenderer + owned surface instead of SDL_GetWindowSurface
+    //       (which is unsupported on Wayland / sdl2-compat).
     SDL_SetHint(SDL_HINT_VIDEO_HIGHDPI_DISABLED, "0");
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_EVENTS) != 0)
     {
@@ -212,7 +212,7 @@ int runGui(string host, ushort port, string secret, long sinceId,
     SDL_SetWindowMinimumSize(window, 600, 400);
 
     // Init renderer.
-    initiate_renderer();
+    initiate_renderer(hardwareAccel);
 
     // Load system font.
     if (initFont() == false)

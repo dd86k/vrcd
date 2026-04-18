@@ -15,7 +15,9 @@ __gshared SDL_Window* window;
 __gshared int window_width  = 960;
 __gshared int window_height = 640;
 
-__gshared SDL_Surface* surface;
+__gshared SDL_Renderer* sdlRenderer;
+__gshared SDL_Texture*  screenTexture;
+__gshared SDL_Surface*  surface;
 __gshared mu_Rect clip;
 
 // Font fallback chain. fonts[0] is the primary (used for layout metrics);
@@ -27,14 +29,20 @@ __gshared TTF_Font*[] fonts;
 enum FONT_SIZE = 16;
 __gshared int currentFontSize = FONT_SIZE;
 
-void initiate_renderer()
+void initiate_renderer(bool hardwareAccel = false)
 {
-    surface = SDL_GetWindowSurface(window);
+    sdlRenderer = SDL_CreateRenderer(window, -1, hardwareAccel ? 0 : SDL_RENDERER_SOFTWARE);
+    surface = SDL_CreateRGBSurfaceWithFormat(0, window_width, window_height, 32, SDL_PIXELFORMAT_ARGB8888);
+    screenTexture = SDL_CreateTexture(sdlRenderer, SDL_PIXELFORMAT_ARGB8888,
+        SDL_TEXTUREACCESS_STREAMING, window_width, window_height);
     clip = mu_Rect(0, 0, window_width, window_height);
 }
 
 void destroy_renderer()
 {
+    if (screenTexture) SDL_DestroyTexture(screenTexture);
+    if (surface) SDL_FreeSurface(surface);
+    if (sdlRenderer) SDL_DestroyRenderer(sdlRenderer);
 }
 
 void blend_pixel(uint* pixels, int pitch, int x, int y, mu_Color color)
@@ -309,28 +317,23 @@ void r_set_clip_rect(mu_Rect rect)
 void r_clear(mu_Color clr)
 {
     SDL_GetWindowSize(window, &window_width, &window_height);
-    
-    // sdl2-compat quirk
-    SDL_Surface *newSurface = SDL_GetWindowSurface(window);
-    if (newSurface) surface = newSurface;
-    clip = mu_Rect(0, 0, window_width, window_height);
-    
-    __gshared bool r_clear_logonce;
-    if (newSurface == null && r_clear_logonce == false)
+    if (surface.w != window_width || surface.h != window_height)
     {
-        import ddlogger : logError;
-        import std.string : fromStringz;
-        logError("SDL_GetWindowSurface failed: %s", fromStringz( SDL_GetError() ));
-        r_clear_logonce = true;
+        SDL_FreeSurface(surface);
+        SDL_DestroyTexture(screenTexture);
+        surface = SDL_CreateRGBSurfaceWithFormat(0, window_width, window_height, 32, SDL_PIXELFORMAT_ARGB8888);
+        screenTexture = SDL_CreateTexture(sdlRenderer, SDL_PIXELFORMAT_ARGB8888,
+            SDL_TEXTUREACCESS_STREAMING, window_width, window_height);
     }
-    if (surface == null) return;
-    
+    clip = mu_Rect(0, 0, window_width, window_height);
     SDL_FillRect(surface, null, SDL_MapRGB(surface.format, clr.r, clr.g, clr.b));
 }
 
 void r_present()
 {
-    SDL_UpdateWindowSurface(window);
+    SDL_UpdateTexture(screenTexture, null, surface.pixels, surface.pitch);
+    SDL_RenderCopy(sdlRenderer, screenTexture, null, null);
+    SDL_RenderPresent(sdlRenderer);
 }
 
 // Primary font candidates, first one that opens becomes fonts[0] and
