@@ -441,7 +441,7 @@ private:
         string worldName = extractWorldName(c);
         if (worldName.length > 0)
             f.worldName = worldName;
-        else if (loc == "private")
+        else if (loc == "private" || loc == "traveling")
             f.worldName = "";
 
         applyAvatarUpdate(f, c);
