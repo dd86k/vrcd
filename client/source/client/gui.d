@@ -194,13 +194,13 @@ int runGui(string host, ushort port, string secret, long sinceId,
     SDL_SetHint(SDL_HINT_VIDEO_HIGHDPI_DISABLED, "0");
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_EVENTS) != 0)
     {
-        logError("SDL_Init failed: %s", SDL_GetError());
+        logError("SDL_Init failed: %s", fromStringz( SDL_GetError() ));
         return 1;
     }
 
     if (TTF_Init() != 0)
     {
-        logError("TTF_Init failed: %s", TTF_GetError());
+        logError("TTF_Init failed: %s", fromStringz( TTF_GetError() ));
         SDL_Quit();
         return 1;
     }
@@ -215,7 +215,7 @@ int runGui(string host, ushort port, string secret, long sinceId,
         SDL_WINDOW_RESIZABLE);
     if (window is null)
     {
-        logError("SDL_CreateWindow failed: %s", SDL_GetError());
+        logError("SDL_CreateWindow failed: %s", fromStringz( SDL_GetError() ));
         SDL_Quit();
         return 1;
     }
