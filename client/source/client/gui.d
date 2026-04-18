@@ -14,6 +14,7 @@ import core.thread;
 
 import bindbc.sdl;
 import sdl_ttf;
+import sdl_image;
 import ddlogger;
 import ddui;
 
@@ -168,8 +169,14 @@ int runGui(string host, ushort port, string secret, long sinceId,
         return 1;
     }
     
-    // Load SDL2_image
-    SDLImageSupport imgStatus = loadSDLImage(); // includes libSDL2_image-2.0.so.0
+    // Load SDL2_image.
+    SDLImageSupport imgStatus = loadSDLImage();
+    if (imgStatus == SDLImageSupport.noLibrary)
+    {
+        // Debian/Ubuntu ship libSDL2_image-2.0.so.0 which bindbc doesn't
+        // search for by default; try it explicitly.
+        imgStatus = loadSDLImage("libSDL2_image-2.0.so.0");
+    }
     if (imgStatus == SDLImageSupport.noLibrary)
     {
         logError("No SDL2_image library found");
@@ -187,16 +194,19 @@ int runGui(string host, ushort port, string secret, long sinceId,
     SDL_SetHint(SDL_HINT_VIDEO_HIGHDPI_DISABLED, "0");
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_EVENTS) != 0)
     {
-        logError("SDL_Init failed");
+        logError("SDL_Init failed: %s", SDL_GetError());
         return 1;
     }
 
     if (TTF_Init() != 0)
     {
-        logError("TTF_Init failed");
+        logError("TTF_Init failed: %s", TTF_GetError());
         SDL_Quit();
         return 1;
     }
+
+    // Log startup environment info.
+    logStartupInfo();
 
     // Create window.
     window = SDL_CreateWindow("vrcd",
@@ -205,7 +215,7 @@ int runGui(string host, ushort port, string secret, long sinceId,
         SDL_WINDOW_RESIZABLE);
     if (window is null)
     {
-        logError("SDL_CreateWindow failed");
+        logError("SDL_CreateWindow failed: %s", SDL_GetError());
         SDL_Quit();
         return 1;
     }
@@ -1390,6 +1400,63 @@ private void checkPlayerJoining(JSONValue msg, string user)
     catch (Exception e)
     {
         logError("Failed to check player joining: %s", e.msg);
+    }
+}
+
+/// Log platform, video driver, and library versions at startup.
+/// Called after SDL_Init + TTF_Init so all queries are valid.
+private void logStartupInfo()
+{
+    import std.format : sformat;
+
+    // Platform (OS).
+    const(char)* platform = SDL_GetPlatform();
+    logInfo("Platform: %s", platform ? fromStringz( platform ) : "unknown");
+
+    // Video driver (wayland, x11, windows, cocoa, etc.).
+    const(char)* videoDriver = SDL_GetCurrentVideoDriver();
+    logInfo("Video driver: %s", videoDriver ? fromStringz( videoDriver ) : "unknown");
+
+    // SDL2 linked version.
+    char[32] buf = void;
+    SDL_version ver = void;
+    SDL_GetVersion(&ver);
+    logInfo("SDL2: %s", sformat(buf, "%d.%d.%d", ver.major, ver.minor, ver.patch));
+
+    // SDL2_ttf linked version.
+    const(SDL_version)* ttfVer = TTF_Linked_Version();
+    if (ttfVer)
+        logInfo("SDL2_ttf: %s", sformat(buf, "%d.%d.%d", ttfVer.major, ttfVer.minor, ttfVer.patch));
+
+    // SDL2_image linked version.
+    const(SDL_version)* imgVer = IMG_Linked_Version();
+    if (imgVer)
+        logInfo("SDL2_image: %s", sformat(buf, "%d.%d.%d", imgVer.major, imgVer.minor, imgVer.patch));
+
+    // Number of available video drivers.
+    int numDrivers = SDL_GetNumVideoDrivers();
+    if (numDrivers > 1)
+    {
+        char[128] drivers = void;
+        size_t pos;
+        foreach (int i; 0 .. numDrivers)
+        {
+            const(char)* name = SDL_GetVideoDriver(i);
+            if (name is null)
+                continue;
+            const(char)[] nameSlice = fromStringz(name);
+            if (pos > 0 && pos + 2 + nameSlice.length < drivers.length)
+            {
+                drivers[pos .. pos + 2] = ", ";
+                pos += 2;
+            }
+            if (pos + nameSlice.length < drivers.length)
+            {
+                drivers[pos .. pos + nameSlice.length] = nameSlice;
+                pos += nameSlice.length;
+            }
+        }
+        logInfo("Available video drivers: %s", drivers[0 .. pos]);
     }
 }
 

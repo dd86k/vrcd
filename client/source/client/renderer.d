@@ -9,6 +9,7 @@ import std.typecons : Yes;
 import std.utf : decode;
 import bindbc.sdl;
 import sdl_ttf;
+import ddlogger;
 import ddui;
 
 __gshared SDL_Window* window;
@@ -32,9 +33,18 @@ __gshared int currentFontSize = FONT_SIZE;
 void initiate_renderer(bool hardwareAccel = false)
 {
     sdlRenderer = SDL_CreateRenderer(window, -1, hardwareAccel ? 0 : SDL_RENDERER_SOFTWARE);
+    if (sdlRenderer is null)
+        logError("SDL_CreateRenderer failed: %s", SDL_GetError());
+
     surface = SDL_CreateRGBSurfaceWithFormat(0, window_width, window_height, 32, SDL_PIXELFORMAT_ARGB8888);
+    if (surface is null)
+        logError("SDL_CreateRGBSurfaceWithFormat failed: %s", SDL_GetError());
+
     screenTexture = SDL_CreateTexture(sdlRenderer, SDL_PIXELFORMAT_ARGB8888,
         SDL_TEXTUREACCESS_STREAMING, window_width, window_height);
+    if (screenTexture is null)
+        logError("SDL_CreateTexture failed: %s", SDL_GetError());
+
     clip = mu_Rect(0, 0, window_width, window_height);
 }
 
