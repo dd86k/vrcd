@@ -209,6 +209,12 @@ struct AppState
     void addFeedEntry(long id, string eventType, string user, string detail, string receivedAt,
         string rawContent = "", bool isSelf = false, EventSource source = EventSource.server)
     {
+        // Deduplicate server events by ID (guards against catch-up/live race).
+        if (id > 0)
+        {
+            foreach (ref FeedEntry e; feedEntries)
+                if (e.id == id) return;
+        }
         // Prepend (newest first), cap at 2000 entries.
         if (feedEntries.length >= 2000)
             feedEntries = feedEntries[0 .. 1999];
