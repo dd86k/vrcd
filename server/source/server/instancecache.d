@@ -16,6 +16,7 @@ module server.instancecache;
 import core.sync.mutex : Mutex;
 
 import std.json;
+import std.datetime;
 
 import ddlogger;
 import ddcurl;
@@ -102,12 +103,11 @@ class InstanceCache
     /// API mutex. Use from paths that batch multiple VRChat API calls.
     InstanceInfo resolveLocked(string location)
     {
-        import core.stdc.time : time;
         InstanceInfo result;
         if (isResolvable(location) == false)
             return result;
 
-        long now = time(null);
+        long now = Clock.currTime().toUnixTime!long();
         synchronized (cacheMutex)
         {
             CacheEntry* entry = location in cache;
