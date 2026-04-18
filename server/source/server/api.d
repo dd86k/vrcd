@@ -22,7 +22,7 @@ import server.events;
 import server.friends;
 import server.instancecache;
 import server.ratelimit;
-import server.store;
+import server.database;
 import server.worldcache;
 import server.config : DEFAULT_RESEED_INTERVAL;
 
@@ -38,7 +38,7 @@ class APIServer
     private ushort port;
     private string bindAddr;
     private string sharedSecret;
-    private EventStore store;
+    private Database store;
     private Thread acceptThread;
     private bool running;
     private Mutex clientsMutex;
@@ -63,7 +63,7 @@ class APIServer
     private bool firstReseed = true;
     private Duration reseedInterval;
 
-    this(string bindAddr, ushort port, string sharedSecret, EventStore store,
+    this(string bindAddr, ushort port, string sharedSecret, Database store,
         Duration reseedInterval = DEFAULT_RESEED_INTERVAL)
     {
         this.bindAddr = bindAddr;

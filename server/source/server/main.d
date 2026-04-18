@@ -21,7 +21,7 @@ import server.events;
 import server.friends;
 import server.instancecache;
 import server.ratelimit;
-import server.store;
+import server.database;
 import server.worldcache;
 import server.vrchat.auth;
 import server.vrchat.websocket;
@@ -37,7 +37,7 @@ void cmdRun(ref Config config)
         config.credentialsPath, config.cookieJarPath);
 
     // Initialize database.
-    EventStore store = new EventStore(config.dbPath);
+    Database store = new Database(config.dbPath);
     logInfo("Database loaded from '%s'", config.dbPath);
 
     scope HTTPClient client = new HTTPClient();
@@ -71,9 +71,6 @@ void cmdRun(ref Config config)
         exit(1);
     }
     logInfo("Authenticated as %s (%s)", authState.displayName, authState.userId);
-
-    // Create per-user VRCX-compatible tables from VRC user-id.
-    store.initUserTables(authState.userId);
 
     if (apiServer is null)
     {
@@ -183,7 +180,7 @@ void cmdAuth(ref Config config)
 void cmdEvents(ref Config config)
 {
     import std.stdio : writefln;
-    scope EventStore store = new EventStore(config.dbPath);
+    scope Database store = new Database(config.dbPath);
     foreach (row; store.queryRecentEvents(50))
         writefln("#%s [%s] %s: %s", row[0], row[1], row[2], row[3]);
 }
