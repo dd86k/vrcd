@@ -548,6 +548,14 @@ private class ClientHandler
                     }
                     handleAuthResponse(msg);
                     break;
+                case "get_stats":
+                    if (authenticated == false)
+                    {
+                        sendError("Not authenticated");
+                        return;
+                    }
+                    handleGetStats();
+                    break;
                 case "pong":
                     break; // Keepalive response, no action.
                 default:
@@ -915,6 +923,21 @@ private class ClientHandler
         }
 
         server.authDelegator.submitResponse(resp);
+    }
+
+    void handleGetStats()
+    {
+        DatabaseStats stats = server.store.getStats();
+        JSONValue resp = JSONValue([
+            "type": JSONValue("stats"),
+            "event_count": JSONValue(stats.eventCount),
+            "world_cache_count": JSONValue(stats.worldCacheCount),
+            "avatar_cache_count": JSONValue(stats.avatarCacheCount),
+            "db_size_bytes": JSONValue(stats.dbSizeBytes),
+        ]);
+        sendLine(resp.toString() ~ "\n");
+        logDebugging("handleGetStats: events=%d worlds=%d avatars=%d db_bytes=%d",
+            stats.eventCount, stats.worldCacheCount, stats.avatarCacheCount, stats.dbSizeBytes);
     }
 
     void sendError(string message)

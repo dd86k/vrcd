@@ -25,6 +25,15 @@ import server.events;
 // - cache_world      : VRChat world metadata cache (name, author, thumbnail, etc.).
 // - cache_avatar     : VRChat avatar metadata cache.
 
+/// Server statistics returned by Database.getStats().
+struct DatabaseStats
+{
+    long eventCount;
+    long worldCacheCount;
+    long avatarCacheCount;
+    long dbSizeBytes;
+}
+
 /// SQLite database.
 class Database
 {
@@ -147,6 +156,26 @@ class Database
             deleted += row[0].to!long;
 
         return deleted;
+    }
+
+    /// Collect server statistics.
+    DatabaseStats getStats()
+    {
+        DatabaseStats stats;
+        foreach (row; db.query("SELECT COUNT(*) FROM ws_events"))
+            stats.eventCount = row[0].to!long;
+        foreach (row; db.query("SELECT COUNT(*) FROM cache_world"))
+            stats.worldCacheCount = row[0].to!long;
+        foreach (row; db.query("SELECT COUNT(*) FROM cache_avatar"))
+            stats.avatarCacheCount = row[0].to!long;
+        long pageCount;
+        long pageSize;
+        foreach (row; db.query("PRAGMA page_count"))
+            pageCount = row[0].to!long;
+        foreach (row; db.query("PRAGMA page_size"))
+            pageSize = row[0].to!long;
+        stats.dbSizeBytes = pageCount * pageSize;
+        return stats;
     }
 
     /// Close the database.

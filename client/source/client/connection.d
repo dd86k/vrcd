@@ -151,6 +151,15 @@ class ServerConnection
         ]));
     }
 
+    /// Request server statistics.
+    void requestStats()
+    {
+        logDebugging("requestStats");
+        sendMessage(JSONValue([
+            "type": JSONValue("get_stats"),
+        ]));
+    }
+
     /// Send an auth response (credentials or 2FA code) to the server.
     void sendAuthResponse(JSONValue msg)
     {
@@ -370,6 +379,10 @@ private:
                     logError("Server error: %s", errMsg);
                     if (onError)
                         onError(errMsg);
+                    break;
+                case "stats":
+                    if (onEvent)
+                        onEvent(msg);
                     break;
                 case "ping":
                     sendMessage(JSONValue(["type": JSONValue("pong")]));
