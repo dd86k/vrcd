@@ -322,7 +322,7 @@ private void drawFeedTab(mu_Context* ctx, AppState* state, int scrollDelta)
                 mu_draw_rect(ctx, mu_Rect(x + 149, y, 1, h), lineColor);
                 x += 150;
 
-                mu_draw_control_text(ctx, entry.eventType, mu_Rect(x, y, 120, h), MU_COLOR_TEXT, 0);
+                mu_draw_control_text(ctx, prettyEventType(entry.eventType), mu_Rect(x, y, 120, h), MU_COLOR_TEXT, 0);
                 mu_draw_rect(ctx, mu_Rect(x + 119, y, 1, h), lineColor);
                 x += 120;
 
@@ -330,7 +330,20 @@ private void drawFeedTab(mu_Context* ctx, AppState* state, int scrollDelta)
                 mu_draw_rect(ctx, mu_Rect(x + 149, y, 1, h), lineColor);
                 x += 150;
 
-                mu_draw_control_text(ctx, entry.detail, mu_Rect(x, y, rowRect.w - (x - rowRect.x), h), MU_COLOR_TEXT, 0);
+                int detailX = x;
+                int detailW = rowRect.w - (x - rowRect.x);
+                string detailText = entry.detail;
+                if (entry.eventType == "friend-update" && entry.detail.length > 0)
+                {
+                    enum int SWATCH = 14;
+                    enum int SWATCH_MARGIN = 4;
+                    mu_draw_rect(ctx, mu_Rect(detailX + SWATCH_MARGIN, y + (h - SWATCH) / 2, SWATCH, SWATCH),
+                        statusColor(entry.detail));
+                    detailX += SWATCH_MARGIN + SWATCH + 4;
+                    detailW -= SWATCH_MARGIN + SWATCH + 4;
+                    detailText = prettyStatus(entry.detail);
+                }
+                mu_draw_control_text(ctx, detailText, mu_Rect(detailX, y, detailW, h), MU_COLOR_TEXT, 0);
 
                 // Row separator.
                 mu_layout_row(ctx, 1, fullCol.ptr, 1);
@@ -388,7 +401,7 @@ private void drawFeedDetail(mu_Context* ctx, AppState* state, int scrollDelta)
 
     // Event type as header.
     mu_layout_row(ctx, 1, fullCol.ptr, 0);
-    mu_label(ctx, e.eventType);
+    mu_label(ctx, prettyEventType(e.eventType));
 
     // Separator.
     mu_layout_row(ctx, 1, fullCol.ptr, 1);
@@ -653,7 +666,7 @@ private bool passesFilter(ref FeedEntry entry, string query, AppState* state)
     bool typeAllowed = true;
     foreach (size_t i, string label; feedEventLabels)
     {
-        if (entry.eventType == label)
+        if (prettyEventType(entry.eventType) == label)
         {
             typeAllowed = state.feedEventVisible[i] != 0;
             break;
@@ -670,7 +683,7 @@ private bool passesFilter(ref FeedEntry entry, string query, AppState* state)
     string q = toLower(query);
     return toLower(entry.user).canFind(q)
         || toLower(entry.detail).canFind(q)
-        || toLower(entry.eventType).canFind(q);
+        || toLower(prettyEventType(entry.eventType)).canFind(q);
 }
 
 /// Insert vertical spacing.

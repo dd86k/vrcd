@@ -754,7 +754,7 @@ private void drainNetworkMessages()
                                 isSelfEvent = true;
                 }
 
-                appState.addFeedEntry(id, prettyEventType(eventType), user, detail, receivedAt, rawContent, isSelfEvent, EventSource.server);
+                appState.addFeedEntry(id, eventType, user, detail, receivedAt, rawContent, isSelfEvent, EventSource.server);
                 if (catchUpComplete)
                     dispatchNotification(eventType, user, detail, saved);
 
@@ -815,7 +815,7 @@ private void drainNetworkMessages()
                                 isSelfEvent = true;
                 }
 
-                appState.appendOldFeedEntry(id, prettyEventType(eventType),
+                appState.appendOldFeedEntry(id, eventType,
                     user, detail, receivedAt, rawContent, isSelfEvent, EventSource.server);
                 break;
 
@@ -897,14 +897,14 @@ private void drainNetworkMessages()
                         url = v.str;
                     if (const(JSONValue)* v = "display_name" in msg)
                         urlUser = v.str;
-                    appState.addFeedEntry(0, prettyEventType(logEventType), urlUser, url, timeNow(), "", false, EventSource.local);
+                    appState.addFeedEntry(0, logEventType, urlUser, url, timeNow(), "", false, EventSource.local);
                     break;
                 default:
                     string logUser;
                     if (const(JSONValue)* v = "display_name" in msg)
                         logUser = v.str;
                     bool logIsSelf = "is_self" in msg && msg["is_self"].type == JSONType.true_;
-                    appState.addFeedEntry(0, prettyEventType(logEventType), logUser, "", timeNow(), "", logIsSelf, EventSource.local);
+                    appState.addFeedEntry(0, logEventType, logUser, "", timeNow(), "", logIsSelf, EventSource.local);
                     dispatchNotification(logEventType, logUser, "", saved);
                 }
                 break;
@@ -1039,7 +1039,7 @@ private void extractEventFields(string eventType, JSONValue msg, out string user
                 {
                     if (const(JSONValue)* v = "status" in *userObj)
                         if (v.str.length > 0)
-                            detail = prettyStatus(v.str);
+                            detail = v.str;
                 }
                 return;
 
@@ -1408,7 +1408,7 @@ private void checkPlayerJoining(JSONValue msg, string user)
             return;
 
         // Friend is traveling to our instance.
-        appState.addFeedEntry(0, "Player Joining", user, "", timeNow(), "", false, EventSource.local);
+        appState.addFeedEntry(0, "player-joining", user, "", timeNow(), "", false, EventSource.local);
         dispatchNotification("player-joining", user, "", saved);
     }
     catch (Exception e)
