@@ -127,7 +127,7 @@ private int filterIndex(string eventType)
 
 /// Minimum interval between dispatched notifications to avoid flooding
 /// the VR overlay and causing lag.
-private immutable Duration notifyCooldown = dur!"msecs"(1000);
+private immutable Duration notifyCooldown = dur!"msecs"(5000);
 
 /// Timestamp of the last successfully dispatched notification.
 private MonoTime lastNotifyTime;
