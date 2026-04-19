@@ -16,6 +16,7 @@ import client.notifications : notifyEventLabels, feedEventLabels;
 import client.renderer : window_width, window_height;
 import client.gui : wasClick, requestRepaint;
 import client.state;
+import client.stream : tlsAvailable;
 
 /// Active tab selection.
 enum Tab { feed, online, notifications, tools, settings }
@@ -1291,6 +1292,34 @@ private void drawSettingsTab(mu_Context* ctx, AppState* state, int scrollDelta)
     mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
     mu_label(ctx, "Secret");
     mu_textbox(ctx, state.settingsSecret.ptr, cast(int) state.settingsSecret.length);
+
+    mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
+    mu_label(ctx, "TLS");
+    if (tlsAvailable())
+        mu_checkbox(ctx, "", &state.settingsTls);
+    else
+        mu_label(ctx, "(unavailable)");
+
+    mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
+    mu_label(ctx, "Skip certificate verify");
+    if (tlsAvailable())
+        mu_checkbox(ctx, "", &state.settingsTlsSkipVerify);
+    else
+        mu_label(ctx, "(unavailable)");
+
+    mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
+    mu_label(ctx, "Client certificate");
+    if (tlsAvailable())
+        mu_textbox(ctx, state.settingsTlsClientCert.ptr, cast(int) state.settingsTlsClientCert.length);
+    else
+        mu_label(ctx, "(unavailable)");
+
+    mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
+    mu_label(ctx, "Client key");
+    if (tlsAvailable())
+        mu_textbox(ctx, state.settingsTlsClientKey.ptr, cast(int) state.settingsTlsClientKey.length);
+    else
+        mu_label(ctx, "(unavailable)");
 
     // Connect / Reconnect button.
     mu_layout_row(ctx, 1, fullCol.ptr, 60);

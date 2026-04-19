@@ -30,6 +30,21 @@ struct Config
     /// SQLite datetime modifier for event retention, e.g. "-3 months".
     /// Empty = keep forever (default).
     string pruneRetain;
+    /// Path to PEM TLS certificate. Both tlsCertPath and tlsKeyPath must be
+    /// set to enable TLS. Empty = TLS disabled (plain TCP).
+    string tlsCertPath;
+    /// Path to PEM TLS private key.
+    string tlsKeyPath;
+    /// Path to CA certificate for verifying client certificates (mTLS).
+    /// Empty = no client verification.
+    string tlsCaPath;
+    /// When true and tlsCaPath is set, require clients to present a
+    /// valid certificate (mutual TLS).
+    bool tlsVerifyClient;
+    /// Separate port for TLS connections (0 = same port as listenPort).
+    ushort tlsPort;
+    /// When true and TLS is configured, disable the plain TCP listener.
+    bool tlsOnly;
     bool verbose;
 
     /// Bitmask constants for tracking which fields were set by CLI.
@@ -43,6 +58,12 @@ struct Config
         SET_VERBOSE    = 1 << 5,
         SET_LOG_FILE   = 1 << 6,
         SET_PRUNE      = 1 << 7,
+        SET_TLS_CERT   = 1 << 8,
+        SET_TLS_KEY    = 1 << 9,
+        SET_TLS_CA     = 1 << 10,
+        SET_TLS_VERIFY = 1 << 11,
+        SET_TLS_PORT   = 1 << 12,
+        SET_TLS_ONLY   = 1 << 13,
     }
 
     /// Resolve default paths based on platform.
@@ -157,6 +178,34 @@ struct Config
                     if ((cliSet & SET_PRUNE) == 0)
                         // NOTE: SQLite format
                         pruneRetain = parsePruneRetain(val);
+                    break;
+                case "tls_cert":
+                    if ((cliSet & SET_TLS_CERT) == 0)
+                        tlsCertPath = val;
+                    break;
+                case "tls_key":
+                    if ((cliSet & SET_TLS_KEY) == 0)
+                        tlsKeyPath = val;
+                    break;
+                case "tls_ca":
+                    if ((cliSet & SET_TLS_CA) == 0)
+                        tlsCaPath = val;
+                    break;
+                case "tls_verify_client":
+                    if ((cliSet & SET_TLS_VERIFY) == 0)
+                        tlsVerifyClient = (val == "true" || val == "1");
+                    break;
+                case "tls_port":
+                    if ((cliSet & SET_TLS_PORT) == 0)
+                    {
+                        import std.conv : to;
+                        try tlsPort = val.to!ushort;
+                        catch (Exception) {}
+                    }
+                    break;
+                case "tls_only":
+                    if ((cliSet & SET_TLS_ONLY) == 0)
+                        tlsOnly = (val == "true" || val == "1");
                     break;
                 default:
                     break;

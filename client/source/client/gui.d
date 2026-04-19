@@ -19,6 +19,7 @@ import ddlogger;
 import ddui;
 
 import client.connection;
+import client.stream : loadTLS;
 import client.logwatcher;
 import client.notifications;
 import client.renderer;
@@ -136,6 +137,17 @@ int runGui(string host, ushort port, string secret, long sinceId,
 
     // Load picture metadata setting into appState (bool -> int).
     appState.insertPictureMetadata = cast(int) saved.insertPictureMetadata;
+
+    // Load TLS settings into appState (bool -> int).
+    appState.settingsTls = cast(int) saved.useTls;
+    appState.settingsTlsSkipVerify = cast(int) saved.tlsSkipVerify;
+    if (saved.tlsClientCert.length > 0)
+        initSettingsBuf(appState.settingsTlsClientCert, saved.tlsClientCert);
+    if (saved.tlsClientKey.length > 0)
+        initSettingsBuf(appState.settingsTlsClientKey, saved.tlsClientKey);
+
+    // Attempt to load OpenSSL for TLS support.
+    loadTLS();
 
     // Load SDL2.
     SDLSupport sdlStatus = loadSDL();
@@ -273,7 +285,9 @@ int runGui(string host, ushort port, string secret, long sinceId,
 
     // Connect to server in background.
     appState.serverStatus = "Connecting...";
-    conn = new ServerConnection(host, port, secret);
+    conn = new ServerConnection(host, port, secret,
+        saved.useTls, saved.tlsSkipVerify,
+        saved.tlsClientCert, saved.tlsClientKey);
     if (conn.connect())
     {
         appState.connected = true;
@@ -1582,7 +1596,12 @@ private void doReconnect()
     logDebugging("doReconnect: connecting to %s:%d", host, port);
     appState.serverStatus = "Connecting...";
     appState.connected = false;
-    conn = new ServerConnection(host, port, secret);
+    import core.stdc.string : strlen;
+    string clientCert = cast(string) appState.settingsTlsClientCert[0 .. strlen(appState.settingsTlsClientCert.ptr)].idup;
+    string clientKey  = cast(string) appState.settingsTlsClientKey[0 .. strlen(appState.settingsTlsClientKey.ptr)].idup;
+    conn = new ServerConnection(host, port, secret,
+        appState.settingsTls != 0, appState.settingsTlsSkipVerify != 0,
+        clientCert, clientKey);
     if (conn.connect())
     {
         appState.connected = true;
@@ -1632,6 +1651,10 @@ private void doSaveSettings()
         catch (Exception) return cast(ushort) 9700;
     }();
     s.secret = cast(string) appState.settingsSecret[0 .. strlen(appState.settingsSecret.ptr)].idup;
+    s.useTls = appState.settingsTls != 0;
+    s.tlsSkipVerify = appState.settingsTlsSkipVerify != 0;
+    s.tlsClientCert = cast(string) appState.settingsTlsClientCert[0 .. strlen(appState.settingsTlsClientCert.ptr)].idup;
+    s.tlsClientKey  = cast(string) appState.settingsTlsClientKey[0 .. strlen(appState.settingsTlsClientKey.ptr)].idup;
     s.fontPath = cast(string) appState.settingsFontPath[0 .. strlen(appState.settingsFontPath.ptr)].idup;
     s.fontSize = appState.settingsFontSize;
     s.feedPageSize = appState.feedPageSize;

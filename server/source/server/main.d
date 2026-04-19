@@ -22,6 +22,7 @@ import server.friends;
 import server.instancecache;
 import server.ratelimit;
 import server.database;
+import server.stream;
 import server.worldcache;
 import server.vrchat.auth;
 import server.vrchat.websocket;
@@ -36,6 +37,9 @@ void cmdRun(ref Config config)
         config.dbPath, config.listenAddr, config.listenPort,
         config.credentialsPath, config.cookieJarPath);
 
+    // Attempt to load OpenSSL for TLS support.
+    loadTLS();
+
     // Initialize database.
     Database store = new Database(config.dbPath);
     logInfo("Database loaded from '%s'", config.dbPath);
@@ -48,6 +52,37 @@ void cmdRun(ref Config config)
     if (config.apiSecret.length == 0)
         logWarn("No --secret set, clients can connect without authentication");
 
+    // Initialize TLS context if cert and key are configured.
+    void* tlsCtx;
+    bool hasCert = config.tlsCertPath.length > 0;
+    bool hasKey  = config.tlsKeyPath.length > 0;
+    if (hasCert && hasKey)
+    {
+        if (tlsAvailable())
+        {
+            try tlsCtx = createServerTLSContext(config.tlsCertPath, config.tlsKeyPath,
+                    config.tlsCaPath, config.tlsVerifyClient);
+            catch (Exception e)
+            {
+                logError("TLS setup failed: %s", e.msg);
+                exit(1);
+            }
+            logInfo("TLS enabled (cert: %s%s)", config.tlsCertPath,
+                config.tlsVerifyClient ? ", mTLS on" : "");
+        }
+        else
+        {
+            logWarn("TLS not available: OpenSSL could not be loaded");
+            if (config.tlsOnly)
+            {
+                logError("tls_only is set but TLS is not available");
+                exit(1);
+            }
+        }
+    }
+    else if (hasCert || hasKey)
+        logWarn("TLS partially configured; both tls_cert and tls_key are required");
+
     if (headless)
     {
         logInfo("Running in headless mode (no TTY), auth will be delegated to clients");
@@ -57,14 +92,15 @@ void cmdRun(ref Config config)
         delegator = new AuthDelegator();
         apiServer = new APIServer(config.listenAddr, config.listenPort, config.apiSecret, store, config.reseedInterval);
         apiServer.setAuthDelegator(delegator);
+        if (tlsCtx)
+            apiServer.setTLS(tlsCtx, config.tlsPort, config.tlsOnly);
         apiServer.start();
         logInfo("Server started, listening on %s:%d", config.listenAddr, config.listenPort);
     }
 
     // Auth VRChat (may block waiting for client in headless mode).
     AuthState authState;
-    try
-        authState = authenticate(config, client, delegator);
+    try authState = authenticate(config, client, delegator);
     catch (Exception e)
     {
         logError("Authentication failed: %s", e.msg);
@@ -82,6 +118,8 @@ void cmdRun(ref Config config)
     {
         // Interactive mode: start API server after auth.
         apiServer = new APIServer(config.listenAddr, config.listenPort, config.apiSecret, store, config.reseedInterval);
+        if (tlsCtx)
+            apiServer.setTLS(tlsCtx, config.tlsPort, config.tlsOnly);
         apiServer.start();
         logInfo("Server started, listening on %s:%d", config.listenAddr, config.listenPort);
     }
@@ -583,6 +621,31 @@ int main(string[] args)
             import server.config : parsePruneRetain;
             config.pruneRetain = parsePruneRetain(val);
             cliSet |= Config.SET_PRUNE;
+        },
+        "tls-cert", "Path to PEM TLS certificate (enables TLS when paired with --tls-key)", (string _, string val) {
+            config.tlsCertPath = val;
+            cliSet |= Config.SET_TLS_CERT;
+        },
+        "tls-key",  "Path to PEM TLS private key", (string _, string val) {
+            config.tlsKeyPath = val;
+            cliSet |= Config.SET_TLS_KEY;
+        },
+        "tls-ca",   "Path to CA certificate for client verification (mTLS)", (string _, string val) {
+            config.tlsCaPath = val;
+            cliSet |= Config.SET_TLS_CA;
+        },
+        "tls-verify-client", "Require clients to present a valid certificate", () {
+            config.tlsVerifyClient = true;
+            cliSet |= Config.SET_TLS_VERIFY;
+        },
+        "tls-port", "Separate port for TLS connections", (string _, string val) {
+            import std.conv : to;
+            config.tlsPort = val.to!ushort;
+            cliSet |= Config.SET_TLS_PORT;
+        },
+        "tls-only", "Disable plain TCP listener when TLS is active", () {
+            config.tlsOnly = true;
+            cliSet |= Config.SET_TLS_ONLY;
         },
         "version",  "Show version page and exit", &cliVersion,
         "help-config", "Show effective config paths and exit", &helpConfig,

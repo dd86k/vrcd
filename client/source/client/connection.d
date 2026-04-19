@@ -13,28 +13,41 @@ import bindbc.sdl;
 import ddlogger;
 
 import client.state;
+import client.stream;
 
 /// Callback for received events.
 alias EventCallback = void delegate(JSONValue event);
 
 /// TCP connection to the vrcd server.
 /// Handles auth, catch-up, and live event streaming via JSON-L.
+/// Supports optional TLS encryption when compiled with the openssl dependency.
 class ServerConnection
 {
     private string host;
     private ushort port;
     private string secret;
-    private TcpSocket sock;
+    private bool useTls;
+    private bool tlsSkipVerify;
+    private string tlsClientCert;
+    private string tlsClientKey;
+    private Stream stream;
+    private void* sslCtx;
     private string recvBuffer;
     private bool authenticated;
     private EventCallback onEvent;
     private void delegate(string) onError;
 
-    this(string host, ushort port, string secret)
+    this(string host, ushort port, string secret,
+        bool useTls = false, bool tlsSkipVerify = false,
+        string tlsClientCert = null, string tlsClientKey = null)
     {
         this.host = host;
         this.port = port;
         this.secret = secret;
+        this.useTls = useTls;
+        this.tlsSkipVerify = tlsSkipVerify;
+        this.tlsClientCert = tlsClientCert;
+        this.tlsClientKey = tlsClientKey;
     }
 
     /// Set callback for incoming events.
@@ -53,11 +66,11 @@ class ServerConnection
     /// Returns true on success.
     bool connect()
     {
-        logDebugging("connect: attempting %s:%d (secretLen=%d)", host, port, secret.length);
-        sock = new TcpSocket();
+        logDebugging("connect: attempting %s:%d (secretLen=%d tls=%s)", host, port, secret.length, useTls);
+        TcpSocket tcpSock = new TcpSocket();
         try
         {
-            sock.connect(new InternetAddress(host, port));
+            tcpSock.connect(new InternetAddress(host, port));
         }
         catch (SocketException e)
         {
@@ -65,7 +78,35 @@ class ServerConnection
             return false;
         }
 
-        logInfo("Connected to %s:%d", host, port);
+        // Wrap in TLS if requested, or use plain TCP.
+        if (useTls && tlsAvailable())
+        {
+            if (sslCtx is null)
+            {
+                try sslCtx = createClientTLSContext(tlsSkipVerify, tlsClientCert, tlsClientKey);
+                catch (Exception e)
+                {
+                    logError("TLS context creation failed: %s", e.msg);
+                    tcpSock.close();
+                    return false;
+                }
+            }
+            try stream = new TLSClientStream(tcpSock, sslCtx, host);
+            catch (Exception e)
+            {
+                logError("TLS handshake failed with %s:%d: %s", host, port, e.msg);
+                tcpSock.close();
+                return false;
+            }
+        }
+        else
+        {
+            if (useTls)
+                logWarn("TLS requested but not available, connecting without TLS");
+            stream = new PlainStream(tcpSock);
+        }
+
+        logInfo("Connected to %s:%d%s", host, port, useTls ? " (TLS)" : "");
 
         // Send auth.
         sendMessage(JSONValue([
@@ -174,7 +215,7 @@ class ServerConnection
 
         while (true)
         {
-            ptrdiff_t received = sock.receive(buf[]);
+            ptrdiff_t received = stream.receive(buf);
             if (received <= 0)
             {
                 logInfo("Server connection closed");
@@ -201,15 +242,19 @@ class ServerConnection
         }
     }
 
-    /// Close the connection. Calls shutdown first to unblock
-    /// any thread blocked on receive().
+    /// Close the connection, unblocking any thread blocked on receive().
     void close()
     {
-        if (sock)
+        if (stream)
         {
-            try sock.shutdown(SocketShutdown.BOTH);
+            try stream.close();
             catch (Exception) {}
-            sock.close();
+            stream = null;
+        }
+        if (sslCtx)
+        {
+            freeTLSContext(sslCtx);
+            sslCtx = null;
         }
     }
 
@@ -239,7 +284,7 @@ class ServerConnection
 
         while (true)
         {
-            ptrdiff_t received = sock.receive(buf[]);
+            ptrdiff_t received = stream.receive(buf[]);
             if (received <= 0)
             {
                 logInfo("Server connection closed");
@@ -310,7 +355,7 @@ private:
     {
         string line = msg.toString() ~ "\n";
         logTrace("sendMessage: len=%d", line.length);
-        sock.send(cast(const(void)[]) line);
+        stream.send(cast(const(void)[]) line);
     }
 
     /// Block until one complete JSON-L message is received.
@@ -330,7 +375,7 @@ private:
                 continue;
             }
 
-            ptrdiff_t received = sock.receive(buf[]);
+            ptrdiff_t received = stream.receive(buf[]);
             if (received <= 0)
                 return JSONValue(null);
 
@@ -368,8 +413,9 @@ private:
                     break;
                 case "older_fetched":
                     long count;
-                    if ("count" in msg && msg["count"].type == JSONType.integer)
-                        count = msg["count"].get!long;
+                    if (const(JSONValue) *jcount = "count" in msg)
+                        if (jcount.type == JSONType.integer)
+                            count = jcount.integer;
                     logInfo("Fetched %d older events", count);
                     break;
                 case "error":

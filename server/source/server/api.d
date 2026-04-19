@@ -23,6 +23,7 @@ import server.friends;
 import server.instancecache;
 import server.ratelimit;
 import server.database;
+import server.stream;
 import server.worldcache;
 import server.config : DEFAULT_RESEED_INTERVAL;
 
@@ -52,6 +53,9 @@ class APIServer
     private Mutex apiMutex; // Shared VRChat API serializer, injected via setAPIMutex.
     private AuthDelegator authDelegator;
     private RateLimitTracker rateLimiter;
+    private void* sslCtx;
+    private ushort tlsPort;
+    private bool tlsOnly;
 
     // Re-seed worker state.
     private Thread reseedThread;
@@ -124,6 +128,18 @@ class APIServer
         rateLimiter = rl;
     }
 
+    /// Set the TLS context for encrypting client connections.
+    /// When tlsPort is non-zero, TLS runs on a separate port; otherwise
+    /// the main port performs TLS handshakes for every connection.
+    /// When tlsOnly is true and a TLS context is set, the plain TCP
+    /// listener is not started.
+    void setTLS(void* ctx, ushort separatePort = 0, bool onlyTls = false)
+    {
+        sslCtx = ctx;
+        tlsPort = separatePort;
+        tlsOnly = onlyTls;
+    }
+
     /// Set the auth delegator for headless auth delegation to clients.
     void setAuthDelegator(AuthDelegator d)
     {
@@ -158,9 +174,32 @@ class APIServer
         if (running)
             return;
         running = true;
-        acceptThread = new Thread(&acceptLoop);
-        acceptThread.isDaemon = true;
-        acceptThread.start();
+
+        // When a separate TLS port is configured, start two listeners:
+        // one for plain TCP and one for TLS. When tlsOnly is set and TLS
+        // is active, skip the plain listener entirely.
+        bool hasTls = sslCtx !is null;
+        bool separatePort = hasTls && tlsPort != 0 && tlsPort != port;
+
+        if (separatePort)
+        {
+            if (tlsOnly == false)
+            {
+                acceptThread = new Thread({ acceptLoop(port, false); });
+                acceptThread.isDaemon = true;
+                acceptThread.start();
+            }
+            Thread tlsThread = new Thread({ acceptLoop(tlsPort, true); });
+            tlsThread.isDaemon = true;
+            tlsThread.start();
+        }
+        else
+        {
+            // Single port: TLS wraps every connection when context is set.
+            acceptThread = new Thread({ acceptLoop(port, hasTls); });
+            acceptThread.isDaemon = true;
+            acceptThread.start();
+        }
 
         reseedThread = new Thread(&reseedLoop);
         reseedThread.isDaemon = true;
@@ -313,15 +352,16 @@ class APIServer
     }
 
 private:
-    void acceptLoop()
+    void acceptLoop(ushort listenOnPort, bool useTls)
     {
         TcpSocket listener = new TcpSocket();
         listener.setOption(SocketOptionLevel.SOCKET, SocketOption.REUSEADDR, true);
-        listener.bind(new InternetAddress(bindAddr, port));
+        listener.bind(new InternetAddress(bindAddr, listenOnPort));
         listener.listen(5);
         listener.blocking = true;
 
-        logInfo("API server listening on %s:%d", bindAddr, port);
+        logInfo("API server listening on %s:%d%s", bindAddr, listenOnPort,
+            useTls ? " (TLS)" : "");
 
         while (running)
         {
@@ -330,8 +370,24 @@ private:
                 continue;
 
             string remote = clientSock.remoteAddress().toString();
-            logInfo("Client connected from %s", remote);
-            ClientHandler handler = new ClientHandler(clientSock, this);
+            logInfo("Client connected from %s%s", remote, useTls ? " (TLS)" : "");
+
+            Stream stream;
+            if (useTls)
+            {
+                try
+                    stream = new TLSServerStream(clientSock, sslCtx);
+                catch (Exception e)
+                {
+                    logWarn("TLS handshake failed from %s: %s", remote, e.msg);
+                    clientSock.close();
+                    continue;
+                }
+            }
+            else
+                stream = new PlainStream(clientSock);
+
+            ClientHandler handler = new ClientHandler(stream, this);
 
             clientsMutex.lock();
             clients ~= handler;
@@ -410,14 +466,14 @@ private:
 /// Handles a single client connection.
 private class ClientHandler
 {
-    Socket sock;
+    Stream stream;
     APIServer server;
     bool authenticated;
     private Mutex sendMutex;
 
-    this(Socket sock, APIServer server)
+    this(Stream stream, APIServer server)
     {
-        this.sock = sock;
+        this.stream = stream;
         this.server = server;
         this.sendMutex = new Mutex();
     }
@@ -429,7 +485,7 @@ private class ClientHandler
 
         logTrace("sendLine: len=%d", line.length);
         try
-            sock.send(cast(const(void)[]) line);
+            stream.send(cast(const(void)[]) line);
         catch (Exception e)
         {
             logDebugging("sendLine: send failed, client will be cleaned up: %s", e.msg);
@@ -442,7 +498,7 @@ private class ClientHandler
         {
             logInfo("Client disconnected");
             server.removeClient(this);
-            sock.close();
+            stream.close();
         }
 
         char[8192] buf;
@@ -450,7 +506,7 @@ private class ClientHandler
 
         while (true)
         {
-            ptrdiff_t received = sock.receive(buf[]);
+            ptrdiff_t received = stream.receive(buf[]);
             if (received <= 0)
                 break;
 

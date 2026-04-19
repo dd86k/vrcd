@@ -125,6 +125,10 @@ struct AppState
     char[128] settingsHost = '\0';
     char[8] settingsPort = '\0';
     char[128] settingsSecret = '\0';
+    int settingsTls;
+    int settingsTlsSkipVerify;
+    char[256] settingsTlsClientCert = '\0';
+    char[256] settingsTlsClientKey = '\0';
     bool reconnectRequested;
     bool refreshFriendsRequested;
 

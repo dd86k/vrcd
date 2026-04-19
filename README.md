@@ -58,8 +58,8 @@ Related projects:
 See each component's README for dependencies, configuration, and architecture details.
 
 In short:
-- Client needs SDL2 dynamic libraries (SDL2, SDL2_ttf, SDL2_image).
-- Server needs libcurl and sqlite static libraries.
+- Client needs SDL2 dynamic libraries (SDL2, SDL2_ttf, SDL2_image) and optionally OpenSSL.
+- Server needs libcurl and sqlite static libraries and optionally OpenSSL.
 
 ```bash
 # Build server and client

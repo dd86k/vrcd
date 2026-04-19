@@ -19,6 +19,10 @@ struct Settings
     string host = "127.0.0.1";
     ushort port = 9700;
     string secret;
+    bool useTls;
+    bool tlsSkipVerify;
+    string tlsClientCert;
+    string tlsClientKey;
     string fontPath;
     float fontSize = 16.0f;
     float feedPageSize = 25.0f;
@@ -64,86 +68,131 @@ Settings loadSettings()
         string text = readText(path);
         JSONValue json = parseJSON(text);
 
-        if ("host" in json && json["host"].type == JSONType.string)
-            s.host = json["host"].str;
-        if ("port" in json && json["port"].type == JSONType.integer)
-            s.port = cast(ushort) json["port"].get!long;
-        if ("secret" in json && json["secret"].type == JSONType.string)
-            s.secret = json["secret"].str;
-        if ("font_path" in json && json["font_path"].type == JSONType.string)
-            s.fontPath = json["font_path"].str;
-        if ("font_size" in json && json["font_size"].type == JSONType.float_)
-            s.fontSize = json["font_size"].get!double;
-        else if ("font_size" in json && json["font_size"].type == JSONType.integer)
-            s.fontSize = cast(float) json["font_size"].get!long;
-        if ("feed_page_size" in json && json["feed_page_size"].type == JSONType.float_)
-            s.feedPageSize = json["feed_page_size"].get!double;
-        else if ("feed_page_size" in json && json["feed_page_size"].type == JSONType.integer)
-            s.feedPageSize = cast(float) json["feed_page_size"].get!long;
+        if (const(JSONValue) *jhost = "host" in json)
+            if (jhost.type == JSONType.string)
+            s.host = jhost.str;
+        if (const(JSONValue) *jport = "port" in json)
+            if (jport.type == JSONType.integer)
+            s.port = cast(ushort) jport.integer;
+        if (const(JSONValue) *jsecret = "secret" in json)
+            if (jsecret.type == JSONType.string)
+                s.secret = jsecret.str;
+        if (const(JSONValue) *juse_tls = "use_tls" in json)
+            if (juse_tls.type == JSONType.true_)
+                s.useTls = true;
+        if (const(JSONValue) *jtls_skip_verify = "tls_skip_verify" in json)
+            if (jtls_skip_verify.type == JSONType.true_)
+                s.tlsSkipVerify = true;
+        if (const(JSONValue) *jtls_client_cert = "tls_client_cert" in json)
+            if (jtls_client_cert.type == JSONType.string)
+                s.tlsClientCert = jtls_client_cert.str;
+        if (const(JSONValue) *jtls_client_key = "tls_client_key" in json)
+            if (jtls_client_key.type == JSONType.string)
+                s.tlsClientKey = jtls_client_key.str;
+        if (const(JSONValue) *jfont_path = "font_path" in json)
+            if (jfont_path.type == JSONType.string)
+                s.fontPath = jfont_path.str;
+        if (const(JSONValue) *jfont_size = "font_size" in json)
+        {
+            if (jfont_size.type == JSONType.float_)
+                s.fontSize = cast(float) jfont_size.floating;
+            else if (jfont_size.type == JSONType.integer)
+                s.fontSize = cast(float) jfont_size.integer;
+        }
+        if (const(JSONValue) *jfeed_page_size = "feed_page_size" in json)
+        {
+            if (jfeed_page_size.type == JSONType.float_)
+                s.feedPageSize = cast(float) jfeed_page_size.floating;
+            else if (jfeed_page_size.type == JSONType.integer)
+                s.feedPageSize = cast(float) jfeed_page_size.integer;
+        }
 
         // VR notification settings
-        if ("notify_mute" in json && json["notify_mute"].type == JSONType.true_)
-            s.notifyMute = true;
-        if ("notify_xsoverlay" in json && json["notify_xsoverlay"].type == JSONType.true_)
-            s.notifyXSOverlay = true;
-        else if ("notify_xsoverlay" in json)
-            s.notifyXSOverlay = false;
-        if ("notify_ovrtoolkit" in json && json["notify_ovrtoolkit"].type == JSONType.true_)
-            s.notifyOVRToolkit = true;
-        if ("notify_desktop" in json && json["notify_desktop"].type == JSONType.true_)
-            s.notifyDesktop = true;
-        if ("notify_volume" in json && json["notify_volume"].type == JSONType.float_)
-            s.notifyVolume = json["notify_volume"].get!double;
-        else if ("notify_volume" in json && json["notify_volume"].type == JSONType.integer)
-            s.notifyVolume = cast(float) json["notify_volume"].get!long;
-        if ("notify_timeout" in json && json["notify_timeout"].type == JSONType.float_)
-            s.notifyTimeout = json["notify_timeout"].get!double;
-        else if ("notify_timeout" in json && json["notify_timeout"].type == JSONType.integer)
-            s.notifyTimeout = cast(float) json["notify_timeout"].get!long;
-        if ("notify_opacity" in json && json["notify_opacity"].type == JSONType.float_)
-            s.notifyOpacity = json["notify_opacity"].get!double;
-        else if ("notify_opacity" in json && json["notify_opacity"].type == JSONType.integer)
-            s.notifyOpacity = cast(float) json["notify_opacity"].get!long;
-        if ("notify_sound" in json && json["notify_sound"].type == JSONType.true_)
-            s.notifySound = true;
-        else if ("notify_sound" in json)
-            s.notifySound = false;
-        if ("notify_event_filter" in json && json["notify_event_filter"].type == JSONType.array)
+        if (const(JSONValue) *jnotify_mute = "notify_mute" in json)
+            if (jnotify_mute.type == JSONType.true_)
+                s.notifyMute = true;
+        if (const(JSONValue) *jnotify_xsoverlay = "notify_xsoverlay" in json)
         {
-            JSONValue[] arr = json["notify_event_filter"].array;
-            foreach (size_t i; 0 .. notifyEventLabels.length)
+            if (jnotify_xsoverlay.type == JSONType.true_)
+                s.notifyXSOverlay = true;
+        }
+        if (const(JSONValue) *jnotify_ovrtoolkit = "notify_ovrtoolkit" in json)
+            if (jnotify_ovrtoolkit.type == JSONType.true_)
+                s.notifyOVRToolkit = true;
+        if (const(JSONValue) *jnotify_desktop = "notify_desktop" in json)
+            if (jnotify_desktop.type == JSONType.true_)
+                s.notifyDesktop = true;
+        if (const(JSONValue) *jnotify_volume = "notify_volume" in json)
+        {
+            // TODO: There are a lot of patterns like this, make a util function
+            if (jnotify_volume.type == JSONType.float_)
+                s.notifyVolume = cast(float) jnotify_volume.floating;
+            else if (jnotify_volume.type == JSONType.integer)
+                s.notifyVolume = cast(float) jnotify_volume.integer;
+        }
+        if (const(JSONValue) *jnotify_timeout = "notify_timeout" in json)
+        {
+            if (jnotify_timeout.type == JSONType.float_)
+                s.notifyTimeout = cast(float) jnotify_timeout.floating;
+            else if (jnotify_timeout.type == JSONType.integer)
+                s.notifyTimeout = cast(float) jnotify_timeout.integer;
+        }
+        if (const(JSONValue) *jnotify_opacity = "notify_opacity" in json)
+        {
+            if (jnotify_opacity.type == JSONType.float_)
+                s.notifyOpacity = cast(float) jnotify_opacity.floating;
+            else if (jnotify_opacity.type == JSONType.integer)
+                s.notifyOpacity = cast(float) jnotify_opacity.integer;
+        }
+        if (const(JSONValue) *jnotify_sound = "notify_sound" in json)
+            if (jnotify_sound.type == JSONType.true_)
+                s.notifySound = true;
+        if (const(JSONValue) *jnotify_event_filter = "notify_event_filter" in json)
+        {
+            if (jnotify_event_filter.type == JSONType.array)
             {
-                if (i < arr.length)
-                    s.notifyEventFilter[i] = arr[i].type == JSONType.true_;
+                foreach (i, f; jnotify_event_filter.array)
+                {
+                    // was notifyEventLabels.length
+                    if (i >= s.notifyEventFilter.length)
+                        break;
+                    
+                    s.notifyEventFilter[i] = f.type == JSONType.true_;
+                }
             }
         }
-        if ("feed_event_visible" in json && json["feed_event_visible"].type == JSONType.array)
+        if (const(JSONValue) *jfeed_event_visible = "feed_event_visible" in json)
         {
-            JSONValue[] arr = json["feed_event_visible"].array;
-            foreach (size_t i; 0 .. feedEventLabels.length)
+            if (jfeed_event_visible.type == JSONType.array)
             {
-                if (i < arr.length)
-                    s.feedEventVisible[i] = arr[i].type == JSONType.true_;
+                foreach (i, f; jfeed_event_visible.array)
+                {
+                    // was arr.length
+                    if (i >= s.feedEventVisible.length)
+                        break;
+                    
+                    s.feedEventVisible[i] = f.type == JSONType.true_;
+                }
             }
         }
-        if ("insert_picture_metadata" in json && json["insert_picture_metadata"].type == JSONType.true_)
-            s.insertPictureMetadata = true;
-        else if ("insert_picture_metadata" in json)
-            s.insertPictureMetadata = false;
-        if ("feed_hide_self_events" in json && json["feed_hide_self_events"].type == JSONType.true_)
-            s.feedHideSelfEvents = true;
-        else if ("feed_hide_self_events" in json)
-            s.feedHideSelfEvents = false;
-        if ("last_event_id" in json && json["last_event_id"].type == JSONType.integer)
-            s.lastEventId = json["last_event_id"].get!long;
+        if (const(JSONValue) *jinsert_picture_metadata = "insert_picture_metadata" in json)
+            if (jinsert_picture_metadata.type == JSONType.true_)
+                s.insertPictureMetadata = true;
+        if (const(JSONValue) *jfeed_hide_self_events = "feed_hide_self_events" in json)
+            if (jfeed_hide_self_events.type == JSONType.true_)
+                s.feedHideSelfEvents = true;
+        if (const(JSONValue) *jlast_event_id = "last_event_id" in json)
+            if (jlast_event_id.type == JSONType.integer)
+                s.lastEventId = jlast_event_id.integer;
     }
     catch (Exception e)
     {
         logError("Failed to load settings from %s: %s", path, e.msg);
     }
 
-    logDebugging("loadSettings: host=%s port=%d fontSize=%.1f feedPageSize=%.0f",
-        s.host, s.port, s.fontSize, s.feedPageSize);
+    // Log important entries
+    logDebugging("loadSettings: host=%s port=%d last_event_id=%d",
+        s.host, s.port, s.lastEventId);
     return s;
 }
 
@@ -159,10 +208,14 @@ void saveSettings(Settings s)
         if (exists(dir) == false)
             mkdirRecurse(dir);
 
-        JSONValue json = JSONValue(string[string].init);
+        JSONValue json;
         json["host"] = s.host;
         json["port"] = s.port;
         json["secret"] = s.secret;
+        json["use_tls"] = s.useTls;
+        json["tls_skip_verify"] = s.tlsSkipVerify;
+        json["tls_client_cert"] = s.tlsClientCert;
+        json["tls_client_key"] = s.tlsClientKey;
         json["font_path"] = s.fontPath;
         json["font_size"] = s.fontSize;
         json["feed_page_size"] = s.feedPageSize;

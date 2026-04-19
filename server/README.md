@@ -20,6 +20,12 @@ vrcd-server [command] [options]
     -a, --auth      Path to credentials file
     -v, --verbose         Enable trace logging
         --prune-retain    Delete events older than AMOUNT UNIT (e.g. '3 months')
+        --tls-cert        Path to PEM TLS certificate (enables TLS when paired with --tls-key)
+        --tls-key         Path to PEM TLS private key
+        --tls-ca          Path to CA certificate for client verification (mTLS)
+        --tls-verify-client  Require clients to present a valid certificate
+        --tls-port        Separate port for TLS connections
+        --tls-only        Disable plain TCP listener when TLS is active
         --version         Show version info
 ```
 
@@ -75,7 +81,91 @@ secret = changeme
 # Supported units: days, weeks, months, years.
 # Unset by default — events are kept forever.
 # prune_retain = 3 months
+
+# TLS: both tls_cert and tls_key must be set together to enable encryption.
+# Requires OpenSSL 3.x shared libraries at runtime (libssl, libcrypto).
+# tls_cert = /srv/vrcd/server.crt
+# tls_key  = /srv/vrcd/server.key
+
+# Separate port for TLS (like HTTP/HTTPS). 0 or omit = same port.
+# tls_port = 9701
+
+# Disable the plain TCP listener when TLS is active.
+# tls_only = false
+
+# Mutual TLS: require clients to present a certificate signed by this CA.
+# tls_ca = /srv/vrcd/ca.crt
+# tls_verify_client = false
 ```
+
+### TLS
+
+TLS is available when OpenSSL 3.x shared libraries (`libssl.so.3` / `libcrypto.so.3` on Linux, `libssl-3-x64.dll` / `libcrypto-3-x64.dll` on Windows) are present at runtime. No compile-time dependency or build flag is needed. If the libraries can't be loaded, TLS options are simply unavailable.
+
+#### Server-only TLS (one-way)
+
+Encrypts the connection; the server proves its identity to the client.
+
+**1. Generate a self-signed certificate** (suitable for a local network or VPN):
+
+```bash
+openssl req -x509 -newkey rsa:4096 -keyout server.key -out server.crt \
+    -days 3650 -nodes -subj "/CN=vrcd-server"
+```
+
+**2. Configure the server** set `tls_cert` / `tls_key` in `server.conf`, or pass `--tls-cert` / `--tls-key` on the CLI.
+
+**3. Configure the client** enable "TLS" in Settings. For a self-signed cert, also check "Skip certificate verify".
+
+#### Separate TLS port
+
+By default, when TLS is configured the main listen port performs TLS handshakes for every connection. To run plain and TLS on different ports (like HTTP/HTTPS):
+
+```conf
+listen = 0.0.0.0:9700
+tls_port = 9701
+```
+
+This starts two listeners: plain TCP on 9700 and TLS on 9701. To disable the plain listener entirely:
+
+```conf
+tls_only = true
+```
+
+#### Mutual TLS (mTLS)
+
+Both sides verify each other's certificate. The server rejects clients that don't present a valid cert. Useful when you want to restrict access beyond the shared secret.
+
+**1. Create a CA** and sign both server and client certificates:
+
+```bash
+# CA key and cert
+openssl req -x509 -newkey rsa:4096 -keyout ca.key -out ca.crt \
+    -days 3650 -nodes -subj "/CN=vrcd-ca"
+
+# Server cert signed by CA
+openssl req -newkey rsa:4096 -keyout server.key -out server.csr \
+    -nodes -subj "/CN=vrcd-server"
+openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key \
+    -CAcreateserial -out server.crt -days 3650
+
+# Client cert signed by same CA
+openssl req -newkey rsa:4096 -keyout client.key -out client.csr \
+    -nodes -subj "/CN=vrcd-client"
+openssl x509 -req -in client.csr -CA ca.crt -CAkey ca.key \
+    -CAcreateserial -out client.crt -days 3650
+```
+
+**2. Server config:**
+
+```conf
+tls_cert = /srv/vrcd/server.crt
+tls_key  = /srv/vrcd/server.key
+tls_ca   = /srv/vrcd/ca.crt
+tls_verify_client = true
+```
+
+**3. Client settings** enable "TLS", set "Client certificate" and "Client key" to the paths of `client.crt` and `client.key`. "Skip certificate verify" should be enabled unless the server cert's CN/SAN matches the hostname used to connect.
 
 ### Credentials file (`credentials.json`)
 
@@ -167,7 +257,7 @@ Events arrive from VRChat's WebSocket, get parsed and enriched with display name
 Entry point and command dispatcher. Parses CLI arguments, orchestrates startup, and wires the event callback chain (enrich -> store -> broadcast). Also implements `cmdAuth` for interactive login and `cmdEvents` for querying stored events.
 
 ### `config.d`
-Configuration struct with platform-specific defaults. Fields: listen address/port, database path, credentials path, cookie jar path, shared secret, prune retain period.
+Configuration struct with platform-specific defaults. Fields: listen address/port, database path, credentials path, cookie jar path, shared secret, prune retain period, TLS settings (certificate, key, CA, verify client, separate port, TLS-only mode).
 
 ### `events.d`
 Event type definitions and parser.
@@ -225,6 +315,16 @@ World name resolution cache with TTL.
 - `enrichWorldName(event)` -- adds world name to event content
 - TTL: 1 day for successful lookups, 1 hour for failures
 
+### `stream.d`
+Transport abstraction over plain TCP and TLS. OpenSSL is loaded dynamically at runtime.
+
+- `Stream` -- abstract class with `receive`, `send`, `close`.
+- `PlainStream` -- wraps a `std.socket.Socket`.
+- `TLSServerStream` -- wraps `Socket` + dynamically loaded OpenSSL; performs `SSL_accept` on construction.
+- `loadTLS()` -- attempts to load OpenSSL shared libraries; returns true if TLS is available.
+- `tlsAvailable()` -- returns whether OpenSSL was loaded successfully.
+- `createServerTLSContext(certPath, keyPath, caPath, verifyClient)` -- creates and validates a server SSL context from PEM files; optionally enables mutual TLS.
+
 ### `api.d`
 Multi-threaded TCP server implementing the JSON-L client protocol.
 
@@ -281,9 +381,11 @@ These are pulled by DUB when upgrading and building.
 | `ddcurl` | HTTP client and WebSocket (libcurl wrapper) |
 | `arsd-official:sqlite` | SQLite database access |
 
-Packages:
-- Alpine: `sqlite-dev libcurl-dev`
-- Ubuntu: `libsqlite3-dev libcurl4-openssl-dev` (or build libcurl if <8.11)
+System packages:
+- Alpine: `sqlite-dev libcurl-dev` (+ `openssl-dev` for TLS)
+- Ubuntu: `libsqlite3-dev libcurl4-openssl-dev` (+ `libssl-dev` for TLS, and build libcurl if <8.11)
+
+OpenSSL 3.x shared libraries (`libssl.so.3`, `libcrypto.so.3`) are loaded dynamically at runtime for TLS support. They are not a build dependency.
 
 ## Building
 
@@ -294,6 +396,4 @@ dub test :server
 
 > **Note:** If you get linking issues on Windows, try with LDC: `--compiler=ldc2`
 
-Requires libcurl 8.11+ for WebSocket support.
-
-Uses static build by default via ddcurl due to the WS requirement and some platforms providing older versions, allowing custom builds.
+Requires libcurl 8.11+ for WebSocket support. Uses a static libcurl build by default via ddcurl.
