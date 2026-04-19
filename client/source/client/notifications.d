@@ -5,7 +5,9 @@
 module client.notifications;
 
 import std.json;
+import std.socket : UdpSocket, InternetAddress;
 
+import core.time : MonoTime, Duration, dur;
 import ddlogger;
 
 import client.settings;
@@ -123,6 +125,13 @@ private int filterIndex(string eventType)
     return -1;
 }
 
+/// Minimum interval between dispatched notifications to avoid flooding
+/// the VR overlay and causing lag.
+private immutable Duration notifyCooldown = dur!"msecs"(1000);
+
+/// Timestamp of the last successfully dispatched notification.
+private MonoTime lastNotifyTime;
+
 /// Dispatch a notification to all enabled backends.
 void dispatchNotification(string eventType, string user, string detail, Settings settings)
 {
@@ -152,6 +161,20 @@ void dispatchNotification(string eventType, string user, string detail, Settings
             return;
         }
     }
+
+    // Rate-limit: drop notifications that arrive faster than the cooldown.
+    MonoTime now = MonoTime.currTime;
+    if (lastNotifyTime != MonoTime.init)
+    {
+        Duration elapsed = now - lastNotifyTime;
+        if (elapsed < notifyCooldown)
+        {
+            logTrace("dispatchNotification: rate-limited event=%s (elapsed=%dms)",
+                eventType, elapsed.total!"msecs");
+            return;
+        }
+    }
+    lastNotifyTime = now;
 
     logDebugging("dispatchNotification: event=%s title=\"%s\" xs=%s ovrt=%s desktop=%s",
         eventType, title, settings.notifyXSOverlay,
@@ -199,12 +222,16 @@ void sendTestNotification(Settings settings)
 // XSOverlay UDP backend
 //
 
+/// Persistent UDP socket for XSOverlay notifications.
+private UdpSocket xsSocket;
+
+/// Cached target address for XSOverlay.
+private InternetAddress xsAddr;
+
 /// Send a notification via XSOverlay UDP protocol (127.0.0.1:42069).
 /// Also compatible with WayVR on Linux.
 private void sendXSOverlay(string title, string body_, Settings settings)
 {
-    import std.socket : UdpSocket, InternetAddress;
-
     // Height heuristic from VRCX.
     float height = 110.0f;
     if (body_.length > 300)
@@ -226,15 +253,24 @@ private void sendXSOverlay(string title, string body_, Settings settings)
 
     try
     {
-        UdpSocket sock = new UdpSocket();
-        scope(exit) sock.close();
-        InternetAddress addr = new InternetAddress("127.0.0.1", 42069);
+        // Lazily create and reuse a single UDP socket
+        if (xsSocket is null)
+        {
+            xsSocket = new UdpSocket();
+            xsAddr = new InternetAddress("127.0.0.1", 42069);
+        }
         string json = msg.toString();
-        sock.sendTo(cast(const(ubyte)[]) json, addr);
+        xsSocket.sendTo(cast(const(ubyte)[]) json, xsAddr);
     }
     catch (Exception e)
     {
         logError("XSOverlay send failed: %s", e.msg);
+        // Socket may be in a bad state; discard so next call recreates it.
+        if (xsSocket)
+        {
+            try xsSocket.close(); catch (Exception) {}
+            xsSocket = null;
+        }
     }
 }
 
