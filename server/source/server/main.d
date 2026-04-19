@@ -255,10 +255,10 @@ void printline(string field, string value)
 void cliVersion()
 {
     import core.stdc.stdlib : exit;
+    import server.config : VERSION;
     static immutable string BUILT       = "Built: " ~ __TIMESTAMP__;
     static immutable string COMPILER    = __VENDOR__ ~ " " ~ DVER!__VERSION__;
-    enum APP_VERSION = import("VERSION");
-    printline("vrcd-server",    APP_VERSION);
+    printline("vrcd-server",    VERSION);
     printline(null,             BUILT);
     printline("License",        "BSD-3-Clause-Clear");
     printline(null,             "Copyright 2026 (c) dd86k <dd@dax.moe>");

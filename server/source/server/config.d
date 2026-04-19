@@ -8,12 +8,15 @@ import core.time : dur, Duration;
 import std.path : buildPath, expandTilde;
 import std.string : strip, indexOf, lineSplitter;
 
+/// Server version
+immutable string VERSION = import("VERSION");
+
 /// Default friend state reseed interval.
 ///
 /// This variable dictates how often to re-fetch all friends from the VRChat API.
 ///
 /// Used in config and api.
-immutable DEFAULT_RESEED_INTERVAL = dur!"hours"(2);
+immutable Duration DEFAULT_RESEED_INTERVAL = dur!"hours"(2);
 
 /// Server configuration loaded from file or CLI args.
 struct Config

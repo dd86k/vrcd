@@ -99,8 +99,8 @@ void cmdVersion()
     import std.format : format, sformat;
     
     // Version, built date
-    enum APP_VERSION = import("VERSION");
-    printLine("vrcd-client", APP_VERSION);
+    import client.config : VERSION;
+    printLine("vrcd-client", VERSION);
     static immutable string BUILT_DATE = "Built: " ~ __TIMESTAMP__;
     printLine(null, BUILT_DATE);
     

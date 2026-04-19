@@ -1436,8 +1436,8 @@ private void drawSettingsTab(mu_Context* ctx, AppState* state, int scrollDelta)
 
     mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
     mu_label(ctx, "Version");
-    enum APP_VERSION = import("VERSION");
-    mu_label(ctx, APP_VERSION);
+    import client.config : VERSION;
+    mu_label(ctx, VERSION);
 
     mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
     mu_label(ctx, "Built");
