@@ -4,8 +4,9 @@
 /// License: BSD-3-Clause-Clear
 module server.api;
 
+import core.atomic : atomicLoad, atomicStore;
 import core.thread;
-import core.time : Duration, MonoTime;
+import core.time : Duration, MonoTime, dur;
 import core.sync.mutex;
 import core.sync.condition;
 
@@ -463,6 +464,11 @@ private:
     }
 }
 
+/// How often to send a keepalive ping to connected clients.
+private enum Duration PING_INTERVAL = dur!"seconds"(30);
+/// How long to wait for a pong before treating the client as dead.
+private enum Duration PONG_DEADLINE  = dur!"seconds"(15);
+
 /// Handles a single client connection.
 private class ClientHandler
 {
@@ -470,12 +476,17 @@ private class ClientHandler
     APIServer server;
     bool authenticated;
     private Mutex sendMutex;
+    private Mutex pongMutex;
+    private MonoTime lastPongAt;
+    private shared bool disconnected;
 
     this(Stream stream, APIServer server)
     {
         this.stream = stream;
         this.server = server;
         this.sendMutex = new Mutex();
+        this.pongMutex = new Mutex();
+        this.lastPongAt = MonoTime.currTime;
     }
 
     void sendLine(string line)
@@ -494,8 +505,13 @@ private class ClientHandler
 
     void run()
     {
+        Thread pingThread = new Thread(&pingLoop);
+        pingThread.isDaemon = true;
+        pingThread.start();
+
         scope(exit)
         {
+            atomicStore(disconnected, true);
             logInfo("Client disconnected");
             server.removeClient(this);
             stream.close();
@@ -613,7 +629,11 @@ private class ClientHandler
                     handleGetStats();
                     break;
                 case "pong":
-                    break; // Keepalive response, no action.
+                    pongMutex.lock();
+                    lastPongAt = MonoTime.currTime;
+                    pongMutex.unlock();
+                    logTrace("processMessage: pong received");
+                    break;
                 default:
                     sendError("Unknown message type: " ~ type);
                     break;
@@ -994,6 +1014,39 @@ private class ClientHandler
         sendLine(resp.toString() ~ "\n");
         logDebugging("handleGetStats: events=%d worlds=%d avatars=%d db_bytes=%d",
             stats.eventCount, stats.worldCacheCount, stats.avatarCacheCount, stats.dbSizeBytes);
+    }
+
+    private void pingLoop()
+    {
+        while (true)
+        {
+            Thread.sleep(PING_INTERVAL);
+
+            if (atomicLoad(disconnected))
+                return;
+
+            // Record when the ping was sent, then send it.
+            MonoTime pingSentAt = MonoTime.currTime;
+            sendLine(`{"type":"ping"}` ~ "\n");
+
+            Thread.sleep(PONG_DEADLINE);
+
+            if (atomicLoad(disconnected))
+                return;
+
+            // Check whether a pong arrived since the ping was sent.
+            pongMutex.lock();
+            bool gotPong = lastPongAt >= pingSentAt;
+            pongMutex.unlock();
+
+            if (gotPong == false)
+            {
+                logWarn("Client pong timeout (%ds deadline), closing stale connection",
+                    PONG_DEADLINE.total!"seconds");
+                stream.close();
+                return;
+            }
+        }
     }
 
     void sendError(string message)
