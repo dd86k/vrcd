@@ -222,8 +222,12 @@ class FriendsTracker
             JSONValue[] offlineList;
 
             // Group online friends by location.
+            // Use the canonical instance ID (everything before the first '~') as
+            // the grouping key so friends in the same physical instance are never
+            // split into two groups due to differing nonces or tag orderings that
+            // can appear between REST-seed data and live WebSocket events.
             JSONValue[][string] byLocation;
-            string[string] locationWorldName; // location -> worldName
+            string[string] locationWorldName; // canonical location -> worldName
 
             foreach (ref FriendState f; friends)
             {
@@ -240,9 +244,10 @@ class FriendsTracker
                     continue;
                 }
 
-                byLocation[f.location] ~= fObj;
+                string key = canonicalLocation(f.location);
+                byLocation[key] ~= fObj;
                 if (f.worldName.length > 0)
-                    locationWorldName[f.location] = f.worldName;
+                    locationWorldName[key] = f.worldName;
             }
 
             foreach (string loc, JSONValue[] friendObjs; byLocation)
@@ -646,6 +651,21 @@ private:
                     if (f.type == JSONType.string)
                         return f.str;
         return "";
+    }
+
+    /// Strip per-user location modifiers (nonce, region tags, etc.) to get
+    /// the canonical instance ID: "wrld_xxx:NNNNN". Two friends in the same
+    /// physical instance must share this prefix even if their full location
+    /// strings differ (e.g. different ~nonce values from separate invites, or
+    /// a difference between REST-seed data and live WebSocket event format).
+    static string canonicalLocation(string location)
+    {
+        import std.string : indexOf;
+        // "private", "traveling", "offline" have no '~'; return as-is.
+        if (location.length < 5 || location[0 .. 5] != "wrld_")
+            return location;
+        ptrdiff_t tilde = location.indexOf('~');
+        return tilde > 0 ? location[0 .. tilde] : location;
     }
 
     static string extractCurrentAvatar(JSONValue c)
