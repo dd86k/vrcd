@@ -793,10 +793,8 @@ private void drawOnlineTab(mu_Context* ctx, AppState* state, int scrollDelta)
             if (grp.instanceId == "private")
                 continue;
             string baseName = grp.worldName.length > 0 ? grp.worldName : grp.instanceId;
-            const(char)[] header = baseName;
-            if (grp.nUsers >= 0 && grp.capacity > 0)
-                header = sformat(headerBuf[], "%s (%d/%d)",
-                    baseName, grp.nUsers, grp.capacity);
+            const(char)[] header = grp.nUsers >= 0 && grp.capacity > 0 ?
+                sformat(headerBuf, "%s (%d/%d)", baseName, grp.nUsers, grp.capacity) : baseName;
             if (mu_header_ex(ctx, cast(string)header, MU_OPT_EXPANDED))
             {
                 foreach (ref FriendInfo f; grp.friends)
@@ -868,19 +866,17 @@ private void drawFriendCard(mu_Context* ctx, AppState* state, ref FriendInfo f)
     mu_draw_control_text(ctx, f.displayName,
         mu_Rect(innerX, r.y + 6, innerW, 22), MU_COLOR_TEXT, 0);
 
-    char[128] subBuf;
+    char[128] buffer = void;
     string sub;
     if (f.status.length > 0 && f.platform.length > 0)
-        sub = cast(string) sformat(subBuf, "%s  -  %s",
-            prettyStatus(f.status), prettyPlatform(f.platform));
+        sub = cast(string) sformat(buffer, "%s  -  %s", prettyStatus(f.status), prettyPlatform(f.platform));
     else if (f.status.length > 0)
         sub = prettyStatus(f.status);
     else if (f.platform.length > 0)
         sub = prettyPlatform(f.platform);
 
     if (sub.length > 0)
-        mu_draw_control_text(ctx, sub,
-            mu_Rect(innerX, r.y + 30, innerW, 20), MU_COLOR_TEXT, 0);
+        mu_draw_control_text(ctx, sub, mu_Rect(innerX, r.y + 30, innerW, 20), MU_COLOR_TEXT, 0);
 
     if (wasClick && mouseOver)
         state.selectedFriend = &f;
@@ -1132,7 +1128,7 @@ private void drawToolsTab(mu_Context* ctx, AppState* state)
 private void drawStripMetadataPage(mu_Context* ctx, AppState* state)
 {
     import std.path : baseName;
-    import std.format : format;
+    import std.format : sformat;
 
     static immutable int[1] fullCol = [-1];
 
@@ -1149,11 +1145,12 @@ private void drawStripMetadataPage(mu_Context* ctx, AppState* state)
     }
 
     // Header line.
+    char[64] buffer = void;
     mu_layout_row(ctx, 1, fullCol.ptr, 0);
     if (state.droppedFiles.length == 0)
         mu_label(ctx, "Drop one or more PNG files onto this window.");
     else
-        mu_label(ctx, format("Queue: %d file(s)", state.droppedFiles.length));
+        mu_label(ctx, cast(string) sformat(buffer, "Queue: %d file(s)", state.droppedFiles.length));
 
     // Queue list: one row per file with a remove button.
     int[2] queueCols = [-80, -1];
@@ -1469,7 +1466,7 @@ private void drawSettingsTab(mu_Context* ctx, AppState* state, int scrollDelta)
     mu_label(ctx, "https://github.com/dd86k/vrcd");
 
     import std.format : format;
-    static immutable string COMPILER = __VENDOR__~format(" %u.%u", __VERSION__ / 1000, __VERSION__ % 1000);
+    static immutable string COMPILER = format("%s %u.%u", __VENDOR__, __VERSION__ / 1000, __VERSION__ % 1000);
     mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
     mu_label(ctx, "Compiler");
     mu_label(ctx, COMPILER);

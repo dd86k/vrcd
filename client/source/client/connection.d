@@ -345,7 +345,7 @@ class ServerConnection
 private:
     static void pushWakeEvent(uint sdlEventType)
     {
-        SDL_Event ev;
+        SDL_Event ev = void;
         ev.type = sdlEventType;
         SDL_PushEvent(&ev);
     }

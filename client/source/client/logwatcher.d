@@ -693,7 +693,7 @@ class LogWatcher
     /// Push an SDL event to wake the main thread.
     private void pushWakeEvent()
     {
-        SDL_Event ev;
+        SDL_Event ev = void;
         ev.type = sdlEventType;
         SDL_PushEvent(&ev);
     }

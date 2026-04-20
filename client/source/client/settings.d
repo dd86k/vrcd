@@ -70,10 +70,10 @@ Settings loadSettings()
 
         if (const(JSONValue) *jhost = "host" in json)
             if (jhost.type == JSONType.string)
-            s.host = jhost.str;
+                s.host = jhost.str;
         if (const(JSONValue) *jport = "port" in json)
             if (jport.type == JSONType.integer)
-            s.port = cast(ushort) jport.integer;
+                s.port = cast(ushort) jport.integer;
         if (const(JSONValue) *jsecret = "secret" in json)
             if (jsecret.type == JSONType.string)
                 s.secret = jsecret.str;

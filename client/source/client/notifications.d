@@ -241,26 +241,26 @@ private void sendXSOverlay(string title, string body_, Settings settings)
     else if (body_.length > 100)
         height = 150.0f;
 
-    JSONValue msg = JSONValue(string[string].init);
-    msg["messageType"] = 1;
-    msg["title"] = title;
-    msg["content"] = body_;
-    msg["timeout"] = settings.notifyTimeout;
-    msg["height"] = height;
-    msg["volume"] = settings.notifySound ? settings.notifyVolume : -1.0f;
-    msg["sourceApp"] = "vrcd";
-    msg["opacity"] = settings.notifyOpacity;
-
     try
     {
         // Lazily create and reuse a single UDP socket
         if (xsSocket is null)
         {
             xsSocket = new UdpSocket();
-            xsAddr = new InternetAddress("127.0.0.1", 42069);
+            xsAddr   = new InternetAddress("127.0.0.1", 42069);
         }
-        string json = msg.toString();
-        xsSocket.sendTo(cast(const(ubyte)[]) json, xsAddr);
+
+        JSONValue msg;
+        msg["messageType"]  = 1;
+        msg["title"]        = title;
+        msg["content"]      = body_;
+        msg["timeout"]      = settings.notifyTimeout;
+        msg["height"]       = height;
+        msg["volume"]       = settings.notifySound ? settings.notifyVolume : -1.0f;
+        msg["sourceApp"]    = "vrcd";
+        msg["opacity"]      = settings.notifyOpacity;
+
+        xsSocket.sendTo(cast(const(ubyte)[]) msg.toString(), xsAddr);
     }
     catch (Exception e)
     {
@@ -295,13 +295,13 @@ version (Windows)
             return;
 
         // Build the inner payload.
-        JSONValue inner = JSONValue(string[string].init);
+        JSONValue inner;
         inner["title"] = title;
         inner["body"] = body_;
         inner["icon"] = null;
 
         // Build the envelope.
-        JSONValue envelope = JSONValue(string[string].init);
+        JSONValue envelope;
         envelope["messageType"] = "SendNotification";
         envelope["json"] = inner.toString();
 
@@ -351,8 +351,8 @@ version (Windows)
             ovrtSocket.send(cast(const(ubyte)[]) request);
 
             // Read upgrade response (consume until empty line).
-            ubyte[1024] buf;
-            ptrdiff_t n = ovrtSocket.receive(buf[]);
+            ubyte[1024] buf = void;
+            ptrdiff_t n = ovrtSocket.receive(buf);
             if (n <= 0)
             {
                 closeOVRT();
@@ -382,7 +382,7 @@ version (Windows)
     {
         import std.random : unpredictableSeed;
 
-        ubyte[14] header; // max header: 2 + 8 + 4 = 14
+        ubyte[14] header = void; // max header: 2 + 8 + 4 = 14
         size_t headerLen;
 
         // Opcode 0x1 (text), FIN bit set, mask bit set.
@@ -397,7 +397,7 @@ version (Windows)
         {
             header[1] = 0x80 | 126;
             header[2] = cast(ubyte)(payload.length >> 8);
-            header[3] = cast(ubyte)(payload.length & 0xFF);
+            header[3] = cast(ubyte)(payload.length);
             headerLen = 4;
         }
         else

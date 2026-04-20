@@ -12,6 +12,8 @@ import std.string : fromStringz;
 
 import core.thread;
 
+import core.stdc.string : strlen;
+
 import bindbc.sdl;
 import sdl_ttf;
 import sdl_image;
@@ -83,7 +85,7 @@ private enum DRAG_THRESHOLD = 8;
 /// Momentum velocity (pixels per frame, positive = scroll down).
 private float momentumVY = 0.0f;
 
-/// Friction multiplier applied each frame (0.0–1.0).
+/// Friction multiplier applied each frame (0.0-1.0).
 private enum MOMENTUM_FRICTION = 0.92f;
 
 /// Stop momentum when velocity falls below this.
@@ -92,7 +94,7 @@ private enum MOMENTUM_MIN = 0.5f;
 /// True for one frame after a non-drag mouseup (a real click).
 bool wasClick;
 
-/// Request a repaint on the next iteration.  Call from ui.d when navigation
+/// Request a repaint on the next iteration. Call from ui.d when navigation
 /// changes state that was already committed this frame (e.g. clicking Back).
 void requestRepaint()
 {
@@ -203,6 +205,8 @@ int runGui(string host, ushort port, string secret, long sinceId,
     // NOTE: SDL_HINT_FRAMEBUFFER_ACCELERATION is not set because we use
     //       SDL_CreateRenderer + owned surface instead of SDL_GetWindowSurface
     //       (which is unsupported on Wayland / sdl2-compat).
+    //       It's a note here because it WAS used to do "software rendering", and
+    //       here it meant the Xorg server was just holding the bag for us.
     SDL_SetHint(SDL_HINT_VIDEO_HIGHDPI_DISABLED, "0");
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_EVENTS) != 0)
     {
@@ -323,7 +327,7 @@ int runGui(string host, ushort port, string secret, long sinceId,
 private void eventLoop(mu_Context* uictx)
 {
     bool running = true;
-    SDL_Event e;
+    SDL_Event e = void;
 
     while (running)
     {
@@ -653,7 +657,7 @@ private void eventLoop(mu_Context* uictx)
         //   pendingActions: optimistic notification dismiss
         if (wasClick || wakeRequested || appState.pendingActions.length > 0)
         {
-            SDL_Event wakeEv;
+            SDL_Event wakeEv = void;
             wakeEv.type = networkEventType;
             SDL_PushEvent(&wakeEv);
         }
@@ -787,7 +791,7 @@ private void drainNetworkMessages()
             case "event_older":
                 // Back-filled event from a fetch_older request. Append to
                 // the tail of the feed (oldest position). Do NOT touch
-                // saved.lastEventId — that's the high-water mark for live
+                // saved.lastEventId, that's the high-water mark for live
                 // catch-up, not the oldest.
                 long id;
                 if (const(JSONValue) *jid = "id" in msg)
@@ -844,8 +848,8 @@ private void drainNetworkMessages()
                 {
                     bool vrchatUp = vrchat_connected.boolean;
                     string lastError;
-                if (const(JSONValue)* v = "vrchat_last_error" in msg)
-                    lastError = v.str;
+                    if (const(JSONValue)* v = "vrchat_last_error" in msg)
+                        lastError = v.str;
                     if (vrchatUp)
                         appState.vrchatStatus = "Connected";
                     else if (lastError.length > 0)
@@ -903,7 +907,9 @@ private void drainNetworkMessages()
                     string logUser;
                     if (const(JSONValue)* v = "display_name" in msg)
                         logUser = v.str;
-                    bool logIsSelf = "is_self" in msg && msg["is_self"].type == JSONType.true_;
+                    bool logIsSelf;
+                    if (const(JSONValue) *jis_self = "is_self" in msg)
+                        logIsSelf = jis_self.type == JSONType.true_;
                     appState.addFeedEntry(0, logEventType, logUser, "", timeNow(), "", logIsSelf, EventSource.local);
                     dispatchNotification(logEventType, logUser, "", saved);
                 }
@@ -916,8 +922,9 @@ private void drainNetworkMessages()
                 string resultAction;
                 if (const(JSONValue)* v = "action" in msg)
                     resultAction = v.str;
-                bool success = "success" in msg && msg["success"].type == JSONType.true_;
-                if (success)
+                
+                const(JSONValue) *jsuccess = "success" in msg;
+                if (jsuccess && jsuccess.type == JSONType.true_)
                 {
                     appState.removeNotification(notifId);
                 }
@@ -925,7 +932,7 @@ private void drainNetworkMessages()
                 {
                     // Check whether the notification is still in state.
                     // For fire-and-forget "hide", it was already removed
-                    // optimistically,  suppress the error to avoid noise.
+                    // optimistically, suppress the error to avoid noise.
                     bool stillPresent;
                     foreach (ref NotificationEntry n; appState.notifications)
                     {
@@ -1146,9 +1153,10 @@ private void applyFriendsSnapshot(JSONValue msg)
     FriendInfo[] offlineFriends;
 
     // Parse instances.
-    if ("instances" in msg && msg["instances"].type == JSONType.array)
+    if (const(JSONValue) *jinstances = "instances" in msg)
+    if (jinstances.type == JSONType.array)
     {
-        foreach (ref JSONValue grp; msg["instances"].array)
+        foreach (grp; jinstances.array)
         {
             InstanceGroup ig;
             if (const(JSONValue)* v = "instance_id" in grp)
@@ -1162,11 +1170,13 @@ private void applyFriendsSnapshot(JSONValue msg)
                 if (v.type == JSONType.integer || v.type == JSONType.uinteger)
                     ig.capacity = v.integer;
 
-            if ("friends" in grp && grp["friends"].type == JSONType.array)
+            if (const(JSONValue) *jfriends = "friends" in grp)
+            if (jfriends.type == JSONType.array)
             {
-                foreach (ref JSONValue fVal; grp["friends"].array)
+                foreach (fVal; jfriends.array)
                     ig.friends ~= parseFriendInfo(fVal);
             }
+            
             sort!friendLess(ig.friends);
 
             // "private" and "traveling" are not joinable world instances.
@@ -1201,9 +1211,10 @@ private void applyFriendsSnapshot(JSONValue msg)
     // are active on the website but may have an empty location in the API
     // seed, causing the server to bucket them as offline. Re-route them to
     // "Active elsewhere" so they appear in the correct section.
-    if ("offline" in msg && msg["offline"].type == JSONType.array)
+    if (const(JSONValue) *joffline = "offline" in msg)
+    if (joffline.type == JSONType.array)
     {
-        foreach (ref JSONValue fVal; msg["offline"].array)
+        foreach (fVal; joffline.array)
         {
             FriendInfo fi = parseFriendInfo(fVal);
             if (fi.platform == "web" && fi.status != "offline")
@@ -1277,104 +1288,99 @@ private immutable string[] actionableNotifTypes = [
 /// Store an actionable notification or remove on delete/hide events.
 private void storeNotification(string eventType, JSONValue msg, string user, string receivedAt)
 {
-    if ("content" !in msg)
+    const(JSONValue) *jcontent = "content" in msg;
+    if (jcontent is null) // we depend on 'content' for all of these
         return;
-
-    try
+    
+    // NOTE: Except for 'see-notification' and 'hide-notification', 'content' is double-encoded
+    JSONValue content = void;
+    try switch (eventType)
     {
-        switch (eventType)
-        {
-            case "notification":
-            case "notification-v2":
-                // I wonder what's up with this?
-                JSONValue c = msg["content"];
-                if (c.type == JSONType.string)
-                    c = parseJSON(c.str);
+        case "notification":
+        case "notification-v2":
+            content = jcontent.type == JSONType.string ? parseJSON(jcontent.str) : *jcontent;
+            
+            string notifId;
+            if (const(JSONValue)* v = "id" in content)
+                notifId = v.str;
+            string notifType;
+            if (const(JSONValue)* v = "type" in content)
+                notifType = v.str;
+            if (notifId.length == 0 || notifType.length == 0)
+                return;
 
-                string notifId;
-                if (const(JSONValue)* v = "id" in c)
-                    notifId = v.str;
-                string notifType;
-                if (const(JSONValue)* v = "type" in c)
-                    notifType = v.str;
-                if (notifId.length == 0 || notifType.length == 0)
-                    return;
-
-                // Only store actionable types.
-                bool actionable;
-                foreach (string t; actionableNotifTypes)
+            // Only store actionable types.
+            bool actionable;
+            foreach (string t; actionableNotifTypes)
+            {
+                if (t == notifType)
                 {
-                    if (t == notifType)
-                    {
-                        actionable = true;
-                        break;
-                    }
+                    actionable = true;
+                    break;
                 }
-                if (actionable == false)
-                    return;
+            }
+            if (actionable == false)
+                return;
 
-                string sender;
-                if (const(JSONValue)* v = "senderUsername" in c)
-                    sender = v.str;
-                if (sender.length == 0)
-                    sender = user;
+            string sender;
+            if (const(JSONValue)* v = "senderUsername" in content)
+                sender = v.str;
+            if (sender.length == 0)
+                sender = user;
 
-                // Build a message from available details.
-                string notifMessage;
-                if (const(JSONValue)* v = "message" in c)
-                    notifMessage = v.str;
-                if (notifMessage.length == 0)
+            // Build a message from available details.
+            string notifMessage;
+            if (const(JSONValue)* v = "message" in content)
+                notifMessage = v.str;
+            if (notifMessage.length == 0)
+            {
+                if (const(JSONValue) *jdetails = "details" in content)
+                if (jdetails.type == JSONType.object)
                 {
-                    if ("details" in c && c["details"].type == JSONType.object)
-                    {
-                        JSONValue details = c["details"];
-                        string worldName;
-                        if (const(JSONValue)* v = "worldName" in details)
-                            worldName = v.str;
-                        if (worldName.length > 0)
-                            notifMessage = worldName;
-                    }
+                    string worldName;
+                    if (const(JSONValue)* v = "worldName" in *jdetails)
+                        worldName = v.str;
+                    if (worldName.length > 0)
+                        notifMessage = worldName;
                 }
+            }
 
-                appState.addNotification(notifId, notifType, sender, notifMessage, receivedAt);
-                return;
+            appState.addNotification(notifId, notifType, sender, notifMessage, receivedAt);
+            return;
 
-            case "notification-v2-delete":
-                JSONValue dc = msg["content"];
-                if (dc.type == JSONType.string)
-                    dc = parseJSON(dc.str);
-                if ("ids" in dc && dc["ids"].type == JSONType.array)
+        case "notification-v2-delete":
+            content = jcontent.type == JSONType.string ? parseJSON(jcontent.str) : *jcontent;
+
+            if (const(JSONValue) *jids = "ids" in content)
+            if (jids.type == JSONType.array)
+            {
+                foreach (JSONValue idVal; jids.array)
                 {
-                    foreach (JSONValue idVal; dc["ids"].array)
-                    {
-                        if (idVal.type == JSONType.string)
-                            appState.removeNotification(idVal.str);
-                    }
+                    if (idVal.type == JSONType.string)
+                        appState.removeNotification(idVal.str);
                 }
-                return;
+            }
+            return;
 
-            case "hide-notification":
-            case "see-notification":
-                // Content is a plain string (notification ID).
-                JSONValue hc = msg["content"];
-                if (hc.type == JSONType.string)
-                    appState.removeNotification(hc.str);
-                return;
+        case "hide-notification":
+        case "see-notification":
+            // Content is a plain string (notification ID).
+            if (jcontent.type == JSONType.string)
+                appState.removeNotification(jcontent.str);
+            return;
 
-            case "response-notification":
-                JSONValue rc = msg["content"];
-                if (rc.type == JSONType.string)
-                    rc = parseJSON(rc.str);
-                string respId;
-                if (const(JSONValue)* v = "notificationId" in rc)
-                    respId = v.str;
-                if (respId.length > 0)
-                    appState.removeNotification(respId);
-                return;
+        case "response-notification":
+            content = jcontent.type == JSONType.string ? parseJSON(jcontent.str) : *jcontent;
 
-            default:
-                return;
-        }
+            string respId;
+            if (const(JSONValue)* v = "notificationId" in content)
+                respId = v.str;
+            if (respId.length > 0)
+                appState.removeNotification(respId);
+            return;
+
+        default:
+            return;
     }
     catch (Exception e)
     {
@@ -1432,26 +1438,25 @@ private void logStartupInfo()
     logInfo("Video driver: %s", videoDriver ? fromStringz( videoDriver ) : "unknown");
 
     // SDL2 linked version.
-    char[32] buf = void;
+    char[256] buffer = void;
     SDL_version ver = void;
     SDL_GetVersion(&ver);
-    logInfo("SDL2: %s", sformat(buf, "%d.%d.%d", ver.major, ver.minor, ver.patch));
+    logInfo("SDL2: %s", sformat(buffer, "%d.%d.%d", ver.major, ver.minor, ver.patch));
 
     // SDL2_ttf linked version.
     const(SDL_version)* ttfVer = TTF_Linked_Version();
     if (ttfVer)
-        logInfo("SDL2_ttf: %s", sformat(buf, "%d.%d.%d", ttfVer.major, ttfVer.minor, ttfVer.patch));
+        logInfo("SDL2_ttf: %s", sformat(buffer, "%d.%d.%d", ttfVer.major, ttfVer.minor, ttfVer.patch));
 
     // SDL2_image linked version.
     const(SDL_version)* imgVer = IMG_Linked_Version();
     if (imgVer)
-        logInfo("SDL2_image: %s", sformat(buf, "%d.%d.%d", imgVer.major, imgVer.minor, imgVer.patch));
+        logInfo("SDL2_image: %s", sformat(buffer, "%d.%d.%d", imgVer.major, imgVer.minor, imgVer.patch));
 
     // Number of available video drivers.
     int numDrivers = SDL_GetNumVideoDrivers();
     if (numDrivers > 1)
     {
-        char[128] drivers = void;
         size_t pos;
         foreach (int i; 0 .. numDrivers)
         {
@@ -1459,18 +1464,18 @@ private void logStartupInfo()
             if (name is null)
                 continue;
             const(char)[] nameSlice = fromStringz(name);
-            if (pos > 0 && pos + 2 + nameSlice.length < drivers.length)
+            if (pos > 0 && pos + 2 + nameSlice.length < buffer.length)
             {
-                drivers[pos .. pos + 2] = ", ";
+                buffer[pos .. pos + 2] = ", ";
                 pos += 2;
             }
-            if (pos + nameSlice.length < drivers.length)
+            if (pos + nameSlice.length < buffer.length)
             {
-                drivers[pos .. pos + nameSlice.length] = nameSlice;
+                buffer[pos .. pos + nameSlice.length] = nameSlice;
                 pos += nameSlice.length;
             }
         }
-        logInfo("Available video drivers: %s", drivers[0 .. pos]);
+        logInfo("Available video drivers: %s", buffer[0 .. pos]);
     }
 }
 
@@ -1535,7 +1540,8 @@ private string timeNow()
 /// SDL timer callback -- pushes a user event to wake the main loop.
 private extern(C) uint timerCallback(uint interval, void* param) nothrow
 {
-    SDL_Event ev;
+    // NOTE: zero-init is optionally good, but we don't use any other fields...
+    SDL_Event ev = void;
     ev.type = networkEventType;
     SDL_PushEvent(&ev);
     return interval;
@@ -1544,7 +1550,6 @@ private extern(C) uint timerCallback(uint interval, void* param) nothrow
 /// Text measurement callbacks for ddui (must be extern(C)).
 extern(C) int text_width(mu_Font font, const(char)* text, int len)
 {
-    import core.stdc.string : strlen;
     if (len == -1)
         len = cast(int) strlen(text);
     return r_get_text_width(text, len);
@@ -1559,7 +1564,6 @@ extern(C) int text_height(mu_Font font)
 /// the host/port/secret from the Settings tab.
 private void doReconnect()
 {
-    import core.stdc.string : strlen;
     import std.conv : to;
 
     logDebugging("doReconnect: tearing down existing connection");
@@ -1578,9 +1582,8 @@ private void doReconnect()
     string portStr = cast(string) appState.settingsPort[0 .. strlen(appState.settingsPort.ptr)].idup;
     string secret = cast(string) appState.settingsSecret[0 .. strlen(appState.settingsSecret.ptr)].idup;
 
-    ushort port;
-    try
-        port = portStr.to!ushort;
+    ushort port = void;
+    try port = portStr.to!ushort;
     catch (Exception)
     {
         appState.serverStatus = "Invalid port";
@@ -1596,7 +1599,6 @@ private void doReconnect()
     logDebugging("doReconnect: connecting to %s:%d", host, port);
     appState.serverStatus = "Connecting...";
     appState.connected = false;
-    import core.stdc.string : strlen;
     string clientCert = cast(string) appState.settingsTlsClientCert[0 .. strlen(appState.settingsTlsClientCert.ptr)].idup;
     string clientKey  = cast(string) appState.settingsTlsClientKey[0 .. strlen(appState.settingsTlsClientKey.ptr)].idup;
     conn = new ServerConnection(host, port, secret,
@@ -1641,8 +1643,6 @@ private void syncNotifySettings()
 
 private void doSaveSettings()
 {
-    import core.stdc.string : strlen;
-
     Settings s;
     s.host = cast(string) appState.settingsHost[0 .. strlen(appState.settingsHost.ptr)].idup;
     s.port = {
