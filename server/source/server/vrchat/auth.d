@@ -43,26 +43,25 @@ AuthState authenticate(ref Config config, HTTPClient client, AuthDelegator deleg
     // Try existing session first.
     logInfo("Checking existing session...");
     HTTPResponse userResp = client.get("/auth/user");
-    logDebugging("GET /auth/user -> HTTP %d (bodyLen=%d)",
-        userResp.code, userResp.text.length);
+    logDebugging("GET /auth/user -> HTTP %d (bodyLen=%d)", userResp.code, userResp.text.length);
 
     if (userResp.code == 200)
     {
         JSONValue userJson = parseJSON(userResp.text);
-        if ("requiresTwoFactorAuth" !in userJson)
+        if (const(JSONValue) *jrequiresTwoFactorAuth = "requiresTwoFactorAuth" in userJson)
         {
-            string displayName;
-            if (const(JSONValue)* v = "displayName" in userJson)
-                displayName = v.str;
-            logInfo("Session valid, logged in as %s", displayName);
-            return finishAuth(client, userJson);
+            // 2FA required even with existing cookies.
+            handle2FA(client, delegator, jrequiresTwoFactorAuth);
+            return reAuthUser(client);
         }
-        // 2FA required even with existing cookies.
-        handle2FA(client, userJson, delegator);
-        return reAuthUser(client);
+        string displayName;
+        if (const(JSONValue)* v = "displayName" in userJson)
+            displayName = v.str;
+        logInfo("Session valid, logged in as %s", displayName);
+        return finishAuth(client, userJson);
     }
 
-    // No valid session,  do full login.
+    // No valid session, do full login.
     return fullLogin(config, client, delegator);
 }
 
@@ -172,9 +171,9 @@ AuthState fullLogin(ref Config config, HTTPClient client, AuthDelegator delegato
     JSONValue loginJson = parseJSON(loginResp.text);
 
     // Step 3: Handle 2FA if required.
-    if ("requiresTwoFactorAuth" in loginJson)
+    if (const(JSONValue) *jrequiresTwoFactorAuth = "requiresTwoFactorAuth" in loginJson)
     {
-        handle2FA(client, loginJson, delegator);
+        handle2FA(client, delegator, jrequiresTwoFactorAuth);
         return reAuthUser(client);
     }
 
@@ -185,30 +184,34 @@ AuthState fullLogin(ref Config config, HTTPClient client, AuthDelegator delegato
     return finishAuth(client, loginJson);
 }
 
-void handle2FA(HTTPClient client, JSONValue loginJson, AuthDelegator delegator)
+void handle2FA(HTTPClient client, AuthDelegator delegator, const(JSONValue) *j2fa)
 {
-    const(JSONValue)[] methods = loginJson["requiresTwoFactorAuth"].array;
+    // requiresTwoFactorAuth
+    const(JSONValue)[] methods = j2fa.array;
     string method;
+    string endpoint;
     foreach (m; methods)
     {
-        string s = m.str;
-        if (s == "totp" || s == "otp" || s == "emailOtp")
+        method = m.str;
+        if (method == "totp")
         {
-            method = s;
+            endpoint = "/auth/twofactorauth/totp/verify";
+            break;
+        }
+        else if (method == "otp")
+        {
+            endpoint = "/auth/twofactorauth/otp/verify";
+            break;
+        }
+        else if (method == "emailOtp")
+        {
+            endpoint = "/auth/twofactorauth/emailotp/verify";
             break;
         }
     }
 
     if (method.length == 0)
         throw new Exception("No supported 2FA method found");
-
-    string endpoint;
-    if (method == "totp")
-        endpoint = "/auth/twofactorauth/totp/verify";
-    else if (method == "otp")
-        endpoint = "/auth/twofactorauth/otp/verify";
-    else
-        endpoint = "/auth/twofactorauth/emailotp/verify";
 
     logInfo("2FA required (method: %s)", method);
 

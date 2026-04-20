@@ -495,8 +495,7 @@ private class ClientHandler
         scope(exit) sendMutex.unlock();
 
         logTrace("sendLine: len=%d", line.length);
-        try
-            stream.send(cast(const(void)[]) line);
+        try stream.send(cast(const(void)[]) line);
         catch (Exception e)
         {
             logDebugging("sendLine: send failed, client will be cleaned up: %s", e.msg);
