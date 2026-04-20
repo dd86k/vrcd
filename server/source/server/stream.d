@@ -94,13 +94,15 @@ bool loadTLS()
 
     version (Posix)
     {
-        SysLib ssl = sysLoad("libssl.so.3");
+        SysLib ssl = sysLoad("libssl3.so"); // debian, ubuntu, fedora, arch, alpine (.118)
         if (ssl is null)
-            ssl = sysLoad("libssl.so");
+            ssl = sysLoad("libssl.so.3"); // debian, ubuntu, arch, alpine
+        if (ssl is null)
+            ssl = sysLoad("libssl.so"); // fallback
 
         SysLib crypto = sysLoad("libcrypto.so.3");
         if (crypto is null)
-            crypto = sysLoad("libcrypto.so");
+            crypto = sysLoad("libcrypto.so"); // fallback
     }
     else version (Windows)
     {
