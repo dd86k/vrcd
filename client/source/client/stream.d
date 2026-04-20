@@ -49,8 +49,7 @@ class PlainStream : Stream
 
     override void close()
     {
-        try sock.shutdown(SocketShutdown.BOTH);
-        catch (Exception) {}
+        try sock.shutdown(SocketShutdown.BOTH); catch (Exception) {}
         sock.close();
     }
 }
@@ -96,9 +95,8 @@ bool loadTLS()
 
     version (Posix)
     {
-        SysLib ssl = sysLoad("libssl3.so"); // debian, ubuntu, fedora, arch, alpine (.118)
-        if (ssl is null)
-            ssl = sysLoad("libssl.so.3"); // debian, ubuntu, arch, alpine
+        // NOTE: libssl3.so is part of NSS and not OpenSSL
+        SysLib ssl = sysLoad("libssl.so.3");
         if (ssl is null)
             ssl = sysLoad("libssl.so"); // fallback
 
@@ -133,9 +131,9 @@ bool loadTLS()
         return false;
     }
 
-    T sym(T)(SysLib lib, const(char)* name)
+    T sym(T)(SysLib lib, string name)
     {
-        void* s = sysSym(lib, name);
+        void* s = sysSym(lib, name.ptr);
         if (s is null)
         {
             logInfo("TLS unavailable: missing symbol %s", name);
@@ -274,9 +272,9 @@ class TLSClientStream : Stream
     }
 }
 
-// ---------------------------------------------------------------------------
+//
 // Private: function pointers and state
-// ---------------------------------------------------------------------------
+//
 
 private __gshared bool _tlsLoaded;
 private __gshared bool _tlsAttempted;
