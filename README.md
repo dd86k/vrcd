@@ -78,6 +78,10 @@ dub test :client
 
 See [API.md](./API.md) for server-client API details.
 
+### Issues
+
+- Using LDC 1.41 on Windows will lead to compiling issues (undefined PAGESIZE in core.thread.fiber)
+
 # Contributing
 
 At this time, it's best to write Issues for bugs and feature requests, or start
