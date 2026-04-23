@@ -353,7 +353,7 @@ private:
             f.platform = v.str;
 
         // Status/statusDescription live under content.user; without this
-        // a friend-offline → friend-online transition leaves status="offline"
+        // a friend-offline -> friend-online transition leaves status="offline"
         // and buildFriendsMessage keeps the friend in the offline bucket.
         string newStatus = extractNestedUserString(c, "status");
         if (newStatus.length > 0)
@@ -437,6 +437,16 @@ private:
         string loc;
         if (const(JSONValue)* v = "location" in c)
             loc = v.str;
+
+        // Only apply if the location changed. This prevents spurious
+        // updates when the same location is emitted repeatedly.
+        if (f.location == loc)
+        {
+            // No change in location; keep other fields updated above.
+            // Return false so the caller knows state is unchanged.
+            return false;
+        }
+
         if (loc.length > 0)
         {
             f.location = loc;
@@ -570,17 +580,18 @@ private:
                 "isSelf":         JSONValue(f.userId == selfUserId),
             ]);
 
-            VRCEvent syn;
-            syn.type = EventType.avatarChange;
-            syn.typeRaw = "avatar-change";
-            syn.content = content;
-            syn.receivedAt = Clock.currTime();
-            // Synthesized: no real WebSocket frame, so build a canonical
-            // envelope so the stored raw_json stays consistent.
-            syn.rawJson = JSONValue([
-                "type":    JSONValue("avatar-change"),
-                "content": JSONValue(content.toString()),
-            ]).toString();
+            VRCEvent syn = VRCEvent(
+                EventType.avatarChange,
+                "avatar-change",
+                content,
+                Clock.currTime(),
+                // Synthesized: no real WebSocket frame, so build a canonical
+                // envelope so the stored raw_json stays consistent.
+                JSONValue([
+                    "type":    JSONValue("avatar-change"),
+                    "content": JSONValue(content.toString()),
+                ]).toString()
+            );
 
             pendingSynthetics ~= syn;
             logTrace("applyAvatarUpdate: queued avatar-change for %s (%s -> %s)",
