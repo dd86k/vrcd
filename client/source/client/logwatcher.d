@@ -628,12 +628,15 @@ class LogWatcher
     {
         if (silent)
             return;
+
+        // I think we know when we do something
+        if (localUser.displayName && displayName == localUser.displayName)
+            return;
+
         JSONValue msg;
         msg["type"] = "log-event";
         msg["event_type"] = cast(string) event;
         msg["display_name"] = displayName;
-        if (localUser.displayName.length > 0 && displayName == localUser.displayName)
-            msg["is_self"] = true;
 
         queue.pushMessage(msg.toString());
         pushWakeEvent();
