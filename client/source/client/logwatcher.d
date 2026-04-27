@@ -658,6 +658,7 @@ class LogWatcher
     {
         if (silent)
             return;
+
         JSONValue msg;
         msg["type"] = "log-event";
         msg["event_type"] = cast(string) LogEvent.photoTaken;
@@ -672,6 +673,7 @@ class LogWatcher
     {
         if (silent)
             return;
+
         JSONValue msg;
         msg["type"] = "log-event";
         msg["event_type"] = cast(string) event;

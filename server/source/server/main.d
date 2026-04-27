@@ -499,7 +499,7 @@ private int backfillWorldNamesLocked(JSONValue[] friendsArr,
             location = v.str;
 
         string worldId = WorldCache.extractWorldId(location);
-        if (worldId.length == 0)
+        if (worldId is null)
             continue;
         if (worldId in seen)
             continue;
@@ -523,7 +523,7 @@ private int backfillWorldNamesLocked(JSONValue[] friendsArr,
         // resolveLocked returns the cached name if fresh, otherwise fetches.
         // It only incurs a REST call on a true cache miss.
         string name = worldCache.resolveLocked(worldId);
-        if (name.length > 0 && name != worldId)
+        if (name && name != worldId)
             ++fetched;
     }
 

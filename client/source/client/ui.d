@@ -868,11 +868,11 @@ private void drawFriendCard(mu_Context* ctx, AppState* state, ref FriendInfo f)
 
     char[128] buffer = void;
     string sub;
-    if (f.status.length > 0 && f.platform.length > 0)
+    if (f.status && f.platform)
         sub = cast(string) sformat(buffer, "%s  -  %s", prettyStatus(f.status), prettyPlatform(f.platform));
-    else if (f.status.length > 0)
+    else if (f.status)
         sub = prettyStatus(f.status);
-    else if (f.platform.length > 0)
+    else if (f.platform)
         sub = prettyPlatform(f.platform);
 
     if (sub.length > 0)
@@ -938,21 +938,21 @@ private void drawFriendProfile(mu_Context* ctx, AppState* state, int scrollDelta
     mu_draw_rect(ctx, mu_layout_next(ctx), lineColor);
 
     // Profile fields.
-    if (f.status.length > 0)
+    if (f.status)
     {
         mu_layout_row(ctx, 2, labelValCols.ptr, 0);
         mu_label(ctx, "Status");
         clickableValue(ctx, state, prettyStatus(f.status));
     }
 
-    if (f.statusDescription.length > 0)
+    if (f.statusDescription)
     {
         mu_layout_row(ctx, 2, labelValCols.ptr, 0);
         mu_label(ctx, "Bio");
         clickableValue(ctx, state, f.statusDescription);
     }
 
-    if (f.platform.length > 0)
+    if (f.platform)
     {
         mu_layout_row(ctx, 2, labelValCols.ptr, 0);
         mu_label(ctx, "Platform");
@@ -1502,7 +1502,7 @@ private void drawStatusBar(mu_Context* ctx, AppState* state)
     mu_draw_rect(ctx, r, mu_Color(20, 20, 25, 255));
 
     // Show transient action-feedback flash when active.
-    if (state.statusFlash.length > 0 && MonoTime.currTime < state.statusFlashEnd)
+    if (state.statusFlash && MonoTime.currTime < state.statusFlashEnd)
     {
         mu_draw_control_text(ctx, state.statusFlash, r, MU_COLOR_TEXT, 0);
         return;

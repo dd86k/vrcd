@@ -30,7 +30,7 @@ class FriendsTracker
         string worldName;
         string platform;         // "standalonewindows", "android", etc.
         string currentAvatar;    // "avtr_..." of currently-equipped avatar
-        bool online;
+        bool online;             // Online in-game
     }
 
     private FriendState[string] friends; // keyed by userId
@@ -121,7 +121,7 @@ class FriendsTracker
             // A web-platform friend with a non-offline status is active on
             // the website even when location is empty (the API omits it).
             bool activeOnWeb = state.platform == "web" && state.status != "offline";
-            state.online = (loc.length > 0 && loc != "offline" && loc != "") || activeOnWeb;
+            state.online = (loc && loc != "offline") || activeOnWeb;
             if (activeOnWeb && state.location.length == 0)
                 state.location = "private";
 
@@ -146,7 +146,7 @@ class FriendsTracker
         if (f.status != "offline" && f.online)
             return;
         if (f.platform != "web")
-            f.platform = "";
+            f.platform = null;
     }
 
     /// Seed the tracker from a list of friend JSON objects
@@ -232,34 +232,41 @@ class FriendsTracker
             foreach (ref FriendState f; friends)
             {
                 // Don't list self among friends.
-                if (selfUserId.length > 0 && f.userId == selfUserId)
+                if (selfUserId && f.userId == selfUserId)
                     continue;
 
                 JSONValue fObj = friendToJSON(f);
 
                 if (f.online == false || f.status == "offline"
-                    || f.location.length == 0 || f.location == "offline")
+                    || f.location is null || f.location == "offline")
                 {
                     offlineList ~= fObj;
                     continue;
                 }
 
-                string key = canonicalLocation(f.location);
-                byLocation[key] ~= fObj;
-                if (f.worldName.length > 0)
-                    locationWorldName[key] = f.worldName;
+                if (f.location)
+                {
+                    string key = canonicalLocation(f.location);
+                    byLocation[key] ~= fObj;
+                    if (f.worldName)
+                        locationWorldName[key] = f.worldName;
+                }
             }
 
             foreach (string loc, JSONValue[] friendObjs; byLocation)
             {
-                string worldName = loc in locationWorldName ? locationWorldName[loc] : "";
+                string worldName = void;
+                if (const(string) *l = loc in locationWorldName)
+                    worldName = *l;
+                else
+                    worldName = null;
 
                 // Fallback: ask the WorldCache whether it already knows
                 // this world's name. Pure lookup, no REST call.
-                if (worldName.length == 0 && worldCache)
+                if (worldName && worldCache)
                 {
                     string worldId = WorldCache.extractWorldId(loc);
-                    if (worldId.length > 0)
+                    if (worldId)
                         worldName = worldCache.tryGet(worldId);
                 }
 
@@ -311,7 +318,7 @@ class FriendsTracker
     void enrichContent(ref VRCEvent event)
     {
         string userId = extractUserId(event.content);
-        if (userId.length == 0)
+        if (userId is null)
             return;
 
         string cachedDisplayName;
@@ -343,7 +350,7 @@ private:
     bool handleFriendOnline(JSONValue c)
     {
         string userId = extractUserId(c);
-        if (userId.length == 0)
+        if (userId is null)
             return false;
 
         FriendState* f = getOrCreate(userId);
@@ -356,10 +363,10 @@ private:
         // a friend-offline -> friend-online transition leaves status="offline"
         // and buildFriendsMessage keeps the friend in the offline bucket.
         string newStatus = extractNestedUserString(c, "status");
-        if (newStatus.length > 0)
+        if (newStatus)
             f.status = newStatus;
         string newStatusDesc = extractNestedUserString(c, "statusDescription");
-        if (newStatusDesc.length > 0)
+        if (newStatusDesc)
             f.statusDescription = newStatusDesc;
 
         if (const(JSONValue)* v = "location" in c)
@@ -369,7 +376,7 @@ private:
         }
 
         string worldName = extractWorldName(c);
-        if (worldName.length > 0)
+        if (worldName)
             f.worldName = worldName;
 
         applyAvatarUpdate(f, c);
@@ -379,14 +386,14 @@ private:
     bool handleFriendOffline(JSONValue c)
     {
         string userId = extractUserId(c);
-        if (userId.length == 0)
+        if (userId)
             return false;
 
         FriendState* f = getOrCreate(userId);
         f.online = false;
         f.status = "offline";
         f.location = "offline";
-        f.worldName = "";
+        f.worldName = null;
         f.displayName = extractDisplayName(c, f.displayName);
         normalizeOfflinePlatform(*f);
         return true;
@@ -395,7 +402,7 @@ private:
     bool handleFriendActive(JSONValue c)
     {
         string userId = extractUserId(c);
-        if (userId.length == 0)
+        if (userId)
             return false;
 
         FriendState* f = getOrCreate(userId);
@@ -405,15 +412,15 @@ private:
             f.platform = v.str;
 
         string newStatus = extractNestedUserString(c, "status");
-        if (newStatus.length > 0)
+        if (newStatus)
             f.status = newStatus;
         string newStatusDesc = extractNestedUserString(c, "statusDescription");
-        if (newStatusDesc.length > 0)
+        if (newStatusDesc)
             f.statusDescription = newStatusDesc;
 
         // friend-active means on the website, no world location.
         f.location = "private";
-        f.worldName = "";
+        f.worldName = null;
         applyAvatarUpdate(f, c);
         return true;
     }
@@ -421,17 +428,17 @@ private:
     bool handleFriendLocation(JSONValue c)
     {
         string userId = extractUserId(c);
-        if (userId.length == 0)
+        if (userId)
             return false;
 
         FriendState* f = getOrCreate(userId);
         f.displayName = extractDisplayName(c, f.displayName);
 
         string newStatus = extractNestedUserString(c, "status");
-        if (newStatus.length > 0)
+        if (newStatus)
             f.status = newStatus;
         string newStatusDesc = extractNestedUserString(c, "statusDescription");
-        if (newStatusDesc.length > 0)
+        if (newStatusDesc)
             f.statusDescription = newStatusDesc;
 
         string loc;
@@ -454,10 +461,10 @@ private:
         }
 
         string worldName = extractWorldName(c);
-        if (worldName.length > 0)
+        if (worldName)
             f.worldName = worldName;
         else if (loc == "private" || loc == "traveling")
-            f.worldName = "";
+            f.worldName = null;
 
         applyAvatarUpdate(f, c);
         return true;
@@ -487,7 +494,7 @@ private:
     bool handleUserUpdate(JSONValue c)
     {
         string userId = extractUserId(c);
-        if (userId.length == 0)
+        if (userId)
             return false;
 
         FriendState* f = getOrCreate(userId);
@@ -515,7 +522,7 @@ private:
     bool handleUserLocation(JSONValue c)
     {
         string userId = extractUserId(c);
-        if (userId.length == 0)
+        if (userId)
             return false;
 
         FriendState* f = getOrCreate(userId);
@@ -526,7 +533,7 @@ private:
                 f.location = v.str;
 
         string worldName = extractWorldName(c);
-        if (worldName.length > 0)
+        if (worldName)
             f.worldName = worldName;
 
         applyAvatarUpdate(f, c);
@@ -537,7 +544,7 @@ private:
     bool handleFriendDelete(JSONValue c)
     {
         string userId = extractUserId(c);
-        if (userId.length == 0)
+        if (userId)
             return false;
 
         friends.remove(userId);
@@ -547,7 +554,7 @@ private:
     bool handleFriendAdd(JSONValue c)
     {
         string userId = extractUserId(c);
-        if (userId.length == 0)
+        if (userId)
             return false;
 
         FriendState* f = getOrCreate(userId);
@@ -619,7 +626,7 @@ private:
                 if (const(JSONValue)* uid = "id" in *v)
                     return uid.str;
 
-        return "";
+        return null;
     }
 
     static string extractDisplayName(JSONValue c, string fallback)
@@ -648,7 +655,7 @@ private:
                 if (const(JSONValue)* wn = "name" in *v)
                     return wn.str;
 
-        return "";
+        return null;
     }
 
     /// Read a nested user field from event content as a string.
@@ -661,7 +668,7 @@ private:
                 if (const(JSONValue)* f = field in *v)
                     if (f.type == JSONType.string)
                         return f.str;
-        return "";
+        return null;
     }
 
     /// Strip per-user location modifiers (nonce, region tags, etc.) to get
@@ -707,6 +714,7 @@ private:
                         return ca.str;
             }
         }
-        return "";
+
+        return null;
     }
 }

@@ -50,16 +50,16 @@ class WorldCache
     /// Safe to call from any thread without holding the API mutex.
     string tryGet(string worldId)
     {
-        if (worldId.length == 0)
-            return "";
+        if (worldId is null)
+            return null;
         long now = Clock.currTime.toUnixTime!long();
         synchronized (cacheMutex)
         {
             CacheEntry* entry = worldId in cache;
             if (entry is null || entry.expiresAt <= now)
-                return "";
+                return null;
             // Don't return the fallback-to-ID entry as a "name".
-            return entry.name == worldId ? "" : entry.name;
+            return entry.name == worldId ? null : entry.name;
         }
     }
 
@@ -97,7 +97,7 @@ class WorldCache
         string name = fetchWorldName(worldId);
         long ttl; // Time to live in seconds (unix time)
 
-        if (name.length > 0)
+        if (name)
         {
             ttl = 24 * 60 * 60; // 1 day
         }
@@ -149,10 +149,11 @@ class WorldCache
     /// "wrld_xxx:12345~region(us)". Returns empty string if not a world location.
     static string extractWorldId(string location)
     {
-        if (location.length < 5 || location[0 .. 5] != "wrld_")
-            return "";
+        import std.string : indexOf, startsWith;
 
-        import std.string : indexOf;
+        if (location is null || startsWith(location, "wrld_") == 0)
+            return null;
+
         ptrdiff_t sep = location.indexOf(':');
         if (sep > 0)
             return location[0 .. sep];
@@ -168,7 +169,7 @@ private:
         if (rateLimiter && rateLimiter.isBlocked())
         {
             logWarn("Skipping world fetch for %s: rate limited", worldId);
-            return "";
+            return null;
         }
 
         logDebugging("fetchWorldName: GET /worlds/%s", worldId);
@@ -181,18 +182,18 @@ private:
             if (resp.code != 200)
             {
                 logWarn("Failed to fetch world %s: HTTP %d", worldId, resp.code);
-                return "";
+                return null;
             }
 
             JSONValue json = parseJSON(resp.text);
             if (const(JSONValue)* v = "name" in json)
                 return v.str;
-            return "";
+            return null;
         }
         catch (Exception e)
         {
             logWarn("Error fetching world %s: %s", worldId, e.msg);
-            return "";
+            return null;
         }
     }
 }

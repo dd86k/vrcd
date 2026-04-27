@@ -165,7 +165,7 @@ class APIServer
         if (lastError.length > 0)
             vrchatLastError = lastError;
         else if (connected)
-            vrchatLastError = "";
+            vrchatLastError = null;
         broadcastStatus();
     }
 
@@ -336,7 +336,7 @@ class APIServer
             "type": JSONValue("status"),
             "vrchat_connected": JSONValue(vrchatConnected),
         ]);
-        if (vrchatLastError.length > 0)
+        if (vrchatLastError)
             msg["vrchat_last_error"] = JSONValue(vrchatLastError);
         if (rateLimiter)
         {

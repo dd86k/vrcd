@@ -126,19 +126,19 @@ private void resolve()
 version (Windows)
 private void resolveWindows()
 {
-    string localAppData = environment.get("LOCALAPPDATA", "");
-    if (localAppData.length)
+    string localAppData = environment.get("LOCALAPPDATA");
+    if (localAppData)
         cachedLogDir = buildPath(localAppData ~ "Low", "VRChat", "VRChat");
-    string userProfile = environment.get("USERPROFILE", "");
-    if (userProfile.length)
+    string userProfile = environment.get("USERPROFILE");
+    if (userProfile)
         cachedPicturesDir = buildPath(userProfile, "Pictures", "VRChat");
 }
 
 version (linux)
 private void resolveLinux()
 {
-    string home = environment.get("HOME", "");
-    if (home.length == 0)
+    string home = environment.get("HOME");
+    if (home is null)
     {
         logWarn("directories: HOME not set, VRChat paths will be empty");
         return;
@@ -162,7 +162,7 @@ private void resolveLinux()
         {
             string content = readText(vdfPath);
             libraryPath = findLibraryForApp(content, VRCHAT_APP_ID);
-            if (libraryPath.length)
+            if (libraryPath)
             {
                 logInfo("directories: VRChat located via %s at %s",
                     vdfPath, libraryPath);
@@ -175,7 +175,7 @@ private void resolveLinux()
         }
     }
 
-    if (libraryPath.length == 0)
+    if (libraryPath is null)
     {
         libraryPath = buildPath(home, ".steam", "steam");
         logWarn("directories: libraryfolders.vdf lookup failed, "
@@ -198,7 +198,8 @@ string findLibraryForApp(string vdf, string appId)
     VdfNode root = parseVdf(vdf);
     VdfNode *libs = "libraryfolders" in root.children;
     if (libs is null)
-        return "";
+        return null;
+
     foreach (entry; libs.children)
     {
         VdfNode *apps = "apps" in entry.children;
@@ -210,7 +211,8 @@ string findLibraryForApp(string vdf, string appId)
                 return *p;
         }
     }
-    return "";
+
+    return null;
 }
 
 /// Minimal Valve KeyValues tree. Insertion order is not preserved but
@@ -346,14 +348,14 @@ unittest
 `;
     assert(findLibraryForApp(sample, "438100") == "/home/test/.local/share/Steam");
     assert(findLibraryForApp(sample, "220") == "/mnt/ssd/Steam");
-    assert(findLibraryForApp(sample, "999999") == "");
+    assert(findLibraryForApp(sample, "999999") == null);
 }
 
 unittest
 {
     // Missing libraryfolders block to empty result, no exception.
-    assert(findLibraryForApp(`"other" { "path" "/x" }`, "438100") == "");
+    assert(findLibraryForApp(`"other" { "path" "/x" }`, "438100") == null);
     // Malformed input to empty result, no exception.
-    assert(findLibraryForApp(`"libraryfolders" {`, "438100") == "");
-    assert(findLibraryForApp("", "438100") == "");
+    assert(findLibraryForApp(`"libraryfolders" {`, "438100") == null);
+    assert(findLibraryForApp("", "438100") == null);
 }
