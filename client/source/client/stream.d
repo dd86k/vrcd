@@ -325,7 +325,7 @@ private string tlsErrorString()
 {
     char[256] buf;
     _ERR_error_string_n(_ERR_get_error(), buf.ptr, buf.length);
-    return cast(string) fromStringz(buf.ptr);
+    return fromStringz(buf.ptr).idup;
 }
 
 /// True if the string looks like an IPv4 or IPv6 address rather than a hostname.
