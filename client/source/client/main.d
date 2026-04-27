@@ -27,23 +27,24 @@ void setuplogging(LogLevel loglevel, string logpath = null)
     import std.datetime : Clock, SysTime;
     import std.format : format;
     import std.file : mkdirRecurse;
-    
+
     SysTime time = Clock.currTime();
-    
+
     if (logpath is null)
     {
-        logpath = vrcdAppDataPath( format("vrcd_%04d%02d%02d_%02d%02d.log",
-            time.year, time.month, time.day, time.hour, time.minute) );
+        logpath = vrcdAppDataPath( format("vrcd_%04d%02d%02d.log",
+            time.year, time.month, time.day) );
     }
-    
+
     string logdir  = dirName( logpath ); // slice, no allocation
-    
+
     mkdirRecurse(logdir);
-    
+
+    // FileAppender appends existing files
     FileAppender fileAppender = new FileAppender(logpath);
     fileAppender.setLogLevel(loglevel);
     logAddAppender(fileAppender);
-    
+
     logInfo("New launch at %s", time);
 }
 
