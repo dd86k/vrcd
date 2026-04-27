@@ -129,6 +129,7 @@ private void resolveWindows()
     string localAppData = environment.get("LOCALAPPDATA");
     if (localAppData)
         cachedLogDir = buildPath(localAppData ~ "Low", "VRChat", "VRChat");
+
     string userProfile = environment.get("USERPROFILE");
     if (userProfile)
         cachedPicturesDir = buildPath(userProfile, "Pictures", "VRChat");

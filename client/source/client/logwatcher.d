@@ -93,7 +93,7 @@ class LogWatcher
     {
         string logDir = vrchatLogDir();
         logDebugging("LogWatcher: resolved log dir=%s", logDir);
-        if (logDir.length == 0 || exists(logDir) == false)
+        if (logDir is null || exists(logDir) == false)
         {
             logInfo("VRChat log directory not found, log watcher disabled");
             return;
@@ -122,18 +122,17 @@ class LogWatcher
     /// Poll all output_log files for new lines.
     private void pollLogs(string logDir, ref long[string] filePositions)
     {
-        // Find log files and sort by name (contains timestamp).
+        // Find log files (contains timestamp).
         DirEntry[] logFiles;
         foreach (DirEntry entry; dirEntries(logDir, "output_log_*.txt", SpanMode.shallow))
             logFiles ~= entry;
-
         if (logFiles.length == 0)
             return;
 
-        sort!((DirEntry a, DirEntry b) => a.name < b.name)(logFiles);
-
         // Only watch the most recent log file (the active VRChat session).
-        DirEntry latest = logFiles[$ - 1];
+        // Sorting is just a fallsafe against filesystems (which?) or systems (which?)
+        // that do not sort
+        DirEntry latest = sort!((DirEntry a, DirEntry b) => a.name < b.name)(logFiles)[$ - 1];
 
         long pos;
         if (latest.name in filePositions)
@@ -226,7 +225,7 @@ class LogWatcher
         // every session, e.g.
         //   2026.04.10 17:05:07 Debug      -  User Authenticated: dd86k (usr_xxx)
         // Does not have a [Behaviour] marker, so handle before the fast-path.
-        enum string authMarker = "User Authenticated: ";
+        static immutable string authMarker = "User Authenticated: ";
         ptrdiff_t authIdx = indexOf(line, authMarker);
         if (authIdx == 34) // should only happen once
         {
@@ -249,7 +248,7 @@ class LogWatcher
 
         // Event: Entering Room, which gives us the human-readable world name.
         // This fires immediately before the "Joining wrld_..." line.
-        enum string enterMarker = "[Behaviour] Entering Room: ";
+        static immutable string enterMarker = "[Behaviour] Entering Room: ";
         ptrdiff_t enterIdx = indexOf(line, enterMarker);
         if (enterIdx >= 0)
         {
@@ -333,7 +332,7 @@ class LogWatcher
             if (nameStart < 0)
                 return;
             nameStart += 15; // length of "] OnPlayerLeft "
-            if (nameStart >= cast(ptrdiff_t) line.length)
+            if (nameStart >= line.length)
                 return;
 
             string rest = stripRight(line[nameStart .. $]);
@@ -360,9 +359,9 @@ class LogWatcher
         string videoUrl;
         string videoUser;
 
-        enum string vpAttemptMarker = "[Video Playback] Attempting to resolve URL '";
-        enum string vpResolveMarker = "[Video Playback] Resolving URL '";
-        enum string usharpMarker = "[USharpVideo] Started video load for URL: ";
+        static immutable string vpAttemptMarker = "[Video Playback] Attempting to resolve URL '";
+        static immutable string vpResolveMarker = "[Video Playback] Resolving URL '";
+        static immutable string usharpMarker = "[USharpVideo] Started video load for URL: ";
 
         ptrdiff_t vpAttemptIdx = indexOf(line, vpAttemptMarker);
         if (vpAttemptIdx >= 0)
@@ -424,7 +423,7 @@ class LogWatcher
 
         // Event: String download
         //   [String Download] Attempting to load String from URL 'https://...'
-        enum string stringDlMarker = "] Attempting to load String from URL '";
+        static immutable string stringDlMarker = "] Attempting to load String from URL '";
         ptrdiff_t stringDlIdx = indexOf(line, stringDlMarker);
         if (stringDlIdx >= 0)
         {
@@ -443,7 +442,7 @@ class LogWatcher
 
         // Event: Image download
         //   [Image Download] Attempting to load image from URL 'https://...'
-        enum string imageDlMarker = "] Attempting to load image from URL '";
+        static immutable string imageDlMarker = "] Attempting to load image from URL '";
         ptrdiff_t imageDlIdx = indexOf(line, imageDlMarker);
         if (imageDlIdx >= 0)
         {
@@ -464,7 +463,7 @@ class LogWatcher
         // VRChat always logs a Windows-style path, even under Proton on Linux:
         //   2026.04.08 14:41:22 Log        -  [VRC Camera] Took screenshot to: PATH
         //   PATH: C:\users\steamuser\Pictures\VRChat\2026-04\VRChat_2026-04-08_14-41-22.851_2560x1440.png
-        enum string photoMarker = "[VRC Camera] Took screenshot to: ";
+        static immutable string photoMarker = "[VRC Camera] Took screenshot to: ";
         ptrdiff_t photoIdx = indexOf(line, photoMarker);
         if (photoIdx >= 0)
         {
