@@ -174,7 +174,7 @@ void cmdRun(ref Config config)
         apiServer.getFriendsTracker().enrichContent(event);
         worldCache.enrichWorldName(event);
         long eventId = store.storeEvent(event);
-        logInfo("[#%d %s] %s", eventId, event.typeRaw, event.content.toString());
+        logTrace("[#%d %s] %s", eventId, event.typeRaw, event.content.toString());
         apiServer.broadcast(event, eventId);
     });
     vrcws.setStatusCallback((bool connected, string lastError)

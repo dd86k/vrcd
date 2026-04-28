@@ -131,7 +131,7 @@ private:
             }
             catch (CurlException e)
             {
-                logError("WebSocket error: %s", e.msg);
+                logError("WebSocket CurlException: %s", e.msg);
                 connected = false;
 
                 if (e.statusCode == 401 || e.statusCode == 403)
@@ -151,7 +151,7 @@ private:
                         {
                             import core.stdc.stdlib : exit;
                             logError("Re-authentication failed: %s", reAuthEx.msg);
-                            logError("Exiting to avoid spamming VRChat API.");
+                            logCritical("Exiting to avoid spamming VRChat API.");
                             exit(2);
                         }
                     }
@@ -167,7 +167,7 @@ private:
             }
             catch (Exception e)
             {
-                logError("WebSocket error: %s", e.msg);
+                logError("WebSocket Exception: %s", e.msg);
                 connected = false;
                 notifyStatus(false, e.msg);
             }
