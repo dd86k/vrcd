@@ -263,11 +263,14 @@ class FriendsTracker
 
                 // Fallback: ask the WorldCache whether it already knows
                 // this world's name. Pure lookup, no REST call.
-                if (worldName && worldCache)
+                if (worldName is null && worldCache)
                 {
                     string worldId = WorldCache.extractWorldId(loc);
                     if (worldId)
-                        worldName = worldCache.tryGet(worldId);
+                    {
+                        string cachedName = worldCache.tryGet(worldId);
+                        if (cachedName) worldName = cachedName;
+                    }
                 }
 
                 JSONValue group = JSONValue([
