@@ -347,6 +347,7 @@ class FriendsTracker
     }
 
 private:
+    // Notified of a friend coming Online to a world
     bool handleFriendOnline(JSONValue c)
     {
         string userId = extractUserId(c);
@@ -354,167 +355,269 @@ private:
             return false;
 
         FriendState* f = getOrCreate(userId);
-        f.online = true;
-        f.displayName = extractDisplayName(c, f.displayName);
-        if (const(JSONValue)* v = "platform" in c)
-            f.platform = v.str;
+        bool changed = false;
 
-        // Status/statusDescription live under content.user; without this
-        // a friend-offline -> friend-online transition leaves status="offline"
-        // and buildFriendsMessage keeps the friend in the offline bucket.
+        // Online means online: in-game
+        if (f.online == false) { f.online = true; changed = true; }
+
+        string dn = extractDisplayName(c, f.displayName);
+        if (dn != f.displayName)
+        {
+            f.displayName = dn;
+            changed = true;
+        }
+
+        if (const(JSONValue)* v = "platform" in c)
+        {
+            // NOTE: When string is empty (can happen), do not bother checking
+            if (v.str.length > 0 && v.str != f.platform)
+            {
+                f.platform = v.str;
+                changed = true;
+            }
+        }
+
         string newStatus = extractNestedUserString(c, "status");
-        if (newStatus)
+        if (newStatus && newStatus != f.status)
+        {
             f.status = newStatus;
+            changed = true;
+        }
+
         string newStatusDesc = extractNestedUserString(c, "statusDescription");
-        if (newStatusDesc)
+        if (newStatusDesc && newStatusDesc != f.statusDescription)
+        {
             f.statusDescription = newStatusDesc;
+            changed = true;
+        }
 
         if (const(JSONValue)* v = "location" in c)
         {
-            if (v.str.length > 0)
+            if (v.str.length > 0 && v.str != f.location)
+            {
                 f.location = v.str;
+                changed = true;
+            }
         }
 
         string worldName = extractWorldName(c);
-        if (worldName)
+        if (worldName && worldName != f.worldName)
+        {
             f.worldName = worldName;
+            changed = true;
+        }
 
-        applyAvatarUpdate(f, c);
-        return true;
+        if (applyAvatarUpdate(f, c)) changed = true;
+        return changed;
     }
 
     bool handleFriendOffline(JSONValue c)
     {
         string userId = extractUserId(c);
-        if (userId)
+        if (userId is null)
             return false;
 
         FriendState* f = getOrCreate(userId);
-        f.online = false;
-        f.status = "offline";
-        f.location = "offline";
-        f.worldName = null;
-        f.displayName = extractDisplayName(c, f.displayName);
+        bool changed = false;
+
+        if (f.online) { f.online = false; changed = true; }
+        if (f.status != "offline") { f.status = "offline"; changed = true; }
+        if (f.location != "offline") { f.location = "offline"; changed = true; }
+        if (f.worldName) { f.worldName = null; changed = true; }
+
+        string dn = extractDisplayName(c, f.displayName);
+        if (dn != f.displayName) { f.displayName = dn; changed = true; }
+
+        string oldPlat = f.platform;
         normalizeOfflinePlatform(*f);
-        return true;
+        if (f.platform != oldPlat) changed = true;
+
+        return changed;
     }
 
     bool handleFriendActive(JSONValue c)
     {
         string userId = extractUserId(c);
-        if (userId)
+        if (userId is null)
             return false;
 
         FriendState* f = getOrCreate(userId);
-        f.online = true;
-        f.displayName = extractDisplayName(c, f.displayName);
+        bool changed = false;
+
+        if (f.online == false) { f.online = true; changed = true; }
+
+        string dn = extractDisplayName(c, f.displayName);
+        if (dn != f.displayName)
+        {
+            f.displayName = dn;
+            changed = true;
+        }
+
         if (const(JSONValue)* v = "platform" in c)
-            f.platform = v.str;
+        {
+            if (v.str.length > 0 && v.str != f.platform)
+            {
+                f.platform = v.str;
+                changed = true;
+            }
+        }
 
         string newStatus = extractNestedUserString(c, "status");
-        if (newStatus)
+        if (newStatus && newStatus != f.status)
+        {
             f.status = newStatus;
-        string newStatusDesc = extractNestedUserString(c, "statusDescription");
-        if (newStatusDesc)
-            f.statusDescription = newStatusDesc;
+            changed = true;
+        }
 
-        // friend-active means on the website, no world location.
-        f.location = "private";
-        f.worldName = null;
-        applyAvatarUpdate(f, c);
-        return true;
+        string newStatusDesc = extractNestedUserString(c, "statusDescription");
+        if (newStatusDesc && newStatusDesc != f.statusDescription)
+        {
+            f.statusDescription = newStatusDesc;
+            changed = true;
+        }
+
+        if (f.location != "private")
+        {
+            f.location = "private";
+            changed = true;
+        }
+        if (f.worldName)
+        {
+            f.worldName = null;
+            changed = true;
+        }
+
+        if (applyAvatarUpdate(f, c)) changed = true;
+        return changed;
     }
 
     bool handleFriendLocation(JSONValue c)
     {
         string userId = extractUserId(c);
-        if (userId)
+        if (userId is null)
             return false;
 
         FriendState* f = getOrCreate(userId);
-        f.displayName = extractDisplayName(c, f.displayName);
+        bool changed = false;
+
+        string dn = extractDisplayName(c, f.displayName);
+        if (dn != f.displayName)
+        {
+            f.displayName = dn;
+            changed = true;
+        }
 
         string newStatus = extractNestedUserString(c, "status");
-        if (newStatus)
+        if (newStatus && newStatus != f.status)
+        {
             f.status = newStatus;
+            changed = true;
+        }
+
         string newStatusDesc = extractNestedUserString(c, "statusDescription");
-        if (newStatusDesc)
+        if (newStatusDesc && newStatusDesc != f.statusDescription)
+        {
             f.statusDescription = newStatusDesc;
+            changed = true;
+        }
 
         string loc;
         if (const(JSONValue)* v = "location" in c)
             loc = v.str;
 
-        // Only apply if the location changed. This prevents spurious
-        // updates when the same location is emitted repeatedly.
-        if (f.location == loc)
-        {
-            // No change in location; keep other fields updated above.
-            // Return false so the caller knows state is unchanged.
-            return false;
-        }
-
-        if (loc.length > 0)
+        if (loc != f.location)
         {
             f.location = loc;
             f.online = (loc != "offline");
+            changed = true;
         }
 
         string worldName = extractWorldName(c);
-        if (worldName)
+        if (worldName && worldName != f.worldName)
+        {
             f.worldName = worldName;
-        else if (loc == "private" || loc == "traveling")
+            changed = true;
+        }
+        else if (f.worldName && (loc == "private" || loc == "traveling"))
+        {
             f.worldName = null;
+            changed = true;
+        }
 
-        applyAvatarUpdate(f, c);
-        return true;
+        if (applyAvatarUpdate(f, c)) changed = true;
+        return changed;
     }
 
     bool handleFriendUpdate(JSONValue c)
     {
         string userId = extractUserId(c);
-        if (userId.length == 0)
+        if (userId is null)
             return false;
 
         FriendState* f = getOrCreate(userId);
-        f.displayName = extractDisplayName(c, f.displayName);
+        bool changed = false;
+
+        string dn = extractDisplayName(c, f.displayName);
+        if (dn != f.displayName) { f.displayName = dn; changed = true; }
 
         if (const(JSONValue)* v = "status" in c)
-            if (v.str.length > 0)
+        {
+            if (v.str.length > 0 && v.str != f.status)
+            {
                 f.status = v.str;
+                changed = true;
+            }
+        }
 
         if (const(JSONValue)* v = "statusDescription" in c)
-            if (v.str.length > 0)
+        {
+            if (v.str.length > 0 && v.str != f.statusDescription)
+            {
                 f.statusDescription = v.str;
+                changed = true;
+            }
+        }
 
-        applyAvatarUpdate(f, c);
-        return true;
+        if (applyAvatarUpdate(f, c)) changed = true;
+        return changed;
     }
 
     bool handleUserUpdate(JSONValue c)
     {
         string userId = extractUserId(c);
-        if (userId)
+        if (userId is null)
             return false;
 
         FriendState* f = getOrCreate(userId);
-        f.displayName = extractDisplayName(c, f.displayName);
+        bool changed = false;
 
-        // user-update nests fields under "user".
+        string dn = extractDisplayName(c, f.displayName);
+        if (dn != f.displayName) { f.displayName = dn; changed = true; }
+
         if (const(JSONValue)* u = "user" in c)
         {
             if (u.type == JSONType.object)
             {
                 if (const(JSONValue)* v = "status" in *u)
-                    if (v.type == JSONType.string && v.str.length > 0)
+                {
+                    if (v.type == JSONType.string && v.str.length > 0 && v.str != f.status)
+                    {
                         f.status = v.str;
+                        changed = true;
+                    }
+                }
                 if (const(JSONValue)* v = "statusDescription" in *u)
-                    if (v.type == JSONType.string)
+                {
+                    if (v.type == JSONType.string && v.str != f.statusDescription)
+                    {
                         f.statusDescription = v.str;
+                        changed = true;
+                    }
+                }
             }
         }
 
-        applyAvatarUpdate(f, c);
+        if (applyAvatarUpdate(f, c)) changed = true;
         // Self is filtered out of buildFriendsMessage, so no snapshot push.
         return false;
     }
@@ -522,21 +625,32 @@ private:
     bool handleUserLocation(JSONValue c)
     {
         string userId = extractUserId(c);
-        if (userId)
+        if (userId is null)
             return false;
 
         FriendState* f = getOrCreate(userId);
-        f.displayName = extractDisplayName(c, f.displayName);
+        bool changed = false;
+
+        string dn = extractDisplayName(c, f.displayName);
+        if (dn != f.displayName) { f.displayName = dn; changed = true; }
 
         if (const(JSONValue)* v = "location" in c)
-            if (v.str.length > 0)
+        {
+            if (v.str.length > 0 && v.str != f.location)
+            {
                 f.location = v.str;
+                changed = true;
+            }
+        }
 
         string worldName = extractWorldName(c);
-        if (worldName)
+        if (worldName && worldName != f.worldName)
+        {
             f.worldName = worldName;
+            changed = true;
+        }
 
-        applyAvatarUpdate(f, c);
+        if (applyAvatarUpdate(f, c)) changed = true;
         // Self is filtered out of buildFriendsMessage, so no snapshot push.
         return false;
     }
@@ -544,22 +658,39 @@ private:
     bool handleFriendDelete(JSONValue c)
     {
         string userId = extractUserId(c);
-        if (userId)
+        if (userId is null)
             return false;
 
-        friends.remove(userId);
-        return true;
+        if (userId in friends)
+        {
+            friends.remove(userId);
+            return true;
+        }
+        return false;
     }
 
     bool handleFriendAdd(JSONValue c)
     {
         string userId = extractUserId(c);
-        if (userId)
+        if (userId is null)
             return false;
 
+        if (userId !in friends)
+        {
+            FriendState* f = getOrCreate(userId);
+            f.displayName = extractDisplayName(c, f.displayName);
+            return true;
+        }
+
+        // Friend already exists, just update displayName.
         FriendState* f = getOrCreate(userId);
-        f.displayName = extractDisplayName(c, f.displayName);
-        return true;
+        string dn = extractDisplayName(c, f.displayName);
+        if (dn != f.displayName)
+        {
+            f.displayName = dn;
+            return true;
+        }
+        return false;
     }
 
     FriendState* getOrCreate(string userId)
@@ -571,13 +702,14 @@ private:
 
     /// Diff an incoming avatar id against cached state. First sighting seeds
     /// silently; subsequent changes queue a synthetic avatar-change event.
-    void applyAvatarUpdate(FriendState* f, JSONValue c)
+    bool applyAvatarUpdate(FriendState* f, JSONValue c)
     {
         string newAvatar = extractCurrentAvatar(c);
         if (newAvatar.length == 0)
-            return;
+            return false;
 
-        if (f.currentAvatar.length > 0 && f.currentAvatar != newAvatar)
+        bool changed = (f.currentAvatar != newAvatar);
+        if (changed && f.currentAvatar)
         {
             JSONValue content = JSONValue([
                 "userId":         JSONValue(f.userId),
@@ -606,6 +738,7 @@ private:
         }
 
         f.currentAvatar = newAvatar;
+        return changed;
     }
 
     static string extractUserId(JSONValue c)
