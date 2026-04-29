@@ -205,7 +205,7 @@ void cmdRun(ref Config config)
     });
     vrcws.start();
 
-    logInfo("Server running. Press Ctrl+C to stop.");
+    logInfo(headless ? "Server running." : "Server running. Press Ctrl+C to stop.");
 
     // Keep main thread alive.
     while (true)
@@ -682,8 +682,7 @@ int main(string[] args)
     {
         import std.file : exists;
         import std.conv : text;
-        printline("Config file", config.configPath ~
-            (exists(config.configPath) ? " (loaded)" : " (not found)"));
+        printline("Config file", config.configPath ~ (exists(config.configPath) ? " (loaded)" : " (not found)"));
         printline("Database", config.dbPath);
         printline("Credentials", config.credentialsPath);
         printline("Cookie jar", config.cookieJarPath);
@@ -695,11 +694,8 @@ int main(string[] args)
         return 0;
     }
 
-    // Set up logging
+    // Set up logging, if log-file is set, do not bother creating the console appender
     LogLevel logLevel = config.verbose ? LogLevel.trace : LogLevel.info;
-    ConsoleAppender logAppender = new ConsoleAppender();
-    logAppender.setLogLevel(logLevel);
-    logAddAppender(logAppender);
     if (config.logFilePath.length > 0)
     {
         try
@@ -713,6 +709,12 @@ int main(string[] args)
             stderr.writeln("error: could not open log file '", config.logFilePath, "': ", ex.msg);
             return 1;
         }
+    }
+    else
+    {
+        ConsoleAppender logAppender = new ConsoleAppender();
+        logAppender.setLogLevel(logLevel);
+        logAddAppender(logAppender);
     }
     
     // Throws and prints by default
