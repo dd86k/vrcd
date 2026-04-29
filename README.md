@@ -4,15 +4,15 @@ A little companion suite for VRChat to help you track friend activity, manage ph
 and receive VR/desktop notifications.
 
 Features:
-- VR friendly UI
 - Server-client architecture, to avoid having multiple connections to VRC APIs
 - Relatively light client using software rendering; Hardware option available
+- VR friendly UI
 - Event-stream API: Requests 'catch-up' events at startup to avoid missing activity
 - Embed world and player metadata into VRChat photos automatically
 - Strip VRChat and other metadata from VRChat photos
-- VR overlay notifications (XSOverlay, OVR Toolkit) and desktop notifications
+- VR overlay notifications (XSOverlay/WayVR, OVR Toolkit) and desktop notifications
 
-Status: Most features present. Stable for daily use; active development.
+Status: Most features present. Stable for daily use; Under active development.
 
 Otherwise, get ready to frequently pull, upgrade dependencies, and build!
 
@@ -83,6 +83,8 @@ See [API.md](./API.md) for server-client API details.
 - Using LDC 1.41 on Windows will lead to compiling issues (undefined PAGESIZE in core.thread.fiber)
 
 # Contributing
+
+I'm unsure how I want to handle contributions at this moment, sorry.
 
 At this time, it's best to write Issues for bugs and feature requests, or start
 a Discussion.
