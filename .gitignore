@@ -27,6 +27,7 @@ perso/
 *.db
 *.db-shm
 *.db-wal
+*.crt
 
 # AppImage
 /vrcd-client.AppDir
