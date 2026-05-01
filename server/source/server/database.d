@@ -94,7 +94,7 @@ class Database
     {
         logDebugging("queryEventsAfter: afterId=%d limit=%d", afterId, limit);
         return db.query(
-            "SELECT id, received_at, event_type, ws_events FROM ws_events WHERE id > ? ORDER BY id ASC LIMIT ?",
+            "SELECT id, received_at, event_type, raw_json FROM ws_events WHERE id > ? ORDER BY id ASC LIMIT ?",
             afterId.to!string,
             limit.to!string,
         );
@@ -105,7 +105,7 @@ class Database
     {
         logDebugging("queryEventsBefore: beforeId=%d limit=%d", beforeId, limit);
         return db.query(
-            "SELECT id, received_at, event_type, ws_events FROM ws_events WHERE id < ? ORDER BY id DESC LIMIT ?",
+            "SELECT id, received_at, event_type, raw_json FROM ws_events WHERE id < ? ORDER BY id DESC LIMIT ?",
             beforeId.to!string,
             limit.to!string,
         );
@@ -115,7 +115,7 @@ class Database
     auto queryRecentEvents(int limit = 50)
     {
         return db.query(
-            "SELECT id, received_at, event_type, ws_events FROM ws_events ORDER BY id DESC LIMIT ?",
+            "SELECT id, received_at, event_type, raw_json FROM ws_events ORDER BY id DESC LIMIT ?",
             limit.to!string,
         );
     }

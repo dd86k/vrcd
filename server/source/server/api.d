@@ -640,7 +640,7 @@ private class ClientHandler
         }
         catch (Exception e)
         {
-            sendError("Invalid JSON: " ~ e.msg);
+            sendError("Error processing: "~e.msg);
         }
     }
 
