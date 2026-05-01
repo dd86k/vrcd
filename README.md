@@ -3,18 +3,24 @@
 A little companion suite for VRChat to help you track friend activity, manage photos,
 and receive VR/desktop notifications.
 
-Features:
-- Server-client architecture, to avoid having multiple connections to VRC APIs
+It features a server-client architecture, to avoid having multiple connections to VRC APIs.
+
+    [!WARNING]
+    Status: Most features present. Stable for daily use; Under active development.
+    
+    Otherwise, get ready to frequently pull, upgrade dependencies, and build!
+
+Client features:
 - Relatively light client using software rendering; Hardware option available
 - VR friendly UI
-- Event-stream API: Requests 'catch-up' events at startup to avoid missing activity
 - Embed world and player metadata into VRChat photos automatically
 - Strip VRChat and other metadata from VRChat photos
 - VR overlay notifications (XSOverlay/WayVR, OVR Toolkit) and desktop notifications
 
-Status: Most features present. Stable for daily use; Under active development.
+Server features:
+- Event-stream API with 'catch-up' and 'back-fill' actions to know what you missed
 
-Otherwise, get ready to frequently pull, upgrade dependencies, and build!
+Feel free to join the official [VRChat group](https://vrc.group/VRCD.7796) (`VRCD.7796`)!
 
 ## Screenshots
 
@@ -58,7 +64,7 @@ Related projects:
 See each component's README for dependencies, configuration, and architecture details.
 
 In short:
-- Client needs SDL2 dynamic libraries (SDL2, SDL2_ttf, SDL2_image) and optionally OpenSSL.
+- Client needs SDL2 dynamic libraries (SDL2, SDL2_ttf, SDL2_image), libcurl static library,  and optionally OpenSSL.
 - Server needs libcurl and sqlite static libraries and optionally OpenSSL.
 
 ```bash

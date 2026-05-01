@@ -887,9 +887,10 @@ private mu_Color sourceColor(EventSource source)
 {
     final switch (source)
     {
-        case EventSource.server: return mu_Color(70, 140, 220, 255); // blue
-        case EventSource.local:  return mu_Color(70, 200, 90,  255); // green
-        case EventSource.system: return mu_Color(90, 90,  100, 255); // gray
+        case EventSource.server:        return mu_Color(70, 140, 220, 255); // blue
+        case EventSource.local:         return mu_Color(70, 200, 90,  255); // green
+        case EventSource.dropaportal:   return mu_Color(70, 200, 90,  255); // teal (accent color)
+        case EventSource.system:        return mu_Color(90, 90,  100, 255); // gray
     }
 }
 
@@ -1088,28 +1089,40 @@ private void drawToolsTab(mu_Context* ctx, AppState* state)
         return;
     }
 
-    static immutable int[1] fullCol = [-1];
+    static immutable int[1] fullCol  = [-1];
+    static immutable int    COLCOUNT = cast(int) fullCol.length;
     mu_begin_panel(ctx, "ToolsPanel");
 
     sectionHeader(ctx, "Pictures");
 
-    mu_layout_row(ctx, 1, fullCol.ptr, 60);
+    mu_layout_row(ctx, COLCOUNT, fullCol.ptr, 60);
     if (mu_button(ctx, "Open Pictures Folder"))
     {
         import client.directories : vrchatPicturesDir;
         openFolder(vrchatPicturesDir());
     }
 
-    mu_layout_row(ctx, 1, fullCol.ptr, 60);
+    mu_layout_row(ctx, COLCOUNT, fullCol.ptr, 60);
     if (mu_button(ctx, "Strip Metadata"))
     {
         state.stripMetadataPage = true;
     }
 
+    /*
+    spacer(ctx);
+    sectionHeader(ctx, "Drop a Portal");
+    
+    mu_layout_row(ctx, COLCOUNT, fullCol.ptr, 60);
+    if (mu_button(ctx, "Login"))
+    {
+        
+    }
+    */
+
     spacer(ctx);
     sectionHeader(ctx, "Debugging");
 
-    mu_layout_row(ctx, 1, fullCol.ptr, 60);
+    mu_layout_row(ctx, COLCOUNT, fullCol.ptr, 60);
     if (mu_button(ctx, "Open VRChat Logs Folder"))
     {
         import client.directories : vrchatLogDir;
@@ -1509,8 +1522,7 @@ private void drawStatusBar(mu_Context* ctx, AppState* state)
     }
 
     char[256] buf = void;
-    // NOTE: Consider sending a VR notification when rate limited
-    //       Toggle option
+    // NOTE: Consider sending a VR notification when rate limited (notify option)
     const(char)[] s;
     if (state.rateLimited)
     {
@@ -1528,7 +1540,7 @@ private void drawStatusBar(mu_Context* ctx, AppState* state)
         s = sformat(buf, "  Server: %s | VRChat: %s",
             state.serverStatus, state.vrchatStatus);
     }
-    if (s) mu_draw_control_text(ctx, s.ptr, r, MU_COLOR_TEXT, 0, cast(int) s.length);
+    mu_draw_control_text(ctx, s.ptr, r, MU_COLOR_TEXT, 0, cast(int) s.length);
 }
 
 /// Apply mouse wheel scroll delta to the current panel container.

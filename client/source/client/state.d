@@ -54,7 +54,7 @@ class MessageQueue
 }
 
 /// Origin of a feed entry, used to colour the accent strip.
-enum EventSource { server, local, system }
+enum EventSource { server, local, dropaportal, system }
 
 /// A single event entry for the feed tab.
 struct FeedEntry
@@ -228,7 +228,7 @@ struct AppState
     }
 
     /// Append an older event at the tail (oldest position).
-    /// Used by `fetch_older` back-fill — does not cap.
+    /// Used by `fetch_older` back-fill, does not cap.
     void appendOldFeedEntry(long id, string eventType, string user, string detail, string receivedAt,
         string rawContent = "", bool isSelf = false, EventSource source = EventSource.server)
     {
