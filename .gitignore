@@ -23,8 +23,10 @@ vrcd-test-*
 *.json
 
 perso/
-
 *.log
+*.db
+*.db-shm
+*.db-wal
 
 # AppImage
 /vrcd-client.AppDir

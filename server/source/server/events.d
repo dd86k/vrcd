@@ -77,6 +77,10 @@ VRCEvent parseEvent(const(char)[] rawMessage)
 {
     VRCEvent event;
     event.receivedAt = Clock.currTime();
+    // TODO: Confirm why .idup is used here
+    //       We could also transform `string rawJson` into `JSONValue rawJSON`,
+    //       assuming it is valid, and keep `JSONValue content` as stub/full.
+    //       This would also trim off newlines/whitespace with for DB using .toString().
     event.rawJson = rawMessage.idup;
 
     JSONValue json = parseJSON(rawMessage);

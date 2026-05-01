@@ -166,17 +166,22 @@ void cmdRun(ref Config config)
     // re-seed via APIServer.requestReseed().
     shared bool wsSeenFirstConnect = false;
 
-    // Start WebSocket event listener.
+    // WebSocket event listener and callback
     VRCWebSocket vrcws = new VRCWebSocket(authState.authToken,
     (VRCEvent event)
     {
         logDebugging("event callback: type=%s", event.typeRaw);
+        // TODO: enrichContent SHOULD return true/false if content CHANGED.
+        //       So many events can repeat and it is a problem for both storage and clients.
+        //       If we can avoid storing/broadcasting duplicates, this place is perfect to
+        //       solve this issue.
         apiServer.getFriendsTracker().enrichContent(event);
         worldCache.enrichWorldName(event);
         long eventId = store.storeEvent(event);
         logTrace("[#%d %s] %s", eventId, event.typeRaw, event.content.toString());
         apiServer.broadcast(event, eventId);
     });
+    // This is the callback when the WS connection status changes
     vrcws.setStatusCallback((bool connected, string lastError)
     {
         logInfo("VRChat WebSocket %s", connected ? "connected" : "disconnected");
@@ -197,6 +202,7 @@ void cmdRun(ref Config config)
             apiServer.requestReseed();
         }
     });
+    // Callback for re-auth
     vrcws.setReAuthCallback({
         logInfo("Re-authenticating with VRChat...");
         AuthState newState = authenticate(config, client, delegator);

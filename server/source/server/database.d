@@ -62,6 +62,14 @@ class Database
         logTrace("storeEvent: type=%s contentLen=%d rawLen=%d",
             event.typeRaw, event.content.toString().length, event.rawJson.length);
 
+        // TODO: Stop relying on content_json
+        //       insert null in content_json (compatible with current structure)
+        //       Why? This is a complete waste of space. With 15K entries, raw_json amounts to ~30 MB.
+        //       With content_json with it, that's an additional ~28 MB.
+        //       And that's over a period of about 24 days. ~2.40M/day, ~882M/year.
+        //       Without it, we're talking ~1.25M/day, ~456M/year.
+        //       "Parsing" the content takes VERY little CPU time, and can still be done by server
+        //       on the fly.
         // Use query for parameterized statements.
         foreach (_; db.query(
             "INSERT INTO ws_events (received_at, event_type, content_json, raw_json) VALUES (?, ?, ?, ?)",
@@ -140,6 +148,8 @@ class Database
     long pruneOldEvents(string modifier)
     {
         logInfo("Pruning events older than datetime('now', '%s')...", modifier);
+        
+        // Process WS events
         foreach (_; db.query(
             "DELETE FROM ws_events WHERE received_at < datetime('now', ?)",
             modifier,
@@ -148,12 +158,19 @@ class Database
         foreach (row; db.query("SELECT changes()"))
             deleted = row[0].to!long;
 
+        // Process WS connection logs
         foreach (_; db.query(
             "DELETE FROM ws_connection_log WHERE timestamp < datetime('now', ?)",
             modifier,
         )) {}
+        // NOTE: Included connection logs in this number is asking for confusion.
+        //       Why? Because "prune events" means "pruning WS events", not connection logs.
+        //       If we really wanted this specifically, return a struct with
+        //       connection_log number specifically.
+        /*
         foreach (row; db.query("SELECT changes()"))
             deleted += row[0].to!long;
+        */
 
         return deleted;
     }
