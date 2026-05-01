@@ -62,8 +62,7 @@ class Database
         logTrace("storeEvent: type=%s contentLen=%d rawLen=%d",
             event.typeRaw, event.content.toString().length, event.rawJson.length);
 
-        // TODO: Stop relying on content_json
-        //       insert null in content_json (compatible with current structure)
+        // NOTE: null inserts in content_json (compatible with current structure)
         //       Why? This is a complete waste of space. With 15K entries, raw_json amounts to ~30 MB.
         //       With content_json with it, that's an additional ~28 MB.
         //       And that's over a period of about 24 days. ~2.40M/day, ~882M/year.
@@ -75,7 +74,7 @@ class Database
             "INSERT INTO ws_events (received_at, event_type, content_json, raw_json) VALUES (?, ?, ?, ?)",
             toISO(event.receivedAt),
             event.typeRaw,
-            event.content.toString(),
+            null, // explicit is fine
             event.rawJson,
         )) {}
 
@@ -86,6 +85,7 @@ class Database
             logDebugging("storeEvent: assigned id=%d type=%s", id, event.typeRaw);
             return id;
         }
+
         return -1;
     }
 
@@ -94,7 +94,7 @@ class Database
     {
         logDebugging("queryEventsAfter: afterId=%d limit=%d", afterId, limit);
         return db.query(
-            "SELECT id, received_at, event_type, content_json FROM ws_events WHERE id > ? ORDER BY id ASC LIMIT ?",
+            "SELECT id, received_at, event_type, ws_events FROM ws_events WHERE id > ? ORDER BY id ASC LIMIT ?",
             afterId.to!string,
             limit.to!string,
         );
@@ -105,7 +105,7 @@ class Database
     {
         logDebugging("queryEventsBefore: beforeId=%d limit=%d", beforeId, limit);
         return db.query(
-            "SELECT id, received_at, event_type, content_json FROM ws_events WHERE id < ? ORDER BY id DESC LIMIT ?",
+            "SELECT id, received_at, event_type, ws_events FROM ws_events WHERE id < ? ORDER BY id DESC LIMIT ?",
             beforeId.to!string,
             limit.to!string,
         );
@@ -115,7 +115,7 @@ class Database
     auto queryRecentEvents(int limit = 50)
     {
         return db.query(
-            "SELECT id, received_at, event_type, content_json FROM ws_events ORDER BY id DESC LIMIT ?",
+            "SELECT id, received_at, event_type, ws_events FROM ws_events ORDER BY id DESC LIMIT ?",
             limit.to!string,
         );
     }

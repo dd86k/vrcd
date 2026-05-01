@@ -118,9 +118,9 @@ private:
 
                     try
                     {
-                        VRCEvent event = parseEvent(message);
-                        logDebugging("WS parsed event: type=%s contentLen=%d",
-                            event.typeRaw, event.content.toString().length);
+                        VRCEvent event = parseNewVrcEvent(message);
+                        // event.content.toString().length is wasteful, by the way
+                        logDebugging("WS parsed event: type=%s length=%s", event.typeRaw, message.length);
                         onEvent(event);
                     }
                     catch (Exception e)

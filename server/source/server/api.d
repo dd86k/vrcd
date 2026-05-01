@@ -1,4 +1,4 @@
-/// Client API server
+/// Server-Client API
 ///
 /// Copyright: dd86k <dd@dax.moe>
 /// License: BSD-3-Clause-Clear
@@ -708,7 +708,7 @@ private class ClientHandler
                     "id": JSONValue(id),
                     "received_at": JSONValue(row[1].to!string),
                     "event_type": JSONValue(row[2].to!string),
-                    "content": parseJSON(row[3].to!string),
+                    "content": vrcContent(row[3].to!string),
                 ]);
                 sendLine(eventMsg.toString() ~ "\n");
                 lastId = id;
@@ -772,7 +772,7 @@ private class ClientHandler
                     "id": JSONValue(id),
                     "received_at": JSONValue(row[1].to!string),
                     "event_type": JSONValue(row[2].to!string),
-                    "content": parseJSON(row[3].to!string),
+                    "content": vrcContent(row[3].to!string),
                 ]);
                 sendLine(eventMsg.toString() ~ "\n");
                 oldestId = id;

@@ -59,6 +59,13 @@ enum EventType : string
     unknown = "unknown",
 }
 
+// NOTE: Events
+//       Right now, the VRC event is softly "parsed" into a content field containing everything,
+//       but I need to confirm what consists of what it is using.
+//       It does contain a little too much of everything. Eventually, it'd be lighter on
+//       transmitting just the required details, which then could be a simple text field.
+//       Which means, there are no dedicated Event struct with just the necessary detail.
+
 /// A parsed VRChat WebSocket event.
 struct VRCEvent
 {
@@ -69,11 +76,54 @@ struct VRCEvent
     string rawJson;       /// Original raw JSON message for storage.
 }
 
-/// Parse a raw WebSocket message into a VRCEvent.
+/// Obtain content out of a raw VRChat WS message.
 ///
 /// WebSocket messages are JSON with structure: {"type": "...", "content": "..."}
 /// The content field is a JSON-encoded string that must be parsed separately.
-VRCEvent parseEvent(const(char)[] rawMessage)
+///
+/// This function exists to allow re-"parsing" of old raw messages.
+JSONValue vrcContent(const(char)[] rawVrcMessage)
+{
+    JSONValue json = parseJSON(rawVrcMessage);
+    
+    JSONValue content;
+
+    // Extract and double-decode content.
+    if (const(JSONValue) *jcontent = "content" in json)
+    {
+        //JSONValue contentVal = json["content"];
+        if (jcontent.type == JSONType.string)
+        {
+            // Content is a JSON-encoded string,  parse it.
+            try content = parseJSON(jcontent.str);
+            catch (Exception) content = *jcontent; // Fall back to raw string.
+        }
+        else
+        {
+            content = *jcontent;
+        }
+    }
+    // else: No content available
+    
+    return content;
+}
+unittest
+{
+    JSONValue content = vrcContent(
+`{
+    "content": "{\"userId\":\"usr_afafafaf-afaf-afaf-afaf-afafafafafaf\"}}",
+    "type": "user-location"
+}`
+    );
+    
+    assert(content["userId"].str == "usr_afafafaf-afaf-afaf-afaf-afafafafafaf");
+}
+
+/// Parse a NEW raw WebSocket message into a VRCEvent.
+///
+/// WebSocket messages are JSON with structure: {"type": "...", "content": "..."}
+/// The content field is a JSON-encoded string that must be parsed separately.
+VRCEvent parseNewVrcEvent(const(char)[] rawMessage)
 {
     VRCEvent event;
     event.receivedAt = Clock.currTime();
@@ -91,20 +141,20 @@ VRCEvent parseEvent(const(char)[] rawMessage)
     event.type = toEventType(event.typeRaw);
 
     // Extract and double-decode content.
-    if ("content" in json)
+    if (const(JSONValue) *jcontent = "content" in json)
     {
-        JSONValue contentVal = json["content"];
-        if (contentVal.type == JSONType.string)
+        //JSONValue contentVal = json["content"];
+        if (jcontent.type == JSONType.string)
         {
             // Content is a JSON-encoded string,  parse it.
             try
-                event.content = parseJSON(contentVal.str);
+                event.content = parseJSON(jcontent.str);
             catch (Exception)
-                event.content = contentVal; // Fall back to raw string.
+                event.content = *jcontent; // Fall back to raw string.
         }
         else
         {
-            event.content = contentVal;
+            event.content = *jcontent;
         }
     }
 
