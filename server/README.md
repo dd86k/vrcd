@@ -382,7 +382,7 @@ These are pulled by DUB when upgrading and building.
 | `arsd-official:sqlite` | SQLite database access |
 
 System packages:
-- Alpine: `sqlite-dev libcurl-dev` (+ `openssl-dev` for TLS)
+- Alpine: `sqlite-static curl-static` (+ `openssl-dev` for TLS)
 - Ubuntu: `libsqlite3-dev libcurl4-openssl-dev` (+ `libssl-dev` for TLS, and build libcurl if <8.11)
 
 OpenSSL 3.x shared libraries (`libssl.so.3`, `libcrypto.so.3`) are loaded dynamically at runtime for TLS support. They are not a build dependency.
