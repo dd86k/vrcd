@@ -16,8 +16,10 @@ Client features:
 - Embed world and player metadata into VRChat photos automatically
 - Strip VRChat and other metadata from VRChat photos
 - VR overlay notifications (XSOverlay/WayVR, OVR Toolkit) and desktop notifications
+- [Drop a Portal](https://dropaport.al/) integration
 
 Server features:
+- Record incoming VRChat events
 - Event-stream API with 'catch-up' and 'back-fill' actions to know what you missed
 
 Feel free to join the official [VRChat group](https://vrc.group/VRCD.7796) (`VRCD.7796`)!
