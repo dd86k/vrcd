@@ -322,7 +322,7 @@ int runGui(string host, ushort port, string secret, long sinceId,
     // Start Drop a Portal companion integration only when a token is stored.
     if (saved.dapToken.length > 0)
     {
-        dapPortal = new DropaPortal(msgQueue, networkEventType, saved.dapToken);
+        dapPortal = new DropaPortal(msgQueue, networkEventType, saved.dapToken, saved.dapLastVisitTs);
         dapPortal.start();
     }
 
@@ -562,7 +562,7 @@ private void eventLoop(mu_Context* uictx)
             }
             if (dapPortal is null)
             {
-                dapPortal = new DropaPortal(msgQueue, networkEventType, saved.dapToken);
+                dapPortal = new DropaPortal(msgQueue, networkEventType, saved.dapToken, saved.dapLastVisitTs);
                 dapPortal.start();
             }
         }
@@ -1063,6 +1063,12 @@ private void drainNetworkMessages()
             case "dap-save-token":
                 if (const(JSONValue)* v = "token" in msg)
                     saved.dapToken = v.str;
+                saveSettings(saved);
+                break;
+
+            case "dap-save-ts":
+                if (const(JSONValue)* v = "ts" in msg)
+                    saved.dapLastVisitTs = v.integer;
                 saveSettings(saved);
                 break;
 

@@ -51,6 +51,9 @@ struct Settings
 
     // Drop a Portal access token (long-lived; empty = not paired).
     string dapToken;
+    // Unix timestamp of the last historical visit sent to DAP.
+    // Backfill only processes log entries with timestamp > this value.
+    long dapLastVisitTs;
 }
 
 /// Load settings from disk. Returns defaults if file is missing or invalid.
@@ -190,6 +193,9 @@ Settings loadSettings()
         if (const(JSONValue) *jdap_token = "dap_token" in json)
             if (jdap_token.type == JSONType.string)
                 s.dapToken = jdap_token.str;
+        if (const(JSONValue) *jdap_last_visit_ts = "dap_last_visit_ts" in json)
+            if (jdap_last_visit_ts.type == JSONType.integer)
+                s.dapLastVisitTs = jdap_last_visit_ts.integer;
     }
     catch (Exception e)
     {
@@ -249,6 +255,7 @@ void saveSettings(Settings s)
 
         json["last_event_id"] = s.lastEventId;
         json["dap_token"] = s.dapToken;
+        json["dap_last_visit_ts"] = s.dapLastVisitTs;
 
         write(path, json.toPrettyString());
         logInfo("Settings saved to %s", path);

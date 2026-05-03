@@ -12,7 +12,7 @@ import std.algorithm : startsWith;
 import std.conv : to;
 import std.datetime : Clock;
 import std.json;
-import std.string : indexOf;
+import std.string : indexOf, stripRight;
 
 import bindbc.sdl;
 import ddlogger;
@@ -34,16 +34,18 @@ class DropaPortal
     private uint sdlEventType;
 
     private string accessToken;
+    private long lastVisitTs;
 
     private Mutex locationMtx;
     private string pendingLocation;
     private string reportedLocation;
 
-    this(MessageQueue queue, uint sdlEventType, string token)
+    this(MessageQueue queue, uint sdlEventType, string token, long lastVisitTs)
     {
         this.queue        = queue;
         this.sdlEventType = sdlEventType;
         this.accessToken  = token;
+        this.lastVisitTs  = lastVisitTs;
         this.locationMtx  = new Mutex();
     }
 
@@ -114,6 +116,9 @@ class DropaPortal
             logInfo("DropaPortal: token invalid, thread stopping");
             return;
         }
+
+        // Backfill world visits from existing VRChat log files.
+        runHistoricalBackfill(client);
 
         // Visit-reporting loop: wake every 5 s and report pending location.
         while (running && accessToken.length > 0)
@@ -381,6 +386,179 @@ class DropaPortal
                 return;
             Thread.sleep(1.seconds);
         }
+    }
+
+    private void runHistoricalBackfill(HTTPClient client)
+    {
+        import client.directories : vrchatLogDir;
+        import std.file : dirEntries, SpanMode, DirEntry, exists;
+        import std.algorithm : sort;
+
+        string logDir = vrchatLogDir();
+        if (logDir is null || exists(logDir) == false)
+        {
+            logDebugging("DropaPortal: no VRChat log dir, skipping backfill");
+            return;
+        }
+
+        DirEntry[] logFiles;
+        foreach (DirEntry entry; dirEntries(logDir, "output_log_*.txt", SpanMode.shallow))
+            logFiles ~= entry;
+        if (logFiles.length == 0)
+            return;
+
+        sort!((DirEntry a, DirEntry b) => a.name < b.name)(logFiles);
+
+        int sent;
+        foreach (DirEntry f; logFiles)
+        {
+            if (running == false || accessToken.length == 0)
+                break;
+            sent += backfillFromFile(client, f.name);
+        }
+
+        if (sent > 0)
+        {
+            logInfo("DropaPortal: backfilled %d historical visits", sent);
+        }
+    }
+
+    private int backfillFromFile(HTTPClient client, string path)
+    {
+        import std.stdio : File;
+
+        int sent;
+        try
+        {
+            File f = File(path, "r");
+            char[] buf;
+            while (f.readln(buf))
+            {
+                if (running == false || accessToken.length == 0)
+                    break;
+
+                string line = cast(string) buf;
+                long ts;
+                string worldId;
+                if (parseVisitLine(line, ts, worldId) == false)
+                    continue;
+                if (ts <= lastVisitTs)
+                    continue;
+
+                if (sendHistoricalVisit(client, worldId, ts))
+                {
+                    lastVisitTs = ts;
+                    pushSaveTs(ts);
+                    sent++;
+                }
+            }
+            f.close();
+        }
+        catch (Exception e)
+        {
+            logError("DropaPortal: failed to read log file %s: %s", path, e.msg);
+        }
+        return sent;
+    }
+
+    // Parse a VRChat log line for a world visit.
+    // Matches [Behaviour] Destination requested: wrld_xxx (same as reference companion).
+    // Returns true and populates ts/worldId on success.
+    private static bool parseVisitLine(string line, out long ts, out string worldId)
+    {
+        // Minimum: 19-char timestamp + at least one more char
+        if (line.length < 20)
+            return false;
+
+        ts = parseLogTimestamp(line[0 .. 19]);
+        if (ts < 0)
+            return false;
+
+        static immutable string destMarker = "[Behaviour] Destination requested: ";
+        ptrdiff_t idx = indexOf(line, destMarker);
+        if (idx < 0)
+            return false;
+
+        size_t start = cast(size_t)(idx + destMarker.length);
+        if (start + 5 > line.length)
+            return false;
+        if (line[start .. start + 5] != "wrld_")
+            return false;
+
+        string rest = stripRight(line[start .. $]);
+        ptrdiff_t colon = indexOf(rest, ':');
+        worldId = (colon > 0 ? rest[0 .. colon] : rest).idup;
+        return worldId.length > 0;
+    }
+
+    // Parse "YYYY.MM.DD HH:MM:SS" (first 19 chars of every VRChat log line)
+    // into a Unix timestamp. Returns -1 on parse failure.
+    private static long parseLogTimestamp(string s)
+    {
+        if (s.length < 19)
+            return -1;
+        // Positions: YYYY.MM.DD HH:MM:SS
+        //            0123456789012345678
+        try
+        {
+            int year   = (s[0]-'0')*1000 + (s[1]-'0')*100 + (s[2]-'0')*10 + (s[3]-'0');
+            int month  = (s[5]-'0')*10  + (s[6]-'0');
+            int day    = (s[8]-'0')*10  + (s[9]-'0');
+            int hour   = (s[11]-'0')*10 + (s[12]-'0');
+            int minute = (s[14]-'0')*10 + (s[15]-'0');
+            int second = (s[17]-'0')*10 + (s[18]-'0');
+
+            import std.datetime : DateTime, SysTime;
+            return SysTime(DateTime(year, month, day, hour, minute, second)).toUnixTime!long();
+        }
+        catch (Exception)
+        {
+            return -1;
+        }
+    }
+
+    private bool sendHistoricalVisit(HTTPClient client, string worldId, long timestamp)
+    {
+        JSONValue payload = JSONValue([
+            "world_id":  JSONValue(worldId),
+            "now":       JSONValue(false),
+            "timestamp": JSONValue(timestamp),
+        ]);
+
+        client.addHeader("Authorization", "Bearer " ~ accessToken);
+        scope (exit) client.removeHeader("Authorization");
+
+        HTTPResponse resp;
+        try resp = client.post("/companion/visits", payload.toString());
+        catch (Exception e)
+        {
+            logWarn("DropaPortal: historical visit network error: %s", e.msg);
+            return false;
+        }
+
+        if (resp.code == 200)
+            return true;
+
+        if (resp.code == 401)
+        {
+            logWarn("DropaPortal: historical visit 401, token revoked");
+            accessToken = null;
+            pushSaveToken("");
+            pushFeedEvent("dap-login-error", "Drop a Portal: session expired — re-pairing required");
+            return false;
+        }
+
+        logError("DropaPortal: historical visit HTTP %d for %s", resp.code, worldId);
+        return false;
+    }
+
+    private void pushSaveTs(long ts)
+    {
+        JSONValue msg;
+        msg["type"] = "dap-save-ts";
+        msg["ts"]   = ts;
+        queue.pushMessage(msg.toString());
+        pushWakeEvent();
     }
 
     private void pushFeedEvent(string subType, string detail, string rawContent = "")
