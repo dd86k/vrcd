@@ -38,7 +38,8 @@ class DropaPortal
 
     private Mutex locationMtx;
     private string pendingLocation;
-    private string reportedLocation;
+    private string reportedWorldId;
+    private string lastBackfilledWorldId;
 
     this(MessageQueue queue, uint sdlEventType, string token, long lastVisitTs)
     {
@@ -119,15 +120,27 @@ class DropaPortal
 
         // Backfill world visits from existing VRChat log files.
         runHistoricalBackfill(client);
+        // Seed the live-loop dedup key so we don't re-submit a world whose
+        // "Destination requested" line was already sent as a historical visit
+        // but whose "Joining" line arrives as a new live event (race at startup).
+        reportedWorldId = lastBackfilledWorldId;
 
         // Visit-reporting loop: wake every 5 s and report pending location.
         while (running && accessToken.length > 0)
         {
             string loc = readLocation();
-            if (loc.length > 0 && loc != reportedLocation)
+            if (loc.length > 0)
             {
-                if (reportVisit(client, loc))
-                    reportedLocation = loc;
+                string worldId = loc;
+                ptrdiff_t colon = indexOf(loc, ':');
+                if (colon > 0)
+                    worldId = loc[0 .. colon];
+
+                if (worldId != reportedWorldId)
+                {
+                    if (reportVisit(client, loc))
+                        reportedWorldId = worldId;
+                }
             }
             sleepInterruptible(5);
         }
@@ -448,6 +461,7 @@ class DropaPortal
                 if (sendHistoricalVisit(client, worldId, ts))
                 {
                     lastVisitTs = ts;
+                    lastBackfilledWorldId = worldId;
                     pushSaveTs(ts);
                     sent++;
                 }
