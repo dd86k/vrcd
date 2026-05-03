@@ -5,10 +5,10 @@ and receive VR/desktop notifications.
 
 It features a server-client architecture, to avoid having multiple connections to VRC APIs.
 
-    [!WARNING]
-    Status: Most features present. Stable for daily use; Under active development.
-    
-    Otherwise, get ready to frequently pull, upgrade dependencies, and build!
+> [!WARNING]
+> Status: Most features present. Stable for daily use; Under active development.
+> 
+> Otherwise, get ready to frequently pull, upgrade dependencies, and build!
 
 Client features:
 - Relatively light client using software rendering; Hardware option available

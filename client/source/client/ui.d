@@ -887,6 +887,9 @@ private mu_Color sourceColor(EventSource source)
 {
     final switch (source)
     {
+        // TODO: dropaportal and server colors are too close
+        //       dropaportal accent color is real, rest is fabricated
+        //       so find something else for server
         case EventSource.server:        return mu_Color(70, 140, 220, 255); // blue
         case EventSource.local:         return mu_Color(70, 200, 90,  255); // green
         case EventSource.dropaportal:   return mu_Color(70, 200, 90,  255); // teal (accent color)
@@ -1108,16 +1111,25 @@ private void drawToolsTab(mu_Context* ctx, AppState* state)
         state.stripMetadataPage = true;
     }
 
-    /*
     spacer(ctx);
     sectionHeader(ctx, "Drop a Portal");
-    
-    mu_layout_row(ctx, COLCOUNT, fullCol.ptr, 60);
-    if (mu_button(ctx, "Login"))
+
+    if (state.dapStatus.length > 0)
     {
-        
+        mu_layout_row(ctx, COLCOUNT, fullCol.ptr, 0);
+        mu_label(ctx, state.dapStatus);
     }
-    */
+    mu_layout_row(ctx, COLCOUNT, fullCol.ptr, 60);
+    if (state.dapStatus.length > 0)
+    {
+        if (mu_button(ctx, "Unpair"))
+            state.dapUnpairRequested = true;
+    }
+    else
+    {
+        if (mu_button(ctx, "Pair"))
+            state.dapPairRequested = true;
+    }
 
     spacer(ctx);
     sectionHeader(ctx, "Debugging");
@@ -1593,6 +1605,7 @@ string prettyEventType(string eventType)
 {
     switch (eventType)
     {
+        // VRChat
         case "friend-online":               return "Online";
         case "friend-offline":              return "Offline";
         case "friend-active":               return "Active";
@@ -1629,6 +1642,15 @@ string prettyEventType(string eventType)
         case "url-video":                   return "URL Video";
         case "url-string":                  return "URL String";
         case "url-image":                   return "URL Image";
+        // DAP integration
+        case "dap-pair-start":
+        case "dap-pair-code":
+        case "dap-paired":                  return "DAP Pairing";
+        case "dap-login-ok":
+        case "dap-started":                 return "DAP";
+        case "dap-error":
+        case "dap-login-error":             return "DAP Error";
+        // VRCD specific
         case "system":                      return "System";
         case "error":                       return "Error";
         default:                            return eventType;

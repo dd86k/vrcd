@@ -21,6 +21,7 @@ import ddlogger;
 import ddui;
 
 import client.connection;
+import client.dropaportal;
 import client.stream : loadTLS;
 import client.logwatcher;
 import client.notifications;
@@ -48,6 +49,9 @@ private Thread netThread;
 
 /// Local VRChat log file watcher.
 private LogWatcher logWatcher;
+
+/// Drop a Portal companion integration.
+private DropaPortal dapPortal;
 
 /// Server connection.
 /// __gshared: used by network thread after main thread finishes setup.
@@ -315,6 +319,13 @@ int runGui(string host, ushort port, string secret, long sinceId,
     logWatcher = new LogWatcher(msgQueue, networkEventType);
     logWatcher.start();
 
+    // Start Drop a Portal companion integration only when a token is stored.
+    if (saved.dapToken.length > 0)
+    {
+        dapPortal = new DropaPortal(msgQueue, networkEventType, saved.dapToken);
+        dapPortal.start();
+    }
+
     // Run main event loop and clean up.
     eventLoop(uictx);
     guiCleanup();
@@ -524,6 +535,38 @@ private void eventLoop(mu_Context* uictx)
             doReconnect();
         }
 
+        // Handle Drop a Portal unpair request from Settings tab.
+        if (appState.dapUnpairRequested)
+        {
+            appState.dapUnpairRequested = false;
+            if (dapPortal)
+            {
+                dapPortal.stop();
+                dapPortal.join();
+                dapPortal = null;
+            }
+            saved.dapToken = "";
+            appState.dapStatus = "";
+            saveSettings(saved);
+        }
+
+        // Handle Drop a Portal pair request from Settings tab.
+        if (appState.dapPairRequested)
+        {
+            appState.dapPairRequested = false;
+            // Clean up a finished portal before spawning a new one.
+            if (dapPortal && dapPortal.isRunning() == false)
+            {
+                dapPortal.join();
+                dapPortal = null;
+            }
+            if (dapPortal is null)
+            {
+                dapPortal = new DropaPortal(msgQueue, networkEventType, saved.dapToken);
+                dapPortal.start();
+            }
+        }
+
         // Handle friends refresh request.
         if (appState.refreshFriendsRequested)
         {
@@ -688,6 +731,12 @@ private void guiCleanup()
         logWatcher.stop();
         logWatcher.join();
         logWatcher = null;
+    }
+    if (dapPortal)
+    {
+        dapPortal.stop();
+        dapPortal.join();
+        dapPortal = null;
     }
     if (timerID)
         SDL_RemoveTimer(timerID);
@@ -886,7 +935,11 @@ private void drainNetworkMessages()
                 case "location-change":
                     // Update current instance from local log.
                     if (const(JSONValue)* v = "location" in msg)
+                    {
                         appState.currentLocation = v.str;
+                        if (dapPortal)
+                            dapPortal.setLocation(v.str);
+                    }
                     break;
                 case "photo-taken":
                     string photoPath;
@@ -979,6 +1032,38 @@ private void drainNetworkMessages()
                 appState.authUsername[] = '\0';
                 appState.authPassword[] = '\0';
                 appState.authCode[] = '\0';
+                break;
+
+            case "dap-event":
+                string dapSubType;
+                if (const(JSONValue)* v = "sub_type" in msg)
+                    dapSubType = v.str;
+                if (dapSubType == "login-ok")
+                {
+                    string dapUsername;
+                    if (const(JSONValue)* v = "username" in msg)
+                        dapUsername = v.str;
+                    string dapStatus = dapUsername.length > 0 ? "Paired as " ~ dapUsername : "Paired";
+                    appState.dapStatus = dapStatus;
+                    appState.addFeedEntry(0, "dap-login-ok", "", "Drop a Portal: " ~ dapStatus, timeNow(), "", false, EventSource.dropaportal);
+                }
+                else
+                {
+                    string dapDetail;
+                    if (const(JSONValue)* v = "detail" in msg)
+                        dapDetail = v.str;
+                    string dapRawContent;
+                    if (const(JSONValue)* v = "raw_content" in msg)
+                        dapRawContent = v.str;
+                    if (dapDetail.length > 0)
+                        appState.addFeedEntry(0, dapSubType, "", dapDetail, timeNow(), dapRawContent, false, EventSource.dropaportal);
+                }
+                break;
+
+            case "dap-save-token":
+                if (const(JSONValue)* v = "token" in msg)
+                    saved.dapToken = v.str;
+                saveSettings(saved);
                 break;
 
             default:

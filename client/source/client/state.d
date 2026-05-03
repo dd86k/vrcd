@@ -174,6 +174,11 @@ struct AppState
     // Current VRChat instance (from local log watcher).
     string currentLocation; // e.g. "wrld_xxx:12345~region(us)"
 
+    // Drop a Portal status ("", "Paired as <user>", etc.)
+    string dapStatus;
+    bool dapPairRequested;
+    bool dapUnpairRequested;
+
     // VR notification settings (int for mu_checkbox compatibility)
     int notifyMute;
     int notifyXSOverlay = 1;

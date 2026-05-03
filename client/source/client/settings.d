@@ -48,6 +48,9 @@ struct Settings
     // Highest event id processed from the server. Used on reconnect
     // to resume catch-up instead of replaying the entire event store.
     long lastEventId;
+
+    // Drop a Portal access token (long-lived; empty = not paired).
+    string dapToken;
 }
 
 /// Load settings from disk. Returns defaults if file is missing or invalid.
@@ -184,6 +187,9 @@ Settings loadSettings()
         if (const(JSONValue) *jlast_event_id = "last_event_id" in json)
             if (jlast_event_id.type == JSONType.integer)
                 s.lastEventId = jlast_event_id.integer;
+        if (const(JSONValue) *jdap_token = "dap_token" in json)
+            if (jdap_token.type == JSONType.string)
+                s.dapToken = jdap_token.str;
     }
     catch (Exception e)
     {
@@ -242,6 +248,7 @@ void saveSettings(Settings s)
         json["feed_hide_self_events"] = s.feedHideSelfEvents;
 
         json["last_event_id"] = s.lastEventId;
+        json["dap_token"] = s.dapToken;
 
         write(path, json.toPrettyString());
         logInfo("Settings saved to %s", path);
