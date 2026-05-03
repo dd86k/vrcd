@@ -887,13 +887,10 @@ private mu_Color sourceColor(EventSource source)
 {
     final switch (source)
     {
-        // TODO: dropaportal and server colors are too close
-        //       dropaportal accent color is real, rest is fabricated
-        //       so find something else for server
-        case EventSource.server:        return mu_Color(70, 140, 220, 255); // blue
-        case EventSource.local:         return mu_Color(70, 200, 90,  255); // green
-        case EventSource.dropaportal:   return mu_Color(70, 200, 90,  255); // teal (accent color)
-        case EventSource.system:        return mu_Color(90, 90,  100, 255); // gray
+        case EventSource.server:        return mu_Color( 70, 140, 220, 255); // blue
+        case EventSource.local:         return mu_Color(160,  90, 220, 255); // purple
+        case EventSource.dropaportal:   return mu_Color( 54, 215, 192, 255); // teal (accent color)
+        case EventSource.system:        return mu_Color( 90,  90, 100, 255); // gray
     }
 }
 
