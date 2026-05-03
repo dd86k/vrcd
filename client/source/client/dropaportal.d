@@ -139,26 +139,26 @@ class DropaPortal
     // token was obtained and stored in accessToken.
     private bool runPairingFlow(HTTPClient client)
     {
-        pushFeedEvent("dap-pair-start", "Pairing with Drop a Portal...");
+        pushFeedEvent("dap-pair-start", "Pairing...");
 
         HTTPResponse resp;
         try resp = client.post("/companion/auth/request", "{}");
         catch (Exception e)
         {
             logError("DropaPortal: auth/request failed: %s", e.msg);
-            pushFeedEvent("dap-error", "Drop a Portal: network error during pairing");
+            pushFeedEvent("dap-error", "Network error during pairing");
             return false;
         }
 
         if (resp.code == 429)
         {
-            pushFeedEvent("dap-error", "Drop a Portal: too many pairing attempts, try later");
+            pushFeedEvent("dap-error", "Too many pairing attempts, try later");
             return false;
         }
         if (resp.code != 200)
         {
             logError("DropaPortal: auth/request HTTP %d", resp.code);
-            pushFeedEvent("dap-error", "Drop a Portal: pairing request failed (HTTP " ~ resp.code.to!string ~ ")");
+            pushFeedEvent("dap-error", "Pairing request failed (HTTP " ~ resp.code.to!string ~ ")");
             return false;
         }
 
@@ -259,9 +259,9 @@ class DropaPortal
 
                 logWarn("DropaPortal: auth/poll terminal: %s", errCode);
                 string msg =
-                    errCode == "access_denied" ? "Drop a Portal: pairing denied by user" :
-                    errCode == "expired_token"  ? "Drop a Portal: pairing code expired"  :
-                                                  "Drop a Portal: pairing failed (" ~ errCode ~ ")";
+                    errCode == "access_denied" ? "Pairing denied by user" :
+                    errCode == "expired_token"  ? "Pairing code expired"  :
+                                                  "Pairing failed (" ~ errCode ~ ")";
                 pushFeedEvent("dap-error", msg);
                 return false;
             }
@@ -269,7 +269,7 @@ class DropaPortal
             logError("DropaPortal: auth/poll unexpected HTTP %d", poll.code);
         }
 
-        pushFeedEvent("dap-error", "Drop a Portal: pairing timed out");
+        pushFeedEvent("dap-error", "Pairing timed out");
         return false;
     }
 
@@ -312,14 +312,14 @@ class DropaPortal
         {
             logWarn("DropaPortal: token revoked or invalid");
             pushSaveToken("");
-            pushFeedEvent("dap-login-error", "Drop a Portal: token revoked — re-pairing required");
+            pushFeedEvent("dap-login-error", "Token revoked, re-pairing required");
             return false;
         }
 
         if (resp.code == 426)
         {
             logError("DropaPortal: companion protocol version too old");
-            pushFeedEvent("dap-error", "Drop a Portal: companion out of date, please update vrcd");
+            pushFeedEvent("dap-error", "Companion out of date, please update vrcd");
             running = false; // stop the thread; nothing more we can do
             return false;
         }
@@ -370,7 +370,7 @@ class DropaPortal
             logWarn("DropaPortal: visit 401, token revoked");
             accessToken = null;
             pushSaveToken("");
-            pushFeedEvent("dap-login-error", "Drop a Portal: session expired — re-pairing required");
+            pushFeedEvent("dap-login-error", "Session expired, re-pairing required");
             return false;
         }
 
@@ -544,7 +544,7 @@ class DropaPortal
             logWarn("DropaPortal: historical visit 401, token revoked");
             accessToken = null;
             pushSaveToken("");
-            pushFeedEvent("dap-login-error", "Drop a Portal: session expired — re-pairing required");
+            pushFeedEvent("dap-login-error", "Session expired, re-pairing required");
             return false;
         }
 

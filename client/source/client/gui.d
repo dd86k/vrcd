@@ -1045,7 +1045,7 @@ private void drainNetworkMessages()
                         dapUsername = v.str;
                     string dapStatus = dapUsername.length > 0 ? "Paired as " ~ dapUsername : "Paired";
                     appState.dapStatus = dapStatus;
-                    appState.addFeedEntry(0, "dap-login-ok", "", "Drop a Portal: " ~ dapStatus, timeNow(), "", false, EventSource.dropaportal);
+                    appState.addFeedEntry(0, "dap-login-ok", "", dapStatus, timeNow(), "", false, EventSource.dropaportal);
                 }
                 else
                 {
