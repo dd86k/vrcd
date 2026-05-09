@@ -81,7 +81,7 @@ class Database
             event.typeRaw, event.content.toString().length, event.rawJson.length);
 
         foreach (_; db.query(
-            "INSERT INTO ws_events (received_at, event_type, source, raw_json) VALUES (?, ?, ?, ?)",
+            "INSERT INTO ws_events (received_at, event_type, source, data) VALUES (?, ?, ?, ?)",
             toISO(event.receivedAt),
             event.typeRaw,
             eventSource(event.type),
@@ -104,7 +104,7 @@ class Database
     {
         logDebugging("queryEventsAfter: afterId=%d limit=%d", afterId, limit);
         return db.query(
-            "SELECT id, received_at, event_type, raw_json FROM ws_events WHERE id > ? ORDER BY id ASC LIMIT ?",
+            "SELECT id, received_at, event_type, data FROM ws_events WHERE id > ? ORDER BY id ASC LIMIT ?",
             afterId.to!string,
             limit.to!string,
         );
@@ -115,7 +115,7 @@ class Database
     {
         logDebugging("queryEventsBefore: beforeId=%d limit=%d", beforeId, limit);
         return db.query(
-            "SELECT id, received_at, event_type, raw_json FROM ws_events WHERE id < ? ORDER BY id DESC LIMIT ?",
+            "SELECT id, received_at, event_type, data FROM ws_events WHERE id < ? ORDER BY id DESC LIMIT ?",
             beforeId.to!string,
             limit.to!string,
         );
@@ -125,7 +125,7 @@ class Database
     auto queryRecentEvents(int limit = 50)
     {
         return db.query(
-            "SELECT id, received_at, event_type, raw_json FROM ws_events ORDER BY id DESC LIMIT ?",
+            "SELECT id, received_at, event_type, data FROM ws_events ORDER BY id DESC LIMIT ?",
             limit.to!string,
         );
     }
@@ -218,32 +218,47 @@ private:
         logInfo("Initializing database schema...");
 
         // Append-only event log (raw + synthetic).
+        // `data` is the JSON event payload: for raw events, the original WS
+        // envelope; for synthetic events, a server-built envelope with any
+        // extracted fields (e.g. avatar_id on avatar-change).
         db.exec(
             "CREATE TABLE IF NOT EXISTS ws_events (" ~
             "  id INTEGER PRIMARY KEY AUTOINCREMENT," ~
             "  received_at TEXT NOT NULL," ~
             "  event_type TEXT NOT NULL," ~
             "  source TEXT," ~
-            "  raw_json TEXT" ~
+            "  data TEXT" ~
             ")"
         );
 
-        // Migration: legacy databases have `content_json` instead of `source`.
-        // The two columns serve different purposes, but `content_json` was
-        // unconditionally NULL in recent versions, so renaming preserves no data
-        // worth keeping while avoiding a full table rebuild.
+        // Migrations on ws_events.
         bool hasSource;
         bool hasContentJson;
+        bool hasData;
+        bool hasRawJson;
         foreach (row; db.query("PRAGMA table_info(ws_events)"))
         {
             string name = row[1];
             if (name == "source")       hasSource = true;
             if (name == "content_json") hasContentJson = true;
+            if (name == "data")         hasData = true;
+            if (name == "raw_json")     hasRawJson = true;
         }
+        // Legacy databases have `content_json` instead of `source`.
+        // The two columns serve different purposes, but `content_json` was
+        // unconditionally NULL in recent versions, so renaming preserves no data
+        // worth keeping while avoiding a full table rebuild.
         if (hasSource == false && hasContentJson)
         {
             logInfo("Migrating ws_events: renaming content_json to source");
             db.exec("ALTER TABLE ws_events RENAME COLUMN content_json TO source");
+        }
+        // `raw_json` is renamed to `data` now that synthetic events also live
+        // in this column and "raw" is no longer accurate.
+        if (hasData == false && hasRawJson)
+        {
+            logInfo("Migrating ws_events: renaming raw_json to data");
+            db.exec("ALTER TABLE ws_events RENAME COLUMN raw_json TO data");
         }
 
         // Index for catch-up queries.

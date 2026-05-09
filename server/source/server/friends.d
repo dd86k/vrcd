@@ -728,7 +728,7 @@ private:
                 content,
                 Clock.currTime(),
                 // Synthesized: no real WebSocket frame, so build a canonical
-                // envelope so the stored raw_json stays consistent.
+                // envelope.
                 JSONValue([
                     "type":    JSONValue("avatar-change"),
                     "content": JSONValue(content.toString()),

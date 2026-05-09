@@ -292,7 +292,7 @@ SQLite persistence layer via arsd-official:sqlite.
 - `pruneOldEvents(modifier)` -- delete events older than a SQLite datetime modifier (e.g. `"-3 months"`); prunes both `ws_events` and `ws_connection_log`
 
 Database tables:
-- **`ws_events`** -- canonical append-only event log (id, received_at, event_type, content_json, raw_json)
+- **`ws_events`** -- append-only event log holding both raw VRChat WS events and synthetic events derived by the server (id, received_at, event_type, source, data). `source` is `"raw"` or `"synthetic"`. `data` is the event JSON envelope: the original WS frame for raw events, or a server-built envelope for synthetic ones.
 - **`ws_connection_log`** -- WebSocket connect/disconnect events; used to detect gaps in the stream
 - **`server_state`** -- key-value store for persistent server state
 - **`cache_world`**, **`cache_avatar`** -- world and avatar metadata caches
