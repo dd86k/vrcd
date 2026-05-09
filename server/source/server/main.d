@@ -182,14 +182,20 @@ void cmdRun(ref Config config)
         tracker.enrichContent(event);
         worldCache.enrichWorldName(event);
 
+        // Process event to see if a friend changed
         bool friendsChanged = tracker.processEvent(event);
         VRCEvent[] synthetics = tracker.takePendingSynthetics();
 
-        bool suppressRaw = synthetics.length > 0 && isAvatarNoiseEvent(event.type);
+        // Drop avatar-noise raws when they bring no new info: either we
+        // already produced a synthetic for them, or nothing in our cached
+        // friend state actually moved (VRChat re-emits friend-update /
+        // friend-location even when no observable property changed).
+        bool suppressRaw = isAvatarNoiseEvent(event.type)
+            && (synthetics.length > 0 || friendsChanged == false);
         if (suppressRaw)
         {
-            logTrace("suppressed raw %s (produced %d synthetics)",
-                event.typeRaw, synthetics.length);
+            logTrace("suppressed raw %s (synthetics=%d changed=%s)",
+                event.typeRaw, synthetics.length, friendsChanged);
         }
         else
         {

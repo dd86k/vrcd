@@ -822,6 +822,18 @@ private:
         return tilde > 0 ? location[0 .. tilde] : location;
     }
 
+    // VRChat's "robot" placeholder image, served while the real avatar
+    // image is still loading. Treat it as absent so we don't see real -> robot
+    // -> real transitions as two avatar swaps. Matched by file ID since the
+    // host portion varies between endpoints (cf. VRCX src/stores/user.js).
+    enum string robotAvatarFileId = "file_0e8c4e32-7444-44ea-ade4-313c010d4bae";
+
+    static bool isRobotAvatar(string s)
+    {
+        import std.string : indexOf;
+        return s.indexOf(robotAvatarFileId) >= 0;
+    }
+
     static string extractCurrentAvatar(JSONValue c)
     {
         // Top-level avatar ID (self user-update events send this)
@@ -831,7 +843,7 @@ private:
 
         // Top-level image URL fallback
         if (const(JSONValue)* v = "currentAvatarImageUrl" in c)
-            if (v.type == JSONType.string && v.str.length > 0)
+            if (v.type == JSONType.string && v.str.length > 0 && isRobotAvatar(v.str) == false)
                 return v.str;
 
         // Nested under "user" sub-object. Friend events (friend-update,
@@ -846,7 +858,7 @@ private:
                     if (ca.type == JSONType.string && ca.str.length > 0)
                         return ca.str;
                 if (const(JSONValue)* ca = "currentAvatarImageUrl" in *v)
-                    if (ca.type == JSONType.string && ca.str.length > 0)
+                    if (ca.type == JSONType.string && ca.str.length > 0 && isRobotAvatar(ca.str) == false)
                         return ca.str;
             }
         }
