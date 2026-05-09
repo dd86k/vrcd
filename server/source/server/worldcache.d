@@ -81,6 +81,11 @@ class WorldCache
     /// API mutex. Use from paths that batch multiple VRChat API calls.
     string resolveLocked(string worldId)
     {
+        // Skip non-world IDs like "private", "offline", "traveling" —
+        // /worlds/{id} always 404s for these.
+        if (isResolvable(worldId) == false)
+            return worldId;
+
         long now = Clock.currTime.toUnixTime!long();
 
         synchronized (cacheMutex)
@@ -149,9 +154,9 @@ class WorldCache
     /// "wrld_xxx:12345~region(us)". Returns empty string if not a world location.
     static string extractWorldId(string location)
     {
-        import std.string : indexOf, startsWith;
+        import std.string : indexOf;
 
-        if (location is null || startsWith(location, "wrld_") == 0)
+        if (isResolvable(location) == false)
             return null;
 
         ptrdiff_t sep = location.indexOf(':');
@@ -159,6 +164,15 @@ class WorldCache
             return location[0 .. sep];
 
         return location; // No instance suffix, just the world ID
+    }
+
+    /// Whether this string is a real world ID worth fetching.
+    /// "private", "offline", "traveling", null, etc. are not.
+    static bool isResolvable(string worldId)
+    {
+        if (worldId.length < 5)
+            return false;
+        return worldId[0 .. 5] == "wrld_";
     }
 
 private:
