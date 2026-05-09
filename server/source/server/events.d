@@ -76,6 +76,26 @@ struct VRCEvent
     string rawJson;       /// Original raw JSON message for storage.
 }
 
+/// True for raw event types that VRChat re-emits constantly during an
+/// avatar swap (location/update spam). When the tracker derives a synthetic
+/// avatar-change from one of these, the raw event is dropped: it carries no
+/// new information beyond what the synthetic plus prior state already convey.
+/// Other avatar-change triggers (e.g. friend-online, friend-active) remain
+/// meaningful on their own and are not suppressed.
+bool isAvatarNoiseEvent(EventType type)
+{
+    switch (type)
+    {
+        case EventType.friendLocation:
+        case EventType.friendUpdate:
+        case EventType.userUpdate:
+        case EventType.userLocation:
+            return true;
+        default:
+            return false;
+    }
+}
+
 /// Obtain content out of a raw VRChat WS message.
 ///
 /// WebSocket messages are JSON with structure: {"type": "...", "content": "..."}

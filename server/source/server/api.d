@@ -260,32 +260,12 @@ class APIServer
             delivered, clients.length);
     }
 
-    /// Broadcast a live event to all authenticated clients.
-    /// Also updates friends state and pushes a snapshot if it changed.
+    /// Broadcast a single event line to all authenticated clients.
+    /// Tracker orchestration (state diff, synthetics, friends snapshot)
+    /// lives in main.d so the suppression decision is in one place.
     void broadcast(VRCEvent event, long eventId)
     {
-        JSONValue msg = buildEventMessage(event, eventId);
-        string line = msg.toString() ~ "\n";
-
-        // Update friends tracker; if state changed, push snapshot too.
-        bool friendsChanged = friendsTracker.processEvent(event);
-        string friendsLine;
-        if (friendsChanged)
-            friendsLine = friendsTracker.buildFriendsMessage().toString() ~ "\n";
-
-        // Drain any synthesized events the tracker produced (e.g. avatar
-        // changes). Persist + log them so catch-up and the server log see
-        // them alongside real events, then queue their wire lines.
-        // This keeps broadcast a little simpler and keeps FriendsTracker a
-        // pure state machine.
-        VRCEvent[] synthetics = friendsTracker.takePendingSynthetics();
-        string[] synLines;
-        foreach (ref syn; synthetics)
-        {
-            long synId = store.storeEvent(syn);
-            logInfo("[#%d %s] %s", synId, syn.typeRaw, syn.content.toString());
-            synLines ~= buildEventMessage(syn, synId).toString() ~ "\n";
-        }
+        string line = buildEventMessage(event, eventId).toString() ~ "\n";
 
         clientsMutex.lock();
         scope(exit) clientsMutex.unlock();
@@ -296,16 +276,12 @@ class APIServer
             if (client.authenticated)
             {
                 client.sendLine(line);
-                foreach (sl; synLines) // send synthesized events
-                    client.sendLine(sl);
-                if (friendsChanged)
-                    client.sendLine(friendsLine);
                 ++delivered;
             }
         }
 
-        logDebugging("broadcast: id=%d type=%s clients=%d/%d friendsChanged=%s synth=%d",
-            eventId, event.typeRaw, delivered, clients.length, friendsChanged, synLines.length);
+        logDebugging("broadcast: id=%d type=%s clients=%d/%d",
+            eventId, event.typeRaw, delivered, clients.length);
     }
 
     /// Broadcast current status to all authenticated clients.

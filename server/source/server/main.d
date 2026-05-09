@@ -166,20 +166,47 @@ void cmdRun(ref Config config)
     // re-seed via APIServer.requestReseed().
     shared bool wsSeenFirstConnect = false;
 
-    // WebSocket event listener and callback
+    // WebSocket event listener and callback.
+    //
+    // Orchestrates: enrich -> tracker -> (maybe suppress raw) -> store/broadcast
+    // synthetics -> push friends snapshot. Suppression: when the tracker
+    // produces a synthetic avatar-change, the triggering raw event
+    // (friend-location/friend-update/user-update/user-location) is just noise
+    // so we drop it instead of polluting the log and the live feed.
     VRCWebSocket vrcws = new VRCWebSocket(authState.authToken,
     (VRCEvent event)
     {
         logDebugging("event callback: type=%s", event.typeRaw);
-        // TODO: enrichContent SHOULD return true/false if content CHANGED.
-        //       So many events can repeat and it is a problem for both storage and clients.
-        //       If we can avoid storing/broadcasting duplicates, this place is perfect to
-        //       solve this issue.
-        apiServer.getFriendsTracker().enrichContent(event);
+        FriendsTracker tracker = apiServer.getFriendsTracker();
+
+        tracker.enrichContent(event);
         worldCache.enrichWorldName(event);
-        long eventId = store.storeEvent(event);
-        logTrace("[#%d %s] %s", eventId, event.typeRaw, event.content.toString());
-        apiServer.broadcast(event, eventId);
+
+        bool friendsChanged = tracker.processEvent(event);
+        VRCEvent[] synthetics = tracker.takePendingSynthetics();
+
+        bool suppressRaw = synthetics.length > 0 && isAvatarNoiseEvent(event.type);
+        if (suppressRaw)
+        {
+            logTrace("suppressed raw %s (produced %d synthetics)",
+                event.typeRaw, synthetics.length);
+        }
+        else
+        {
+            long eventId = store.storeEvent(event);
+            logTrace("[#%d %s] %s", eventId, event.typeRaw, event.content.toString());
+            apiServer.broadcast(event, eventId);
+        }
+
+        foreach (ref syn; synthetics)
+        {
+            long synId = store.storeEvent(syn);
+            logInfo("[#%d %s] %s", synId, syn.typeRaw, syn.content.toString());
+            apiServer.broadcast(syn, synId);
+        }
+
+        if (friendsChanged)
+            apiServer.broadcastFriendsSnapshot();
     });
     // This is the callback when the WS connection status changes
     vrcws.setStatusCallback((bool connected, string lastError)
