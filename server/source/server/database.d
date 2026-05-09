@@ -18,7 +18,9 @@ import server.events;
 // Database structure
 //
 // Tables:
-// - ws_events        : Canonical append-only log of raw VRChat WebSocket events.
+// - ws_events        : Append-only event log. Holds both raw VRChat WS events and
+//                      synthetic events derived by the server (e.g. avatar-change).
+//                      The `source` column distinguishes them ("raw" vs "synthetic").
 // - ws_connection_log: Records when the server connects/disconnects from VRC WS.
 //                      Used to detect gaps in the event stream.
 // - server_state     : Key-value store for persistent server state.
@@ -32,6 +34,22 @@ struct DatabaseStats
     long worldCacheCount;
     long avatarCacheCount;
     long dbSizeBytes;
+}
+
+// Returns "raw" or "synthetic".
+//
+// raw events are events directly coming from the server (ie, VRChat).
+//
+// synthetic events are purely created by the server for consistency.
+private
+string eventSource(EventType type)
+{
+    switch (type) {
+    case EventType.avatarChange:
+        return "synthetic";
+    default:
+        return "raw";
+    }
 }
 
 /// SQLite database.
@@ -62,19 +80,11 @@ class Database
         logTrace("storeEvent: type=%s contentLen=%d rawLen=%d",
             event.typeRaw, event.content.toString().length, event.rawJson.length);
 
-        // NOTE: null inserts in content_json (compatible with current structure)
-        //       Why? This is a complete waste of space. With 15K entries, raw_json amounts to ~30 MB.
-        //       With content_json with it, that's an additional ~28 MB.
-        //       And that's over a period of about 24 days. ~2.40M/day, ~882M/year.
-        //       Without it, we're talking ~1.25M/day, ~456M/year.
-        //       "Parsing" the content takes VERY little CPU time, and can still be done by server
-        //       on the fly.
-        // Use query for parameterized statements.
         foreach (_; db.query(
-            "INSERT INTO ws_events (received_at, event_type, content_json, raw_json) VALUES (?, ?, ?, ?)",
+            "INSERT INTO ws_events (received_at, event_type, source, raw_json) VALUES (?, ?, ?, ?)",
             toISO(event.receivedAt),
             event.typeRaw,
-            null, // explicit is fine
+            eventSource(event.type),
             event.rawJson,
         )) {}
 
@@ -207,16 +217,34 @@ private:
     {
         logInfo("Initializing database schema...");
 
-        // Canonical append-only event log.
+        // Append-only event log (raw + synthetic).
         db.exec(
             "CREATE TABLE IF NOT EXISTS ws_events (" ~
             "  id INTEGER PRIMARY KEY AUTOINCREMENT," ~
             "  received_at TEXT NOT NULL," ~
             "  event_type TEXT NOT NULL," ~
-            "  content_json TEXT," ~
+            "  source TEXT," ~
             "  raw_json TEXT" ~
             ")"
         );
+
+        // Migration: legacy databases have `content_json` instead of `source`.
+        // The two columns serve different purposes, but `content_json` was
+        // unconditionally NULL in recent versions, so renaming preserves no data
+        // worth keeping while avoiding a full table rebuild.
+        bool hasSource;
+        bool hasContentJson;
+        foreach (row; db.query("PRAGMA table_info(ws_events)"))
+        {
+            string name = row[1];
+            if (name == "source")       hasSource = true;
+            if (name == "content_json") hasContentJson = true;
+        }
+        if (hasSource == false && hasContentJson)
+        {
+            logInfo("Migrating ws_events: renaming content_json to source");
+            db.exec("ALTER TABLE ws_events RENAME COLUMN content_json TO source");
+        }
 
         // Index for catch-up queries.
         db.exec("CREATE INDEX IF NOT EXISTS idx_ws_events_type ON ws_events (event_type)");
