@@ -291,29 +291,18 @@ int runGui(string host, ushort port, string secret, long sinceId,
     if (saved.fontPath.length > 0)
         initSettingsBuf(appState.settingsFontPath, saved.fontPath);
 
-    // Connect to server in background.
+    // Connect asynchronously: the TCP connect can take 20s+ to time out,
+    // so we do it on the network thread to keep the window responsive.
     appState.serverStatus = "Connecting...";
     conn = new ServerConnection(host, port, secret,
         saved.useTls, saved.tlsSkipVerify,
         saved.tlsClientCert, saved.tlsClientKey);
-    if (conn.connect())
-    {
-        appState.connected = true;
-        appState.serverStatus = "Connected";
-        conn.catchUp(sinceId);
-        conn.requestFriends();
-
-        // Spawn network reader thread.
-        netThread = new Thread({
-            conn.runThreaded(msgQueue, networkEventType);
-        });
-        netThread.isDaemon = true;
-        netThread.start();
-    }
-    else
-    {
-        appState.serverStatus = "Failed to connect";
-    }
+    long initialSinceId = sinceId;
+    netThread = new Thread({
+        conn.connectAndRun(msgQueue, networkEventType, initialSinceId);
+    });
+    netThread.isDaemon = true;
+    netThread.start();
 
     // Start log watcher for local VRChat player join/leave events.
     logWatcher = new LogWatcher(msgQueue, networkEventType);
@@ -521,11 +510,39 @@ private void eventLoop(mu_Context* uictx)
             momentumVY = 0.0f;
         }
 
-        // Check for disconnect.
-        if (msgQueue.isDisconnected() && appState.connected)
+        // Reconcile connection state from the network thread.
         {
-            appState.connected = false;
-            appState.serverStatus = "Disconnected";
+            ConnectionState cs = msgQueue.getConnectionState();
+            final switch (cs)
+            {
+                case ConnectionState.connecting:
+                    // No transition; serverStatus stays "Connecting...".
+                    break;
+                case ConnectionState.connected:
+                    if (appState.connected == false)
+                    {
+                        appState.connected = true;
+                        appState.serverStatus = "Connected";
+                    }
+                    break;
+                case ConnectionState.failed:
+                    if (appState.serverStatus == "Connecting...")
+                    {
+                        string err = msgQueue.getConnectError();
+                        appState.connected = false;
+                        appState.serverStatus = err.length
+                            ? "Failed to connect: " ~ err
+                            : "Failed to connect";
+                    }
+                    break;
+                case ConnectionState.disconnected:
+                    if (appState.connected)
+                    {
+                        appState.connected = false;
+                        appState.serverStatus = "Disconnected";
+                    }
+                    break;
+            }
         }
 
         // Handle reconnect request from Settings tab.
@@ -1695,23 +1712,12 @@ private void doReconnect()
     conn = new ServerConnection(host, port, secret,
         appState.settingsTls != 0, appState.settingsTlsSkipVerify != 0,
         clientCert, clientKey);
-    if (conn.connect())
-    {
-        appState.connected = true;
-        appState.serverStatus = "Connected";
-        conn.catchUp(saved.lastEventId);
-        conn.requestFriends();
-
-        netThread = new Thread({
-            conn.runThreaded(msgQueue, networkEventType);
-        });
-        netThread.isDaemon = true;
-        netThread.start();
-    }
-    else
-    {
-        appState.serverStatus = "Failed to connect";
-    }
+    long sinceId = saved.lastEventId;
+    netThread = new Thread({
+        conn.connectAndRun(msgQueue, networkEventType, sinceId);
+    });
+    netThread.isDaemon = true;
+    netThread.start();
 }
 
 /// Read current UI state into a Settings struct and persist to disk.

@@ -34,6 +34,7 @@ class ServerConnection
     private void* sslCtx;
     private string recvBuffer;
     private bool authenticated;
+    private string lastConnectError;
     private EventCallback onEvent;
     private void delegate(string) onError;
 
@@ -75,6 +76,7 @@ class ServerConnection
         catch (SocketException e)
         {
             logError("Failed to connect to %s:%d: %s", host, port, e.msg);
+            lastConnectError = e.msg;
             return false;
         }
 
@@ -87,6 +89,7 @@ class ServerConnection
                 catch (Exception e)
                 {
                     logError("TLS context creation failed: %s", e.msg);
+                    lastConnectError = "TLS context: " ~ e.msg;
                     tcpSock.close();
                     return false;
                 }
@@ -95,6 +98,7 @@ class ServerConnection
             catch (Exception e)
             {
                 logError("TLS handshake failed with %s:%d: %s", host, port, e.msg);
+                lastConnectError = "TLS handshake: " ~ e.msg;
                 tcpSock.close();
                 return false;
             }
@@ -119,6 +123,7 @@ class ServerConnection
         if (resp.type == JSONType.null_)
         {
             logError("Server closed connection during authentication");
+            lastConnectError = "Server closed connection during authentication";
             return false;
         }
 
@@ -140,11 +145,13 @@ class ServerConnection
             if (const(JSONValue)* v = "message" in resp)
                 errMessage = v.str;
             logError("Server authentication failed: %s (check client token matches server)", errMessage);
+            lastConnectError = errMessage.length ? "Auth failed: " ~ errMessage : "Auth failed";
             return false;
         }
         else
         {
             logError("Unexpected server auth response: %s", msgType);
+            lastConnectError = "Unexpected auth response: " ~ msgType;
             return false;
         }
     }
@@ -276,6 +283,49 @@ class ServerConnection
 
         queue.pushDisconnect();
         pushWakeEvent(sdlEventType);
+    }
+
+    /// Connect (blocking) and then run the receive loop, all on this thread.
+    /// Reports connection state via the queue and wakes the main thread on
+    /// each transition so the UI never blocks on TCP connect.
+    void connectAndRun(MessageQueue queue, uint sdlEventType, long sinceId)
+    {
+        bool ok;
+        try ok = connect();
+        catch (Exception e)
+        {
+            logError("Network thread: connect threw: %s", e.msg);
+            lastConnectError = e.msg;
+            ok = false;
+        }
+
+        if (ok == false)
+        {
+            queue.setConnectFailed(lastConnectError);
+            pushWakeEvent(sdlEventType);
+            return;
+        }
+
+        queue.setConnected();
+        pushWakeEvent(sdlEventType);
+
+        try
+        {
+            catchUp(sinceId);
+            requestFriends();
+            runThreadedImpl(queue, sdlEventType);
+        }
+        catch (Exception e)
+            logError("Network thread: %s", e.msg);
+
+        queue.pushDisconnect();
+        pushWakeEvent(sdlEventType);
+    }
+
+    /// Last connect error message, if connect() returned false.
+    string connectError() const
+    {
+        return lastConnectError;
     }
 
     private void runThreadedImpl(MessageQueue queue, uint sdlEventType)

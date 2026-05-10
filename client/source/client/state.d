@@ -9,12 +9,16 @@ import core.time : MonoTime;
 
 import client.notifications : notifyEventLabels, feedEventLabels;
 
+/// Network connection state for the server connection.
+enum ConnectionState { disconnected, connecting, connected, failed }
+
 /// Thread-safe message queue from network thread to UI thread.
 class MessageQueue
 {
     private string[] pending;
     private Mutex mtx;
-    private bool disconnected;
+    private ConnectionState connState = ConnectionState.connecting;
+    private string connError;
 
     this()
     {
@@ -31,8 +35,41 @@ class MessageQueue
     void pushDisconnect()
     {
         mtx.lock();
-        disconnected = true;
+        if (connState == ConnectionState.connected)
+            connState = ConnectionState.disconnected;
         mtx.unlock();
+    }
+
+    void setConnected()
+    {
+        mtx.lock();
+        connState = ConnectionState.connected;
+        connError = null;
+        mtx.unlock();
+    }
+
+    void setConnectFailed(string error)
+    {
+        mtx.lock();
+        connState = ConnectionState.failed;
+        connError = error;
+        mtx.unlock();
+    }
+
+    ConnectionState getConnectionState()
+    {
+        mtx.lock();
+        ConnectionState s = connState;
+        mtx.unlock();
+        return s;
+    }
+
+    string getConnectError()
+    {
+        mtx.lock();
+        string e = connError;
+        mtx.unlock();
+        return e;
     }
 
     string[] drain()
@@ -47,9 +84,9 @@ class MessageQueue
     bool isDisconnected()
     {
         mtx.lock();
-        bool result = disconnected;
+        ConnectionState s = connState;
         mtx.unlock();
-        return result;
+        return s == ConnectionState.disconnected || s == ConnectionState.failed;
     }
 }
 
