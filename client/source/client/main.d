@@ -107,6 +107,7 @@ int startvrcd(string[] args)
 
     GetoptResult opts = void;
     try opts = getopt(args,
+        std.getopt.config.caseSensitive,
         "host|h",     "Server host", &host,
         "port|p",     "Server port", &port,
         "secret|s",   "API secret", &secret,

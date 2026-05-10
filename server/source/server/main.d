@@ -625,6 +625,7 @@ int main(string[] args)
 
     GetoptResult opts = void;
     try opts = getopt(args,
+        std.getopt.config.caseSensitive,
         "basedir|b", "Base directory for all config/data files", (string _, string val) {
             config.setBaseDir(val);
             cliSet |= Config.SET_DB | Config.SET_AUTH | Config.SET_COOKIE_JAR;
