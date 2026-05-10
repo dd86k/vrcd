@@ -1129,7 +1129,7 @@ private void drawToolsTab(mu_Context* ctx, AppState* state)
     }
 
     spacer(ctx);
-    sectionHeader(ctx, "Debugging");
+    sectionHeader(ctx, "Diagnostics");
 
     mu_layout_row(ctx, COLCOUNT, fullCol.ptr, 60);
     if (mu_button(ctx, "Open VRChat Logs Folder"))
