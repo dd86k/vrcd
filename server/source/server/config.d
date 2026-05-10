@@ -18,6 +18,16 @@ immutable string VERSION = import("VERSION");
 /// Used in config and api.
 immutable Duration DEFAULT_RESEED_INTERVAL = dur!"hours"(2);
 
+/// Default base delay between VRChat WebSocket reconnect attempts.
+///
+/// Used as the starting point for exponential backoff, which doubles on each
+/// successive failure up to DEFAULT_RECONNECT_MAX and resets on a successful
+/// connect.
+immutable Duration DEFAULT_RECONNECT_INTERVAL = dur!"seconds"(30);
+
+/// Cap on the reconnect backoff delay.
+immutable Duration DEFAULT_RECONNECT_MAX = dur!"minutes"(5);
+
 /// Server configuration loaded from file or CLI args.
 struct Config
 {
@@ -30,6 +40,11 @@ struct Config
     string apiSecret; /// Shared secret for client auth. Empty = no auth required.
     string logFilePath; /// Optional file to append log output to. Empty = disabled.
     Duration reseedInterval = DEFAULT_RESEED_INTERVAL;
+    /// Base delay between VRChat WebSocket reconnect attempts. Doubles on each
+    /// successive failure (capped by reconnectMax), resets on success.
+    Duration reconnectInterval = DEFAULT_RECONNECT_INTERVAL;
+    /// Cap on the reconnect backoff delay.
+    Duration reconnectMax = DEFAULT_RECONNECT_MAX;
     /// SQLite datetime modifier for event retention, e.g. "-3 months".
     /// Empty = keep forever (default).
     string pruneRetain;
@@ -175,6 +190,22 @@ struct Config
                     catch (Exception ex)
                     {
                         throw new Exception("Invalid value for reseed_interval: " ~ ex.msg);
+                    }
+                    break;
+                case "reconnect_interval":
+                    import std.conv : to;
+                    try reconnectInterval = dur!"seconds"(val.to!int);
+                    catch (Exception ex)
+                    {
+                        throw new Exception("Invalid value for reconnect_interval: " ~ ex.msg);
+                    }
+                    break;
+                case "reconnect_max":
+                    import std.conv : to;
+                    try reconnectMax = dur!"seconds"(val.to!int);
+                    catch (Exception ex)
+                    {
+                        throw new Exception("Invalid value for reconnect_max: " ~ ex.msg);
                     }
                     break;
                 case "prune_retain":

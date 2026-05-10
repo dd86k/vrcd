@@ -214,6 +214,7 @@ void cmdRun(ref Config config)
         if (friendsChanged)
             apiServer.broadcastFriendsSnapshot();
     });
+    vrcws.setReconnectBackoff(config.reconnectInterval, config.reconnectMax);
     // This is the callback when the WS connection status changes
     vrcws.setStatusCallback((bool connected, string lastError)
     {
@@ -656,6 +657,16 @@ int main(string[] args)
         "log-file|L","Append log output to file", (string _, string val) {
             config.logFilePath = val;
             cliSet |= Config.SET_LOG_FILE;
+        },
+        "reconnect-interval", "Base seconds between VRChat WS reconnect attempts (doubles per failure)", (string _, string val) {
+            import std.conv : to;
+            import core.time : dur;
+            config.reconnectInterval = dur!"seconds"(val.to!int);
+        },
+        "reconnect-max", "Cap on the exponential reconnect backoff in seconds", (string _, string val) {
+            import std.conv : to;
+            import core.time : dur;
+            config.reconnectMax = dur!"seconds"(val.to!int);
         },
         "prune-retain", "Delete events older than AMOUNT UNIT (e.g. '3 months')", (string _, string val) {
             import server.config : parsePruneRetain;

@@ -5,14 +5,15 @@
 module server.vrchat.websocket;
 
 import core.thread;
-import core.time : dur;
+import core.time : dur, Duration;
 
 import ddlogger;
 import ddcurl;
 import ddcurl.libcurl : CurlException;
-import server.vrchat.vrcconfig : USER_AGENT;
 
+import server.vrchat.vrcconfig : USER_AGENT;
 import server.events;
+import server.config : DEFAULT_RECONNECT_MAX, DEFAULT_RECONNECT_INTERVAL;
 
 /// Callback type for received events.
 alias EventCallback = void delegate(VRCEvent event);
@@ -46,6 +47,17 @@ class VRCWebSocket
     void setReAuthCallback(ReAuthCallback cb)
     {
         onReAuth = cb;
+    }
+
+    /// Configure exponential reconnect backoff.
+    ///
+    /// `base` is the initial delay after a failed connect; the delay doubles
+    /// on each successive failure up to `max`, and resets to `base` after a
+    /// successful connect.
+    void setReconnectBackoff(Duration base, Duration max)
+    {
+        reconnectBase = base;
+        reconnectMax = max;
     }
 
     /// Update the auth token (e.g., after re-authentication).
@@ -91,6 +103,9 @@ private:
     bool running;
     WebSocket ws;
     bool connected;
+    Duration reconnectBase  = DEFAULT_RECONNECT_INTERVAL;
+    Duration reconnectMax   = DEFAULT_RECONNECT_MAX;
+    Duration reconnectDelay = DEFAULT_RECONNECT_INTERVAL; // current backoff value
 
     void receiveLoop()
     {
@@ -100,6 +115,7 @@ private:
             {
                 connect();
                 logInfo("WebSocket connected");
+                reconnectDelay = reconnectBase; // reset backoff on success
                 notifyStatus(true, "");
 
                 while (running && connected)
@@ -162,6 +178,13 @@ private:
                 }
                 else
                 {
+                    // 429 is VRChat explicitly telling us to back off.
+                    // VRC tend to not put Retry-After headers... Use max cap to stay safe.
+                    if (e.statusCode == 429)
+                    {
+                        logError("WebSocket rate limited (429), jumping to max backoff");
+                        reconnectDelay = reconnectMax;
+                    }
                     notifyStatus(false, e.msg);
                 }
             }
@@ -172,8 +195,12 @@ private:
                 notifyStatus(false, e.msg);
             }
 
-            logInfo("Reconnecting in 5 seconds...");
-            Thread.sleep(dur!"seconds"(5));
+            // Exponential backoff to try going around network outages
+            logInfo("Reconnecting in %s...", reconnectDelay);
+            Thread.sleep(reconnectDelay);
+            reconnectDelay = reconnectDelay * 2;
+            if (reconnectDelay > reconnectMax)
+                reconnectDelay = reconnectMax;
         }
     }
 
