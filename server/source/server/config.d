@@ -38,6 +38,7 @@ struct Config
     string credentialsPath;
     string cookieJarPath;
     string apiSecret; /// Shared secret for client auth. Empty = no auth required.
+    string totpSecret; /// Base32 TOTP secret used to auto-answer VRChat's "totp" 2FA prompt. Empty = always delegate.
     string logFilePath; /// Optional file to append log output to. Empty = disabled.
     Duration reseedInterval = DEFAULT_RESEED_INTERVAL;
     /// Base delay between VRChat WebSocket reconnect attempts. Doubles on each
@@ -82,6 +83,7 @@ struct Config
         SET_TLS_VERIFY = 1 << 11,
         SET_TLS_PORT   = 1 << 12,
         SET_TLS_ONLY   = 1 << 13,
+        SET_TOTP       = 1 << 14,
     }
 
     /// Resolve default paths based on platform.
@@ -167,6 +169,10 @@ struct Config
                 case "secret":
                     if ((cliSet & SET_SECRET) == 0)
                         apiSecret = val;
+                    break;
+                case "totp_secret":
+                    if ((cliSet & SET_TOTP) == 0)
+                        totpSecret = val;
                     break;
                 case "auth":
                     if ((cliSet & SET_AUTH) == 0)

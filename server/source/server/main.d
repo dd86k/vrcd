@@ -646,6 +646,10 @@ int main(string[] args)
             config.apiSecret = val;
             cliSet |= Config.SET_SECRET;
         },
+        "totp-secret", "Base32 TOTP secret to auto-answer VRChat's 2FA prompt", (string _, string val) {
+            config.totpSecret = val;
+            cliSet |= Config.SET_TOTP;
+        },
         "auth|a",   "Path to credentials file", (string _, string val) {
             config.credentialsPath = val;
             cliSet |= Config.SET_AUTH;

@@ -18,6 +18,7 @@ import ddcurl;
 
 import server.authdelegate;
 import server.config;
+import server.vrchat.totp : generateTOTP;
 import server.vrchat.vrcconfig : USER_AGENT;
 
 /// Persisted auth state.
@@ -51,7 +52,7 @@ AuthState authenticate(ref Config config, HTTPClient client, AuthDelegator deleg
         if (const(JSONValue) *jrequiresTwoFactorAuth = "requiresTwoFactorAuth" in userJson)
         {
             // 2FA required even with existing cookies.
-            handle2FA(client, delegator, jrequiresTwoFactorAuth);
+            handle2FA(config, client, delegator, jrequiresTwoFactorAuth);
             return reAuthUser(client);
         }
         string displayName;
@@ -173,7 +174,7 @@ AuthState fullLogin(ref Config config, HTTPClient client, AuthDelegator delegato
     // Step 3: Handle 2FA if required.
     if (const(JSONValue) *jrequiresTwoFactorAuth = "requiresTwoFactorAuth" in loginJson)
     {
-        handle2FA(client, delegator, jrequiresTwoFactorAuth);
+        handle2FA(config, client, delegator, jrequiresTwoFactorAuth);
         return reAuthUser(client);
     }
 
@@ -184,7 +185,7 @@ AuthState fullLogin(ref Config config, HTTPClient client, AuthDelegator delegato
     return finishAuth(client, loginJson);
 }
 
-void handle2FA(HTTPClient client, AuthDelegator delegator, const(JSONValue) *j2fa)
+void handle2FA(ref Config config, HTTPClient client, AuthDelegator delegator, const(JSONValue) *j2fa)
 {
     // requiresTwoFactorAuth
     const(JSONValue)[] methods = j2fa.array;
@@ -217,26 +218,50 @@ void handle2FA(HTTPClient client, AuthDelegator delegator, const(JSONValue) *j2f
 
     // Allow up to 3 attempts for wrong codes.
     enum MAX_ATTEMPTS = 3;
+    bool autoTotpAvailable = method == "totp" && config.totpSecret.length > 0;
     string retryError;
     foreach (attempt; 0 .. MAX_ATTEMPTS)
     {
         string code;
-        if (delegator)
+        bool autoAttempt;
+
+        // Try the configured TOTP secret first; on rejection, fall through to
+        // the delegator/stdin for the remaining attempts.
+        if (autoTotpAvailable)
         {
-            logInfo("Requesting 2FA code from client (attempt %d/%d)...",
-                attempt + 1, MAX_ATTEMPTS);
-            AuthResponse dresp = delegator.requestFromClient(
-                AuthRequest(AuthRequestKind.twoFactor, method, retryError));
-            if (dresp.cancelled)
-                throw new Exception("Auth delegation timed out or was cancelled");
-            code = dresp.code;
+            try
+            {
+                code = generateTOTP(config.totpSecret);
+                autoAttempt = true;
+                logInfo("Generated TOTP code from configured secret (attempt %d/%d)",
+                    attempt + 1, MAX_ATTEMPTS);
+            }
+            catch (Exception e)
+            {
+                logWarn("TOTP auto-generation failed: %s", e.msg);
+                autoTotpAvailable = false;
+            }
         }
-        else
+
+        if (code.length == 0)
         {
-            if (attempt > 0)
-                stderr.write("Invalid code, try again. ");
-            stderr.write("Enter 2FA code: ");
-            code = readln().strip();
+            if (delegator)
+            {
+                logInfo("Requesting 2FA code from client (attempt %d/%d)...",
+                    attempt + 1, MAX_ATTEMPTS);
+                AuthResponse dresp = delegator.requestFromClient(
+                    AuthRequest(AuthRequestKind.twoFactor, method, retryError));
+                if (dresp.cancelled)
+                    throw new Exception("Auth delegation timed out or was cancelled");
+                code = dresp.code;
+            }
+            else
+            {
+                if (attempt > 0)
+                    stderr.write("Invalid code, try again. ");
+                stderr.write("Enter 2FA code: ");
+                code = readln().strip();
+            }
         }
 
         JSONValue payload = JSONValue(["code": JSONValue(code)]);
@@ -249,7 +274,18 @@ void handle2FA(HTTPClient client, AuthDelegator delegator, const(JSONValue) *j2f
             return;
         }
 
-        retryError = "Invalid 2FA code, please try again";
+        if (autoAttempt)
+        {
+            // Stored secret produced a wrong code (likely stale, wrong, or
+            // clock-skewed); stop auto-trying so the delegator/user can step in.
+            logWarn("Auto-generated TOTP code rejected; falling back to interactive prompt");
+            autoTotpAvailable = false;
+            retryError = "Stored TOTP code was rejected, please enter a fresh code";
+        }
+        else
+        {
+            retryError = "Invalid 2FA code, please try again";
+        }
         logWarn("2FA verification failed (HTTP %d), attempt %d/%d",
             resp.code, attempt + 1, MAX_ATTEMPTS);
     }
