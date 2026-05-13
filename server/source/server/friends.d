@@ -528,23 +528,49 @@ private:
         if (const(JSONValue)* v = "location" in c)
             loc = v.str;
 
-        if (loc != f.location)
-        {
-            f.location = loc;
-            f.online = (loc != "offline");
-            changed = true;
-        }
+        // VRChat emits a friend-location with location="private" as a
+        // side-effect of the friend swapping avatars, even when the friend is
+        // still in the same public instance. Detect by: a real instance was
+        // cached, the new loc is "private", and the avatar id in this event
+        // differs from what we had. In that case skip the location/worldName
+        // overwrite. The synthetic avatar-change below carries the real
+        // signal, and the next genuine friend-update will reaffirm the
+        // instance.
+        string newAvatar = extractCurrentAvatar(c);
+        bool avatarSwapShadow =
+            loc == "private"
+            && newAvatar.length > 0
+            && f.currentAvatar.length > 0
+            && newAvatar != f.currentAvatar
+            && f.location.length > 5
+            && f.location[0 .. 5] == "wrld_";
 
-        string worldName = extractWorldName(c);
-        if (worldName && worldName != f.worldName)
+        if (avatarSwapShadow)
         {
-            f.worldName = worldName;
-            changed = true;
+            logTrace("handleFriendLocation: avatar-swap shadow for %s "
+                ~ "(keeping loc=%s, avatar %s -> %s)",
+                f.userId, f.location, f.currentAvatar, newAvatar);
         }
-        else if (f.worldName && (loc == "private" || loc == "traveling"))
+        else
         {
-            f.worldName = null;
-            changed = true;
+            if (loc != f.location)
+            {
+                f.location = loc;
+                f.online = (loc != "offline");
+                changed = true;
+            }
+
+            string worldName = extractWorldName(c);
+            if (worldName && worldName != f.worldName)
+            {
+                f.worldName = worldName;
+                changed = true;
+            }
+            else if (f.worldName && (loc == "private" || loc == "traveling"))
+            {
+                f.worldName = null;
+                changed = true;
+            }
         }
 
         if (applyAvatarUpdate(f, c)) changed = true;
