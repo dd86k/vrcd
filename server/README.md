@@ -219,13 +219,13 @@ VRChat WebSocket
                  ▼
            FriendsTracker.processEvent
                  │
-                 └──> Synthesized events (e.g. avatar-change)
+                 └──> Synthesized events
                            │
-                           ├──> Store in SQLite
-                           └──> Broadcast to connected clients
+                           ├──> Persisted (e.g. avatar-change) -> Store + Broadcast
+                           └──> Ephemeral (e.g. friend-traveling) -> Broadcast only (id=0)
 ```
 
-Events arrive from VRChat's WebSocket, get parsed and enriched with display names and world names from cache, then are both persisted to SQLite and broadcast live to all authenticated clients. The tracker may also derive synthesized events from state diffs (e.g. an `avatar-change` when a cached `currentAvatar` changes between two `friend-update`/`user-update` payloads); those go through the same store+broadcast path as real events.
+Events arrive from VRChat's WebSocket, get parsed and enriched with display names and world names from cache, then are both persisted to SQLite and broadcast live to all authenticated clients. The tracker may also derive synthesized events from state diffs (e.g. an `avatar-change` when a cached `currentAvatar` changes between two `friend-update`/`user-update` payloads); persisted synthetics go through the same store+broadcast path as real events. Ephemeral synthetics are broadcast live with `id=0` and never stored — they convey transient real-time signal (e.g. "friend is joining a world") that has no value in the historical log.
 
 ### Threading Model
 
@@ -276,11 +276,18 @@ All recognized events are stored in SQLite and broadcast to clients. Friend and 
 | Group | `group-joined`, `group-left`, `group-role-updated`, `group-member-updated` |
 | Instance | `instance-queue-joined`, `instance-queue-position`, `instance-queue-ready`, `instance-queue-left`, `instance-closed` |
 | Content | `content-refresh` |
-| Synthesized | `avatar-change` |
+| Synthesized (persisted) | `avatar-change` |
+| Synthesized (ephemeral) | `friend-traveling` |
 
-**Synthesized events** are not produced by VRChat's WebSocket. They are derived on the server from state diffs and then persisted + broadcast identically to real events, so catch-up and the event viewer see them alongside the rest. Currently:
+**Synthesized events** are not produced by VRChat's WebSocket. They are derived on the server from observed state, in two flavors:
 
-- `avatar-change` -- emitted when the cached `currentAvatar` on a tracked entry (friend or self) changes between updates. Content: `{ userId, displayName, previousAvatar, currentAvatar, isSelf }`. Clients can filter self-originated changes via the `isSelf` flag.
+- *Persisted* synthetics go through the same store + broadcast path as real events, so catch-up and the event viewer see them alongside the rest.
+- *Ephemeral* synthetics are broadcast live with `id=0` and never written to `ws_events`. They carry transient signal that would only pollute the historical feed (typically because VRChat will send a follow-up frame seconds later that supersedes them). Clients must not advance their high-water cursor on `id=0` events.
+
+Currently:
+
+- `avatar-change` *(persisted)* -- emitted when the cached `currentAvatar` on a tracked entry (friend or self) changes between updates. Content: `{ userId, displayName, previousAvatar, currentAvatar, isSelf }`. Clients can filter self-originated changes via the `isSelf` flag.
+- `friend-traveling` *(ephemeral)* -- emitted when an incoming `friend-location` carries `location == "traveling"`, i.e. the friend's client is loading the next world. The raw traveling frame is suppressed (never stored, never broadcast) since the concrete arrival event follows seconds later; the `friend-traveling` ping lets clients render a "Joining X" pseudo event without inflating the DB or producing feed doubles. Content: `{ userId, displayName, travelingToLocation, world, worldName }` (world/worldName included when VRChat populated them on the source frame).
 
 ### `database.d`
 SQLite persistence layer via arsd-official:sqlite.

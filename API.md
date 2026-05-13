@@ -150,10 +150,12 @@ A VRChat event, either live or during catch-up.
 | Field         | Type   | Description                                |
 |---------------|--------|--------------------------------------------|
 | `type`        | string | `"event"`                                  |
-| `id`          | long   | Auto-incrementing event ID (1-based)       |
+| `id`          | long   | Auto-incrementing event ID (1-based). `0` for ephemeral broadcasts (not persisted; see below) |
 | `received_at` | string | ISO 8601 timestamp (UTC)                   |
 | `event_type`  | string | VRChat event type (see below)              |
 | `content`     | object | Parsed event content (enriched by server)  |
+
+Ephemeral events (`id == 0`) are live-only signals that the server never writes to `ws_events`. They will not appear in catch-up or `fetch_older` results, and clients must not advance their stored high-water mark (`last_event_id`) when they arrive. Currently emitted for `friend-traveling`.
 
 ### `caught_up`
 
@@ -278,6 +280,12 @@ Events forwarded from VRChat's WebSocket, stored and broadcast as `event` messag
 
 ### Content Events
 - `content-refresh` - Content refresh signal
+
+### Synthesized Events
+Derived on the server, not produced by VRChat's WebSocket.
+
+- `avatar-change` *(persisted)* - A tracked entry's `currentAvatar` changed between updates. Content: `{ userId, displayName, previousAvatar, currentAvatar, isSelf }`.
+- `friend-traveling` *(ephemeral, `id == 0`)* - A friend's client is loading the next world (raw `friend-location` with `location == "traveling"`). Broadcast live for "Joining X" UI; never stored. The concrete arrival arrives shortly after as a normal `friend-location`. Content: `{ userId, displayName, travelingToLocation, world?, worldName? }`.
 
 ## Connection Flow
 
