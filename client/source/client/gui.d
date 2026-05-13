@@ -1235,8 +1235,10 @@ private void extractEventFields(string eventType, JSONValue msg, out string user
                 return;
 
             case "avatar-change":
-                // user already extracted from content.displayName above.
-                // Avatar IDs/URLs are opaque; name lookup isn't available.
+                // Avatar IDs are opaque (no name resolution yet); show the id.
+                if (const(JSONValue)* v = "currentAvatar" in c)
+                    if (v.str.length > 0)
+                        detail = v.str;
                 return;
 
             case "content-refresh":
