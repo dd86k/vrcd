@@ -1597,6 +1597,29 @@ string prettyPlatform(string platform)
     }
 }
 
+/// Reduce a `currentAvatar` value to a compact identifier. Self events carry
+/// an `avtr_<uuid>` directly; friend events expose only an image URL like
+/// `https://api.vrchat.cloud/api/1/file/file_<uuid>/<ver>/file`, in which the
+/// `file_<uuid>` segment is the most stable handle we can show.
+string shortAvatarId(string s)
+{
+    import std.string : indexOf;
+
+    ptrdiff_t i = s.indexOf("avtr_");
+    if (i >= 0)
+        return s[i .. $];
+
+    i = s.indexOf("file_");
+    if (i >= 0)
+    {
+        string rest = s[i .. $];
+        ptrdiff_t slash = rest.indexOf('/');
+        return slash >= 0 ? rest[0 .. slash] : rest;
+    }
+
+    return s;
+}
+
 /// Map VRChat WebSocket event type strings to readable names.
 string prettyEventType(string eventType)
 {

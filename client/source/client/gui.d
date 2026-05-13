@@ -1235,10 +1235,12 @@ private void extractEventFields(string eventType, JSONValue msg, out string user
                 return;
 
             case "avatar-change":
-                // Avatar IDs are opaque (no name resolution yet); show the id.
+                // For self events this is an avtr_<uuid>; for friends VRChat
+                // only exposes the image URL, so extract the file_<uuid>
+                // segment as the most compact stable handle.
                 if (const(JSONValue)* v = "currentAvatar" in c)
                     if (v.str.length > 0)
-                        detail = v.str;
+                        detail = shortAvatarId(v.str);
                 return;
 
             case "content-refresh":
