@@ -186,22 +186,69 @@ void cmdRun(ref Config config)
         bool friendsChanged = tracker.processEvent(event);
         VRCEvent[] synthetics = tracker.takePendingSynthetics();
 
+        // A friend-location with location="traveling" is the first half of a
+        // world transition; the arrival event follows seconds later carrying
+        // the concrete instance. Persisting both produces feed doubles. Emit
+        // an ephemeral friend-traveling instead — broadcast live so clients
+        // can show a "Joining X" indicator, but never stored. Tracker state
+        // already absorbed the transient via processEvent above.
+        VRCEvent traveling;
+        bool isTraveling = false;
+        if (event.type == EventType.friendLocation)
+        {
+            if (const(JSONValue)* v = "location" in event.content)
+            {
+                if (v.type == JSONType.string && v.str == "traveling")
+                    isTraveling = true;
+            }
+        }
+        if (isTraveling)
+        {
+            JSONValue tc;
+            tc["userId"] = JSONValue("");
+            if (const(JSONValue)* v = "userId" in event.content)       tc["userId"] = *v;
+            if (const(JSONValue)* v = "displayName" in event.content)  tc["displayName"] = *v;
+            if (const(JSONValue)* v = "travelingToLocation" in event.content) tc["travelingToLocation"] = *v;
+            if (const(JSONValue)* v = "worldName" in event.content)    tc["worldName"] = *v;
+            if (const(JSONValue)* v = "world" in event.content)        tc["world"] = *v;
+            traveling = VRCEvent(
+                EventType.friendTraveling,
+                "friend-traveling",
+                tc,
+                event.receivedAt,
+                JSONValue([
+                    "type":    JSONValue("friend-traveling"),
+                    "content": JSONValue(tc.toString()),
+                ]).toString()
+            );
+        }
+
         // Drop avatar-noise raws when they bring no new info: either we
         // already produced a synthetic for them, or nothing in our cached
         // friend state actually moved (VRChat re-emits friend-update /
         // friend-location even when no observable property changed).
-        bool suppressRaw = isAvatarNoiseEvent(event.type)
-            && (synthetics.length > 0 || friendsChanged == false);
+        // Also drop traveling friend-locations; currently no use for saving it.
+        bool suppressRaw = isTraveling
+            || (isAvatarNoiseEvent(event.type)
+                && (synthetics.length > 0 || friendsChanged == false));
         if (suppressRaw)
         {
-            logTrace("suppressed raw %s (synthetics=%d changed=%s)",
-                event.typeRaw, synthetics.length, friendsChanged);
+            logTrace("suppressed raw %s (synthetics=%d changed=%s traveling=%s)",
+                event.typeRaw, synthetics.length, friendsChanged, isTraveling);
         }
         else
         {
             long eventId = store.storeEvent(event);
             logTrace("[#%d %s] %s", eventId, event.typeRaw, event.content.toString());
             apiServer.broadcast(event, eventId);
+        }
+
+        // Ephemeral broadcast: id=0 signals "not persisted, do not advance
+        // client high-water mark."
+        if (isTraveling)
+        {
+            logTrace("[#0 friend-traveling] %s", traveling.content.toString());
+            apiServer.broadcast(traveling, 0);
         }
 
         foreach (ref syn; synthetics)

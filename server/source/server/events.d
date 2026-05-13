@@ -53,7 +53,8 @@ enum EventType : string
     contentRefresh = "content-refresh",
 
     // Synthesized (not from VRChat; derived by the server from other events)
-    avatarChange = "avatar-change",
+    avatarChange    = "avatar-change",
+    friendTraveling = "friend-traveling",
 
     // Unknown
     unknown = "unknown",
