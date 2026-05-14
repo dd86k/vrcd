@@ -782,9 +782,16 @@ private class ClientHandler
             {
                 foreach (ref JSONValue grp; v.array)
                 {
+                    // Prefer the full location (with ~type(usr) qualifier);
+                    // /instances/{loc} only returns accurate n_users when the
+                    // access type is present. Fall back to instance_id (the
+                    // canonical form) for older snapshots that lack it.
                     string loc;
-                    if (const(JSONValue)* l = "instance_id" in grp)
+                    if (const(JSONValue)* l = "location" in grp)
                         loc = l.str;
+                    if (loc.length == 0)
+                        if (const(JSONValue)* l = "instance_id" in grp)
+                            loc = l.str;
                     if (InstanceCache.isResolvable(loc) == false)
                         continue;
                     if (loc in seen)

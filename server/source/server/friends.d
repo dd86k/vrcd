@@ -268,6 +268,11 @@ class FriendsTracker
             // can appear between REST-seed data and live WebSocket events.
             JSONValue[][string] byLocation;
             string[string] locationWorldName; // canonical location -> worldName
+            // canonical -> first-seen full location (with ~type(usr) and tags).
+            // The InstanceCache hits /instances/{loc}, which only returns
+            // accurate n_users when the access-type qualifier is present;
+            // the canonical key alone yields capacity but n_users=0.
+            string[string] locationFull;
 
             foreach (ref FriendState f; friends)
             {
@@ -290,6 +295,8 @@ class FriendsTracker
                     byLocation[key] ~= fObj;
                     if (f.worldName)
                         locationWorldName[key] = f.worldName;
+                    if ((key in locationFull) is null)
+                        locationFull[key] = f.location;
                 }
             }
 
@@ -313,17 +320,22 @@ class FriendsTracker
                     }
                 }
 
+                string fullLoc = locationFull.get(loc, loc);
+
                 JSONValue group = JSONValue([
                     "instance_id": JSONValue(loc),
-                    "world_name": JSONValue(worldName),
-                    "friends": JSONValue(friendObjs),
+                    "location":    JSONValue(fullLoc),
+                    "world_name":  JSONValue(worldName),
+                    "friends":     JSONValue(friendObjs),
                 ]);
 
                 // Attach instance occupancy if the cache has a fresh entry.
-                // Pure lookup, no REST call.
+                // Pure lookup, no REST call. Key on the full location: the
+                // canonical id lacks the access-type qualifier and VRChat
+                // returns n_users=0 for those lookups.
                 if (instanceCache)
                 {
-                    InstanceInfo info = instanceCache.tryGet(loc);
+                    InstanceInfo info = instanceCache.tryGet(fullLoc);
                     if (info.known)
                     {
                         group["n_users"] = JSONValue(info.nUsers);
