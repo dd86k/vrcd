@@ -530,26 +530,22 @@ private:
 
         // VRChat emits a friend-location with location="private" as a
         // side-effect of the friend swapping avatars, even when the friend is
-        // still in the same public instance. Detect by: a real instance was
-        // cached, the new loc is "private", and the avatar id in this event
-        // differs from what we had. In that case skip the location/worldName
-        // overwrite. The synthetic avatar-change below carries the real
-        // signal, and the next genuine friend-update will reaffirm the
+        // still in the same public instance. World transitions go through
+        // "traveling", never a bare "private", so any "private" landing on
+        // top of a cached wrld_ instance is treated as avatar-swap shadow:
+        // skip the location/worldName overwrite. applyAvatarUpdate below
+        // produces the synthetic when the new avatar id arrives (same frame
+        // or a later one); the next genuine friend-update reaffirms the
         // instance.
-        string newAvatar = extractCurrentAvatar(c);
         bool avatarSwapShadow =
             loc == "private"
-            && newAvatar.length > 0
-            && f.currentAvatar.length > 0
-            && newAvatar != f.currentAvatar
             && f.location.length > 5
             && f.location[0 .. 5] == "wrld_";
 
         if (avatarSwapShadow)
         {
             logTrace("handleFriendLocation: avatar-swap shadow for %s "
-                ~ "(keeping loc=%s, avatar %s -> %s)",
-                f.userId, f.location, f.currentAvatar, newAvatar);
+                ~ "(keeping loc=%s)", f.userId, f.location);
         }
         else
         {
