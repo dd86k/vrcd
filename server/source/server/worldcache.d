@@ -141,12 +141,16 @@ class WorldCache
             worldId = extractWorldId(location);
         }
 
-        if (worldId.length == 0)
+        // resolve() falls back to returning the input ID as the "name" for
+        // unresolvable inputs like "private"/"offline"/"traveling". Guard
+        // here so we don't poison content with worldName="private", which
+        // downstream handlers then mistake for a real world name.
+        if (isResolvable(worldId) == false)
             return;
 
         logTrace("enrichWorldName: resolving %s", worldId);
         string name = resolve(worldId);
-        if (name.length > 0)
+        if (name.length > 0 && name != worldId)
             event.content["worldName"] = JSONValue(name);
     }
 
