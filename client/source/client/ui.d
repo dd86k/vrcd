@@ -662,6 +662,11 @@ private bool passesFilter(ref FeedEntry entry, string query, AppState* state)
     if (state.feedHideSelfEvents != 0 && entry.isSelf)
         return false;
 
+    // friend-traveling is an ephemeral ping used to drive the Player Joining
+    // detection; it's not interesting to show in the feed.
+    if (entry.eventType == "friend-traveling")
+        return false;
+
     // Event type filter.
     bool typeAllowed = true;
     foreach (size_t i, string label; feedEventLabels)
@@ -1633,6 +1638,7 @@ string prettyEventType(string eventType)
         case "friend-delete":               return "Friend Remove";
         case "friend-update":               return "Friend Update";
         case "friend-location":             return "Friend Location";
+        case "friend-traveling":            return "Friend Traveling";
         case "user-update":                 return "Update";
         case "user-location":               return "Location";
         case "user-badge-assigned":         return "Badge Assigned";
