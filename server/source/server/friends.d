@@ -177,40 +177,80 @@ class FriendsTracker
     }
 
     /// Process a VRCEvent and update friend state.
-    /// Returns true if the friends state changed.
+    /// Returns true if the *client-visible* state changed. Per-handler change
+    /// flags are too eager (VRChat resends identical frames with slightly
+    /// differing nested fields that bounce internal state without altering
+    /// the snapshot clients receive). Authoritative diff: take a fingerprint
+    /// of the affected friend before and after, compare.
     bool processEvent(VRCEvent event)
     {
         synchronized (friendsMutex)
         {
-            bool changed;
+            string userId = extractUserId(event.content);
+            VisibleState before = userId.length > 0 ? visibleStateOf(userId) : VisibleState.init;
+
             switch (event.type)
             {
-                case EventType.friendOnline:
-                    changed = handleFriendOnline(event.content); break;
-                case EventType.friendOffline:
-                    changed = handleFriendOffline(event.content); break;
-                case EventType.friendActive:
-                    changed = handleFriendActive(event.content); break;
-                case EventType.friendLocation:
-                    changed = handleFriendLocation(event.content); break;
-                case EventType.friendUpdate:
-                    changed = handleFriendUpdate(event.content); break;
-                case EventType.friendDelete:
-                    changed = handleFriendDelete(event.content); break;
-                case EventType.friendAdd:
-                    changed = handleFriendAdd(event.content); break;
-                case EventType.userUpdate:
-                    changed = handleUserUpdate(event.content); break;
-                case EventType.userLocation:
-                    changed = handleUserLocation(event.content); break;
+                case EventType.friendOnline:   handleFriendOnline(event.content);   break;
+                case EventType.friendOffline:  handleFriendOffline(event.content);  break;
+                case EventType.friendActive:   handleFriendActive(event.content);   break;
+                case EventType.friendLocation: handleFriendLocation(event.content); break;
+                case EventType.friendUpdate:   handleFriendUpdate(event.content);   break;
+                case EventType.friendDelete:   handleFriendDelete(event.content);   break;
+                case EventType.friendAdd:      handleFriendAdd(event.content);      break;
+                case EventType.userUpdate:     handleUserUpdate(event.content);     break;
+                case EventType.userLocation:   handleUserLocation(event.content);   break;
                 default:
                     logTrace("processEvent: ignoring type=%s", event.typeRaw);
                     return false;
             }
+
+            // Self never appears in client snapshots — its mutations are
+            // not "visible state changes" for broadcast purposes.
+            if (userId.length > 0 && selfUserId.length > 0 && userId == selfUserId)
+            {
+                logDebugging("processEvent: type=%s self-update suppressed", event.typeRaw);
+                return false;
+            }
+
+            VisibleState after = userId.length > 0 ? visibleStateOf(userId) : VisibleState.init;
+            bool changed = before != after;
             logDebugging("processEvent: type=%s changed=%s friends=%d",
                 event.typeRaw, changed, friends.length);
             return changed;
         }
+    }
+
+    /// Fingerprint of the per-friend fields clients actually see in
+    /// buildFriendsMessage. Used to gate broadcasts so that VRChat's
+    /// repeated identical frames don't trigger redundant snapshots.
+    private struct VisibleState
+    {
+        bool present;
+        string displayName;
+        string status;
+        string statusDescription;
+        string platform;
+        string location;
+        string worldName;
+        bool online;
+    }
+
+    private VisibleState visibleStateOf(string userId)
+    {
+        FriendState* f = userId in friends;
+        if (f is null)
+            return VisibleState.init;
+        VisibleState v;
+        v.present = true;
+        v.displayName = f.displayName;
+        v.status = f.status;
+        v.statusDescription = f.statusDescription;
+        v.platform = f.platform;
+        v.location = canonicalLocation(f.location);
+        v.worldName = f.worldName;
+        v.online = f.online;
+        return v;
     }
 
     /// Build a JSON message with the full friends snapshot.
@@ -727,14 +767,21 @@ private:
 
     /// Diff an incoming avatar id against cached state. First sighting seeds
     /// silently; subsequent changes queue a synthetic avatar-change event.
+    /// Suppressed when the friend's location isn't a concrete instance: a
+    /// private/traveling/offline friend who swaps avatars has no observable
+    /// moment for clients to render, and VRChat keeps emitting avatar id
+    /// churn for these friends regardless.
     bool applyAvatarUpdate(FriendState* f, JSONValue c)
     {
         string newAvatar = extractCurrentAvatar(c);
         if (newAvatar.length == 0)
             return false;
 
+        bool visibleInstance =
+            f.location.length > 5 && f.location[0 .. 5] == "wrld_";
+
         bool changed = (f.currentAvatar != newAvatar);
-        if (changed && f.currentAvatar)
+        if (changed && f.currentAvatar && visibleInstance)
         {
             JSONValue content = JSONValue([
                 "userId":         JSONValue(f.userId),
