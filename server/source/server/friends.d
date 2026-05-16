@@ -390,14 +390,14 @@ class FriendsTracker
             cachedPlatform = f.platform;
         }
 
-        if ("displayName" !in event.content && cachedDisplayName.length > 0)
+        if (isMissingOrEmpty(event.content, "displayName") && cachedDisplayName.length > 0)
         {
             event.content["displayName"] = JSONValue(cachedDisplayName);
             logTrace("enrichContent: added displayName=%s for %s",
                 cachedDisplayName, userId);
         }
 
-        if ("platform" !in event.content && cachedPlatform.length > 0)
+        if (isMissingOrEmpty(event.content, "platform") && cachedPlatform.length > 0)
             event.content["platform"] = JSONValue(cachedPlatform);
     }
 
@@ -823,6 +823,16 @@ private:
 
         f.currentAvatar = newAvatar;
         return changed;
+    }
+
+    static bool isMissingOrEmpty(JSONValue c, string key)
+    {
+        const(JSONValue)* v = key in c;
+        if (v is null)
+            return true;
+        if (v.type == JSONType.string && v.str.length == 0)
+            return true;
+        return false;
     }
 
     static string extractUserId(JSONValue c)
