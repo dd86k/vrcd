@@ -183,7 +183,7 @@ struct AppState
 
     // Feed filter (int for mu_checkbox compatibility). 1 = visible, 0 = hidden.
     int[feedEventLabels.length] feedEventVisible = 1;
-    int feedHideSelfEvents;
+    int feedShowSelfEvents;
 
     // Smallest server event id currently loaded in feedEntries (long.max = none).
     // Used as the cursor for "Fetch older" back-fill requests.

@@ -139,7 +139,7 @@ int runGui(string host, ushort port, string secret, long sinceId,
     // Load feed filter settings into appState (bool -> int).
     foreach (size_t i; 0 .. feedEventLabels.length)
         appState.feedEventVisible[i] = cast(int) saved.feedEventVisible[i];
-    appState.feedHideSelfEvents = cast(int) saved.feedHideSelfEvents;
+    appState.feedShowSelfEvents = cast(int) saved.feedShowSelfEvents;
 
     // Load picture metadata setting into appState (bool -> int).
     appState.insertPictureMetadata = cast(int) saved.insertPictureMetadata;
@@ -1838,7 +1838,7 @@ private void doSaveSettings()
     // Feed filter settings (int -> bool).
     foreach (size_t i; 0 .. feedEventLabels.length)
         s.feedEventVisible[i] = appState.feedEventVisible[i] != 0;
-    s.feedHideSelfEvents = appState.feedHideSelfEvents != 0;
+    s.feedShowSelfEvents = appState.feedShowSelfEvents != 0;
 
     // Picture metadata setting (int -> bool).
     s.insertPictureMetadata = appState.insertPictureMetadata != 0;

@@ -201,9 +201,9 @@ private void drawFeedFilterPopup(mu_Context* ctx, AppState* state)
 
         static immutable int[1] selfCol = [320];
         mu_layout_row(ctx, 1, selfCol.ptr, 0);
-        int prevHideSelf = state.feedHideSelfEvents;
-        mu_checkbox(ctx, "Hide self events", &state.feedHideSelfEvents);
-        if (state.feedHideSelfEvents != prevHideSelf)
+        int prevShowSelf = state.feedShowSelfEvents;
+        mu_checkbox(ctx, "Show self events", &state.feedShowSelfEvents);
+        if (state.feedShowSelfEvents != prevShowSelf)
         {
             feedPage = 0;
             changed = true;
@@ -662,8 +662,9 @@ private string searchStr()
 /// Check whether a feed entry passes the current filters.
 private bool passesFilter(ref FeedEntry entry, string query, AppState* state)
 {
-    // Hide self events (user-update, user-location, self avatar changes, etc).
-    if (state.feedHideSelfEvents != 0 && entry.isSelf)
+    // Self events (user-update, user-location, self avatar changes, etc) are
+    // hidden unless explicitly shown.
+    if (state.feedShowSelfEvents == 0 && entry.isSelf)
         return false;
 
     // friend-traveling is an ephemeral ping used to drive the Player Joining

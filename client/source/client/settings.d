@@ -43,7 +43,7 @@ struct Settings
 
     // Feed tab filter (which event types appear in the feed list).
     bool[feedEventLabels.length] feedEventVisible = true;
-    bool feedHideSelfEvents;
+    bool feedShowSelfEvents;
 
     // Highest event id processed from the server. Used on reconnect
     // to resume catch-up instead of replaying the entire event store.
@@ -184,9 +184,9 @@ Settings loadSettings()
         if (const(JSONValue) *jinsert_picture_metadata = "insert_picture_metadata" in json)
             if (jinsert_picture_metadata.type == JSONType.true_)
                 s.insertPictureMetadata = true;
-        if (const(JSONValue) *jfeed_hide_self_events = "feed_hide_self_events" in json)
-            if (jfeed_hide_self_events.type == JSONType.true_)
-                s.feedHideSelfEvents = true;
+        if (const(JSONValue) *jfeed_show_self_events = "feed_show_self_events" in json)
+            if (jfeed_show_self_events.type == JSONType.true_)
+                s.feedShowSelfEvents = true;
         if (const(JSONValue) *jlast_event_id = "last_event_id" in json)
             if (jlast_event_id.type == JSONType.integer)
                 s.lastEventId = jlast_event_id.integer;
@@ -251,7 +251,7 @@ void saveSettings(Settings s)
             feedArr ~= JSONValue(s.feedEventVisible[i]);
         json["feed_event_visible"] = feedArr;
         json["insert_picture_metadata"] = s.insertPictureMetadata;
-        json["feed_hide_self_events"] = s.feedHideSelfEvents;
+        json["feed_show_self_events"] = s.feedShowSelfEvents;
 
         json["last_event_id"] = s.lastEventId;
         json["dap_token"] = s.dapToken;
