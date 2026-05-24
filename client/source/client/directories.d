@@ -2,8 +2,9 @@
 ///
 /// On Linux, parses Steam's libraryfolders.vdf to locate the library
 /// containing the VRChat app (438100) and builds Proton compatdata paths
-/// from it. On Windows, VRChat is a native install and paths live under
-/// the user profile regardless of Steam library layout.
+/// from it. On Windows, VRChat is a native install: the log dir lives under
+/// LOCALAPPDATALow and the screenshots dir is resolved through the shell's
+/// Pictures known folder (which may be redirected off the user profile).
 ///
 /// Copyright: dd86k <dd@dax.moe>
 /// License: BSD-3-Clause-Clear
@@ -124,16 +125,61 @@ private void resolve()
 }
 
 version (Windows)
+{
 private void resolveWindows()
 {
     string localAppData = environment.get("LOCALAPPDATA");
     if (localAppData)
         cachedLogDir = buildPath(localAppData ~ "Low", "VRChat", "VRChat");
 
-    string userProfile = environment.get("USERPROFILE");
-    if (userProfile)
-        cachedPicturesDir = buildPath(userProfile, "Pictures", "VRChat");
+    // Resolve the Pictures folder via the shell so a redirected library
+    // (moved to another drive, etc.) is honoured. USERPROFILE\Pictures is
+    // wrong whenever the user has relocated their Pictures known folder.
+    string pictures = knownFolderPath(FOLDERID_Pictures);
+    if (pictures)
+    {
+        cachedPicturesDir = buildPath(pictures, "VRChat");
+    }
+    else
+    {
+        logWarn("directories: SHGetKnownFolderPath(Pictures) failed, falling back to USERPROFILE");
+        string userProfile = environment.get("USERPROFILE");
+        if (userProfile)
+            pictures = buildPath(userProfile, "Pictures");
+    }
 }
+
+import core.sys.windows.windows : GUID, HRESULT, DWORD;
+
+pragma(lib, "shell32");
+pragma(lib, "ole32");
+
+// FOLDERID_Pictures: {33E28130-4E1E-4676-835A-98395C3BC3BB}
+private static immutable GUID FOLDERID_Pictures =
+    GUID(0x33E28130, 0x4E1E, 0x4676,
+        [0x83, 0x5A, 0x98, 0x39, 0x5C, 0x3B, 0xC3, 0xBB]);
+
+private extern (Windows) @nogc nothrow
+{
+    HRESULT SHGetKnownFolderPath(const(GUID)* rfid, DWORD dwFlags,
+        void* hToken, wchar** ppszPath);
+    void CoTaskMemFree(void* pv);
+}
+
+/// Resolve a Windows known folder to a UTF-8 path, or null on failure.
+private string knownFolderPath(const(GUID) id)
+{
+    import std.conv : to;
+    import core.stdc.wchar_ : wcslen;
+
+    wchar* wpath;
+    HRESULT hr = SHGetKnownFolderPath(&id, 0, null, &wpath);
+    if (hr != 0 || wpath is null)
+        return null;
+    scope(exit) CoTaskMemFree(wpath);
+    return to!string(wpath[0 .. wcslen(wpath)]);
+}
+} // version Windows
 
 version (linux)
 private void resolveLinux()
