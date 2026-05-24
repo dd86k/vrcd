@@ -1376,6 +1376,13 @@ private void drawToolsTab(mu_Context* ctx, AppState* state)
     }
 
     mu_layout_row(ctx, COLCOUNT, fullCol.ptr, 60);
+    if (mu_button(ctx, "Open Steam Screenshots"))
+    {
+        import client.directories : steamScreenshotDir;
+        openFolder(steamScreenshotDir());
+    }
+
+    mu_layout_row(ctx, COLCOUNT, fullCol.ptr, 60);
     if (mu_button(ctx, "Strip Metadata"))
     {
         state.stripMetadataPage = true;

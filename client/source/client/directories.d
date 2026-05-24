@@ -11,7 +11,7 @@
 module client.directories;
 
 import std.array : replace;
-import std.file : exists, readText;
+import std.file : exists, readText, dirEntries, SpanMode, DirEntry;
 import std.path : buildPath, expandTilde;
 import std.process : environment;
 
@@ -69,6 +69,7 @@ static immutable string VRCHAT_APP_ID = "438100";
 private __gshared string cachedLogDir;
 private __gshared string cachedPicturesDir;
 private __gshared string cachedProtonPrefix; // Linux only, drive_c root
+private __gshared string cachedSteamRoot;    // Steam install root (has userdata)
 private __gshared bool resolved;
 
 /// Return the VRChat log directory for the current platform.
@@ -83,6 +84,43 @@ string vrchatPicturesDir()
 {
     resolve();
     return cachedPicturesDir;
+}
+
+/// Return Steam's own screenshot directory for VRChat (Steam overlay / F12
+/// captures), or null if it cannot be located. These live separately from
+/// VRChat's screenshot folder, under userdata/<id>/760/remote/<appId>/screenshots.
+string steamScreenshotDir()
+{
+    resolve();
+    if (cachedSteamRoot is null)
+        return null;
+
+    string userdata = buildPath(cachedSteamRoot, "userdata");
+    if (exists(userdata) == false)
+        return null;
+
+    // userdata holds one folder per Steam account id. Prefer the first that
+    // already has VRChat screenshots, falling back to the first candidate.
+    string fallback;
+    try
+    {
+        foreach (DirEntry entry; dirEntries(userdata, SpanMode.shallow))
+        {
+            if (entry.isDir == false)
+                continue;
+            string shots = buildPath(entry.name, "760", "remote",
+                VRCHAT_APP_ID, "screenshots");
+            if (exists(shots))
+                return shots;
+            if (fallback is null)
+                fallback = shots;
+        }
+    }
+    catch (Exception e)
+    {
+        logWarn("directories: failed to scan %s: %s", userdata, e.msg);
+    }
+    return fallback;
 }
 
 /// Translate a Windows-flavoured path from a VRChat log line into a local
@@ -147,17 +185,45 @@ private void resolveWindows()
         if (userProfile)
             pictures = buildPath(userProfile, "Pictures");
     }
+
+    cachedSteamRoot = steamRootWindows();
+}
+
+/// Read the Steam install path from HKCU\Software\Valve\Steam (SteamPath),
+/// or null if Steam is not installed / the key is missing.
+private string steamRootWindows()
+{
+    import core.sys.windows.winreg;
+    import core.sys.windows.winerror : ERROR_SUCCESS;
+    import std.conv : to;
+
+    HKEY key;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, "Software\\Valve\\Steam"w.ptr, 0, KEY_READ, &key) != ERROR_SUCCESS)
+        return null;
+    scope(exit) RegCloseKey(key);
+
+    wchar[1024] buf = void;
+    DWORD size = buf.sizeof; // in bytes
+    if (RegQueryValueExW(key, "SteamPath"w.ptr, null, null, cast(ubyte*) buf.ptr, &size) != ERROR_SUCCESS)
+        return null;
+
+    size_t chars = size / wchar.sizeof;
+    if (chars > 0 && buf[chars - 1] == '\0')
+        chars--;
+    if (chars == 0)
+        return null;
+    return to!string(buf[0 .. chars]);
 }
 
 import core.sys.windows.windows : GUID, HRESULT, DWORD;
 
 pragma(lib, "shell32");
 pragma(lib, "ole32");
+pragma(lib, "advapi32");
 
 // FOLDERID_Pictures: {33E28130-4E1E-4676-835A-98395C3BC3BB}
 private static immutable GUID FOLDERID_Pictures =
-    GUID(0x33E28130, 0x4E1E, 0x4676,
-        [0x83, 0x5A, 0x98, 0x39, 0x5C, 0x3B, 0xC3, 0xBB]);
+    GUID(0x33E28130, 0x4E1E, 0x4676, [0x83, 0x5A, 0x98, 0x39, 0x5C, 0x3B, 0xC3, 0xBB]);
 
 private extern (Windows) @nogc nothrow
 {
@@ -205,6 +271,10 @@ private void resolveLinux()
         string vdfPath = buildPath(root, "steamapps", "libraryfolders.vdf");
         if (exists(vdfPath) == false)
             continue;
+        // The Steam install root (where userdata lives) is the dir holding
+        // libraryfolders.vdf, not necessarily the library VRChat installs to.
+        if (cachedSteamRoot is null)
+            cachedSteamRoot = root;
         try
         {
             string content = readText(vdfPath);
@@ -228,6 +298,8 @@ private void resolveLinux()
         logWarn("directories: libraryfolders.vdf lookup failed, "
             ~ "falling back to %s", libraryPath);
     }
+    if (cachedSteamRoot is null)
+        cachedSteamRoot = buildPath(home, ".steam", "steam");
 
     cachedProtonPrefix = buildPath(libraryPath, "steamapps", "compatdata",
         VRCHAT_APP_ID, "pfx", "drive_c");
