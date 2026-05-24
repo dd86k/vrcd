@@ -17,6 +17,7 @@ import client.renderer : window_width, window_height;
 import client.gui : wasClick, requestRepaint;
 import client.state;
 import client.stream : tlsAvailable;
+import client.utils : openFolder;
 
 /// Active tab selection.
 enum Tab { feed, online, notifications, tools, settings }
@@ -1772,19 +1773,6 @@ private void drawSettingsTab(mu_Context* ctx, AppState* state, int scrollDelta)
     mu_label(ctx, "");
 
     mu_end_panel(ctx);
-}
-
-/// Open a specific folder with the system's file manager.
-private void openFolder(string path)
-{
-    import std.process : spawnProcess;
-
-    if (path is null || path.length == 0)
-        return;
-    version (Windows)
-        try spawnProcess(["explorer", path]); catch (Exception) {}
-    else
-        try spawnProcess(["xdg-open", path]); catch (Exception) {}
 }
 
 /// Draw the status bar at the bottom.

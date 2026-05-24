@@ -206,6 +206,7 @@ class DropaPortal
             return false;
         }
 
+        import client.utils : openBrowser;
         openBrowser(verificationUriComplete);
         JSONValue pairContent;
         pairContent["user_code"] = userCode;
@@ -612,16 +613,4 @@ class DropaPortal
         ev.type = sdlEventType;
         SDL_PushEvent(&ev);
     }
-}
-
-private void openBrowser(string url)
-{
-    import std.process : spawnProcess;
-
-    if (url.length == 0)
-        return;
-    version (Windows)
-        try spawnProcess(["explorer", url]); catch (Exception) {}
-    else
-        try spawnProcess(["xdg-open", url]); catch (Exception) {}
 }
