@@ -61,7 +61,8 @@ class FriendsTracker
     /// in the same map as friends so user-update/user-location events go
     /// through the same avatar-diff logic, but buildFriendsMessage filters
     /// it out so clients never see themselves in the friends list.
-    void setSelf(string userId, string displayName, string currentAvatar)
+    void setSelf(string userId, string displayName, string currentAvatar,
+        string status, string statusDescription)
     {
         if (userId.length == 0)
             return;
@@ -73,6 +74,10 @@ class FriendsTracker
                 f.displayName = displayName;
             if (currentAvatar.length > 0)
                 f.currentAvatar = currentAvatar;
+            if (status.length > 0)
+                f.status = status;
+            if (statusDescription.length > 0)
+                f.statusDescription = statusDescription;
         }
     }
 

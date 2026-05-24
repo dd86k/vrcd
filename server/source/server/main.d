@@ -143,7 +143,8 @@ void cmdRun(ref Config config)
     FriendsTracker tracker = apiServer.getFriendsTracker();
     tracker.setWorldCache(worldCache);
     tracker.setInstanceCache(instanceCache);
-    tracker.setSelf(authState.userId, authState.displayName, authState.currentAvatar);
+    tracker.setSelf(authState.userId, authState.displayName, authState.currentAvatar,
+        authState.status, authState.statusDescription);
 
     apiServer.setWorldCache(worldCache);
     apiServer.setInstanceCache(instanceCache);
