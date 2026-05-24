@@ -284,6 +284,22 @@ class APIServer
             eventId, event.typeRaw, delivered, clients.length);
     }
 
+    /// Broadcast the current self snapshot to all authenticated clients.
+    void broadcastSelf()
+    {
+        JSONValue self = friendsTracker.buildSelfMessage();
+        if (self.type == JSONType.null_)
+            return;
+        string line = self.toString() ~ "\n";
+
+        clientsMutex.lock();
+        scope(exit) clientsMutex.unlock();
+
+        foreach (client; clients)
+            if (client.authenticated)
+                client.sendLine(line);
+    }
+
     /// Broadcast current status to all authenticated clients.
     void broadcastStatus()
     {
@@ -587,6 +603,14 @@ private class ClientHandler
                     }
                     handleNotificationAction(msg);
                     break;
+                case "set_status":
+                    if (authenticated == false)
+                    {
+                        sendError("Not authenticated");
+                        return;
+                    }
+                    handleSetStatus(msg);
+                    break;
                 case "auth_response":
                     if (authenticated == false)
                     {
@@ -635,6 +659,10 @@ private class ClientHandler
             sendLine(resp.toString() ~ "\n");
             // Send current status immediately after auth.
             sendLine(server.buildStatusMessage().toString() ~ "\n");
+            // Send self snapshot so the client knows its own status/description.
+            JSONValue selfMsg = server.friendsTracker.buildSelfMessage();
+            if (selfMsg.type != JSONType.null_)
+                sendLine(selfMsg.toString() ~ "\n");
             logInfo("Client authenticated");
 
             // If there is a pending VRChat auth request, send it to this client.
@@ -931,6 +959,138 @@ private class ClientHandler
                 "type": JSONValue("notification_action_result"),
                 "notification_id": JSONValue(notifId),
                 "action": JSONValue(action),
+                "success": JSONValue(false),
+            ]);
+            result["error"] = JSONValue(e.msg);
+            sendLine(result.toString() ~ "\n");
+        }
+    }
+
+    void handleSetStatus(JSONValue msg)
+    {
+        // Either or both of status / status_description may be provided.
+        // An omitted field means "leave unchanged".
+        bool haveStatus;
+        string status;
+        if (const(JSONValue)* v = "status" in msg)
+            if (v.type == JSONType.string)
+            {
+                status = v.str;
+                haveStatus = true;
+            }
+
+        bool haveDesc;
+        string desc;
+        if (const(JSONValue)* v = "status_description" in msg)
+            if (v.type == JSONType.string)
+            {
+                desc = v.str;
+                haveDesc = true;
+            }
+
+        if (haveStatus == false && haveDesc == false)
+        {
+            sendError("set_status: nothing to update");
+            return;
+        }
+
+        // VRChat only accepts these four values from the client.
+        if (haveStatus)
+        {
+            switch (status)
+            {
+                case "active":
+                case "join me":
+                case "ask me":
+                case "busy":
+                    break;
+                default:
+                    sendError("set_status: invalid status '" ~ status ~ "'");
+                    return;
+            }
+        }
+
+        string selfId = server.friendsTracker.getSelfUserId();
+        if (selfId.length == 0)
+        {
+            sendError("set_status: self user id not known yet");
+            return;
+        }
+
+        if (server.httpClient is null || server.apiMutex is null)
+        {
+            sendError("Server HTTP client not configured");
+            return;
+        }
+
+        JSONValue payload = parseJSON("{}");
+        if (haveStatus)
+            payload["status"] = JSONValue(status);
+        if (haveDesc)
+            payload["statusDescription"] = JSONValue(desc);
+
+        string path = "/users/" ~ selfId;
+        logDebugging("handleSetStatus: PUT %s body=%s", path, payload.toString());
+
+        server.apiMutex.lock();
+        scope(exit) server.apiMutex.unlock();
+
+        if (server.rateLimiter && server.rateLimiter.isBlocked())
+        {
+            sendError("Rate limited by VRChat, try again later");
+            return;
+        }
+
+        try
+        {
+            HTTPResponse resp = server.httpClient.put(path, payload.toString());
+            logDebugging("handleSetStatus: VRC PUT %s -> HTTP %d", path, resp.code);
+            if (server.rateLimiter)
+            {
+                server.rateLimiter.update(resp);
+                server.broadcastStatus();
+            }
+            bool success = resp.code >= 200 && resp.code < 300;
+
+            JSONValue result = JSONValue([
+                "type": JSONValue("set_status_result"),
+                "success": JSONValue(success),
+            ]);
+
+            if (success)
+            {
+                // Update the tracker's self entry so the next self snapshot
+                // reflects the new values immediately. Use values from the
+                // response when present (canonical), otherwise fall back to
+                // what we sent.
+                string newStatus = status;
+                string newDesc = desc;
+                try
+                {
+                    JSONValue user = parseJSON(resp.text);
+                    if (const(JSONValue)* v = "status" in user)
+                        if (v.type == JSONType.string)
+                            newStatus = v.str;
+                    if (const(JSONValue)* v = "statusDescription" in user)
+                        if (v.type == JSONType.string)
+                            newDesc = v.str;
+                }
+                catch (Exception) {}
+
+                server.friendsTracker.applySelfStatus(
+                    haveStatus, newStatus, haveDesc, newDesc);
+                server.broadcastSelf();
+            }
+            else
+            {
+                result["error"] = JSONValue("HTTP " ~ resp.code.to!string);
+            }
+            sendLine(result.toString() ~ "\n");
+        }
+        catch (Exception e)
+        {
+            JSONValue result = JSONValue([
+                "type": JSONValue("set_status_result"),
                 "success": JSONValue(false),
             ]);
             result["error"] = JSONValue(e.msg);

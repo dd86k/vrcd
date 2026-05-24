@@ -211,6 +211,30 @@ struct AppState
     // Current VRChat instance (from local log watcher).
     string currentLocation; // e.g. "wrld_xxx:12345~region(us)"
 
+    // Self user (from server `self` snapshot).
+    string selfUserId;
+    string selfDisplayName;
+    string selfStatus;            // "active", "join me", "ask me", "busy"
+    string selfStatusDescription;
+    // UI textbox buffer for the custom status message. Synced from
+    // selfStatusDescription whenever the server pushes a new snapshot
+    // and the user isn't actively editing.
+    char[64] statusDescriptionInput = '\0';
+    // Draft status the user picked in the popup but hasn't committed yet.
+    // Empty means "no draft, use selfStatus". The Update button compares
+    // this and the textbox against selfStatus / selfStatusDescription and
+    // queues whichever fields actually changed.
+    string selfStatusDraft;
+
+    // Set by the UI to request a status change on the next frame.
+    // Either may be empty for "leave unchanged".
+    string pendingSetStatus;
+    string pendingSetStatusDescription;
+    bool pendingSetStatusDescriptionSet;
+    bool statusUpdateInFlight;
+    // Last server-reported error from set_status, displayed inline.
+    string statusUpdateError;
+
     // Drop a Portal status ("", "Paired as <user>", etc.)
     string dapStatus;
     bool dapPairRequested;

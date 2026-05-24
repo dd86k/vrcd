@@ -76,6 +76,54 @@ class FriendsTracker
         }
     }
 
+    /// Return the logged-in user's id, or empty string if not set.
+    string getSelfUserId()
+    {
+        synchronized (friendsMutex)
+            return selfUserId;
+    }
+
+    /// Build a `self` snapshot for the currently logged-in user.
+    /// Returns a null JSONValue if self has not been set yet.
+    JSONValue buildSelfMessage()
+    {
+        synchronized (friendsMutex)
+        {
+            if (selfUserId.length == 0)
+                return JSONValue(null);
+            FriendState* f = selfUserId in friends;
+            if (f is null)
+                return JSONValue(null);
+            return JSONValue([
+                "type":              JSONValue("self"),
+                "id":                JSONValue(f.userId),
+                "displayName":       JSONValue(f.displayName),
+                "status":            JSONValue(f.status),
+                "statusDescription": JSONValue(f.statusDescription),
+            ]);
+        }
+    }
+
+    /// Apply a status / statusDescription change to the self entry. Used after
+    /// a successful PUT users/{selfUserId} so subsequent self snapshots reflect
+    /// the new values without waiting for the next user-update event. Pass
+    /// false for the corresponding `set` flag to leave a field unchanged.
+    void applySelfStatus(bool setStatus, string status, bool setDescription, string description)
+    {
+        synchronized (friendsMutex)
+        {
+            if (selfUserId.length == 0)
+                return;
+            FriendState* f = selfUserId in friends;
+            if (f is null)
+                return;
+            if (setStatus)
+                f.status = status;
+            if (setDescription)
+                f.statusDescription = description;
+        }
+    }
+
     /// Drain any synthesized events the tracker has queued (e.g. avatar
     /// changes derived from user-update/friend-update diffs). Caller is
     /// responsible for storing, logging and broadcasting them.
@@ -825,6 +873,9 @@ private:
         return changed;
     }
 
+    // VRChat sometimes sends fields as "" rather than omitting them
+    // (e.g. friend-offline carries "platform":""). Treat both as absent
+    // so enrichContent can fill from cache.
     static bool isMissingOrEmpty(JSONValue c, string key)
     {
         const(JSONValue)* v = key in c;

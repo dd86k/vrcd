@@ -96,6 +96,9 @@ void drawFullWindow(mu_Context* ctx, AppState* state, int scrollDelta)
     // Filter popup must be outside the main window to render on top.
     drawFeedFilterPopup(ctx, state);
 
+    // Self-status popup (anchored under the status circle in the Online tab).
+    drawSelfStatusPopup(ctx, state);
+
     // Auth delegation dialog (modal, on top of everything).
     drawAuthDialog(ctx, state);
 }
@@ -774,6 +777,9 @@ private void drawOnlineTab(mu_Context* ctx, AppState* state, int scrollDelta)
 
     applyScroll(ctx, scrollDelta);
 
+    // Your-status section at the top.
+    drawSelfStatusSection(ctx, state);
+
     // Refresh button inside the panel.
     mu_layout_row(ctx, 1, fullCol.ptr, 30);
     if (mu_button(ctx, "Refresh"))
@@ -842,6 +848,267 @@ private void drawOnlineTab(mu_Context* ctx, AppState* state, int scrollDelta)
     }
 
     mu_end_panel(ctx);
+}
+
+/// Self-status popup state. The circle opens it; the popup itself is drawn
+/// outside the friends panel so it can render on top. We anchor the popup to
+/// the circle rect captured the same frame the user clicked, so it always
+/// drops down directly beneath the indicator instead of at the cursor.
+private bool selfStatusPopupRequested;
+private mu_Rect selfStatusCircleRect;
+
+/// Draw the "Your Status" row at the top of the Online tab:
+///   [ textbox: custom status ] [ status circle ] [ Set ]
+/// Clicking the circle opens a popup with the four VRChat statuses.
+private void drawSelfStatusSection(mu_Context* ctx, AppState* state)
+{
+    enum int cancelW = 40;
+    enum int circleW = 40;
+    enum int setW    = 80;
+    static immutable int[1] fullCol = [-1];
+
+    bool busy = state.statusUpdateInFlight || state.connected == false;
+
+    // Pending-change detection drives both the Update button and whether the
+    // inline cancel ("X") button is shown.
+    bool descChanged = textboxDiffersFrom(state.statusDescriptionInput[],
+        state.selfStatusDescription);
+    bool statusChanged = state.selfStatusDraft.length > 0
+        && state.selfStatusDraft != state.selfStatus;
+    bool dirty = descChanged || statusChanged;
+
+    // Layout: the cancel button only takes a column while there's something to
+    // cancel, like a form input's clear-X. Textbox flexes to fill the rest.
+    if (dirty)
+    {
+        int[4] cols = [-(cancelW + circleW + setW + 12), cancelW, circleW, setW];
+        mu_layout_row(ctx, 4, cols.ptr, 40);
+    }
+    else
+    {
+        int[3] cols = [-(circleW + setW + 8), circleW, setW];
+        mu_layout_row(ctx, 3, cols.ptr, 40);
+    }
+
+    // Textbox. mu_textbox shows what's in the buffer, so an empty buffer
+    // simply shows nothing; we overlay a placeholder string when empty
+    // and unfocused. Use the _raw form so we own the rect for the overlay.
+    {
+        char* tbBuf = state.statusDescriptionInput.ptr;
+        mu_Id tbId = mu_get_id(ctx, &tbBuf, tbBuf.sizeof);
+        mu_Rect tbRect = mu_layout_next(ctx);
+        mu_textbox_raw(ctx, tbBuf,
+            cast(int) state.statusDescriptionInput.length, tbId, tbRect, 0);
+        if (state.statusDescriptionInput[0] == '\0' && ctx.focus != tbId)
+            mu_draw_control_text(ctx, "Enter a custom status...",
+                tbRect, MU_COLOR_TEXT, 0);
+    }
+
+    // Cancel ("X"): reverts both the draft status and the textbox to the live
+    // values, discarding the pending edit. Only present while dirty.
+    if (dirty)
+    {
+        if (mu_button(ctx, "X"))
+        {
+            state.selfStatusDraft = null;
+            setTextboxFrom(state.statusDescriptionInput[],
+                state.selfStatusDescription);
+            state.statusUpdateError = null;
+            requestRepaint();
+        }
+    }
+
+    // Status indicator "circle". Shows the draft color while a selection is
+    // pending so the user can see what they picked before committing.
+    string shownStatus = state.selfStatusDraft.length > 0
+        ? state.selfStatusDraft : state.selfStatus;
+    mu_Rect cr = mu_layout_next(ctx);
+    selfStatusCircleRect = cr;
+    drawStatusCircle(ctx, cr, statusColor(shownStatus));
+    {
+        enum string circleSlot = "self_status_circle";
+        mu_Id cid = mu_get_id(ctx, circleSlot.ptr, cast(int) circleSlot.length);
+        mu_update_control(ctx, cid, cr, 0);
+        if (ctx.mouse_pressed == MU_MOUSE_LEFT && ctx.focus == cid && busy == false)
+            selfStatusPopupRequested = true;
+    }
+
+    // Update button. Disabled visually (and inert) when there is nothing to
+    // commit or while a previous update is in flight.
+    bool canSubmit = busy == false && dirty;
+
+    if (mu_button(ctx, busy ? "..." : "Update") && canSubmit)
+    {
+        if (statusChanged)
+            state.pendingSetStatus = state.selfStatusDraft;
+        if (descChanged)
+        {
+            const(char)* nul = cast(const(char)*)
+                memchr(state.statusDescriptionInput.ptr, 0,
+                    state.statusDescriptionInput.length);
+            size_t n = nul
+                ? cast(size_t)(nul - state.statusDescriptionInput.ptr)
+                : state.statusDescriptionInput.length;
+            state.pendingSetStatusDescription =
+                state.statusDescriptionInput[0 .. n].idup;
+            state.pendingSetStatusDescriptionSet = true;
+        }
+        state.statusUpdateError = null;
+        setStatusFlash(state, "  Updating status...");
+    }
+
+    // Inline error line. Rendered in red so it doesn't get lost in the feed.
+    if (state.statusUpdateError.length > 0)
+    {
+        char[256] errBuf = void;
+        mu_layout_row(ctx, 1, fullCol.ptr, 24);
+        mu_Rect er = mu_layout_next(ctx);
+        const(char)[] line = sformat(errBuf, "Status update failed: %s",
+            state.statusUpdateError);
+        mu_draw_text(ctx, ctx.style.font, cast(string) line,
+            mu_Vec2(er.x, er.y + 4), mu_Color(220, 70, 70, 255));
+    }
+}
+
+/// Overwrite a NUL-terminated textbox buffer with `src` (truncated to fit,
+/// always NUL-terminated).
+private void setTextboxFrom(char[] buf, string src)
+{
+    import std.algorithm : min;
+    buf[] = '\0';
+    size_t n = min(src.length, buf.length - 1);
+    buf[0 .. n] = src[0 .. n];
+}
+
+/// True if the NUL-terminated textbox content differs from `cmp`.
+private bool textboxDiffersFrom(const(char)[] buf, string cmp)
+{
+    size_t n;
+    foreach (size_t i, char c; buf)
+    {
+        if (c == '\0') { n = i; goto found; }
+    }
+    n = buf.length;
+found:
+    return buf[0 .. n] != cmp;
+}
+
+/// Approximate a filled circle inside `bounds` with stacked rects.
+/// The software renderer only exposes filled rects, so this is the
+/// cheapest way to get something that reads as round at small sizes.
+private void drawStatusCircle(mu_Context* ctx, mu_Rect bounds, mu_Color color)
+{
+    int size = bounds.w < bounds.h ? bounds.w : bounds.h;
+    // Inset slightly so it looks like a separate badge, not a button.
+    int pad = 6;
+    if (size > pad * 2 + 4)
+        size -= pad * 2;
+    int cx = bounds.x + bounds.w / 2;
+    int cy = bounds.y + bounds.h / 2;
+    int r = size / 2;
+    int r2 = r * r;
+    import std.math : sqrt;
+    foreach (int dy; -r .. r + 1)
+    {
+        int span = cast(int) sqrt(cast(float)(r2 - dy * dy));
+        mu_draw_rect(ctx,
+            mu_Rect(cx - span, cy + dy, span * 2, 1), color);
+    }
+}
+
+/// Popup listing the four selectable VRChat statuses. Drawn from
+/// drawFullWindow (outside the main panel) so it stacks on top. Clicking
+/// a row only stages the selection (selfStatusDraft); the Update button
+/// in drawSelfStatusSection commits the change. This matches VRChat's
+/// own "pick + Update" flow.
+package void drawSelfStatusPopup(mu_Context* ctx, AppState* state)
+{
+    enum string popupName = "self_status_popup";
+
+    // Open ourselves rather than using mu_open_popup, which anchors at
+    // the cursor; anchor under the circle for a tidy dropdown.
+    if (selfStatusPopupRequested)
+    {
+        selfStatusPopupRequested = false;
+        mu_Container* cnt = mu_get_container(ctx, popupName.ptr,
+            cast(int) popupName.length);
+        if (cnt)
+        {
+            // Reset to (1,1) so MU_OPT_AUTOSIZE in begin_window_ex resizes
+            // to actual content size; keep the x,y we set here.
+            int px = selfStatusCircleRect.x;
+            int py = selfStatusCircleRect.y + selfStatusCircleRect.h + 4;
+            cnt.rect = mu_Rect(px, py, 1, 1);
+            cnt.open = 1;
+            // Mark as hover root so begin_window_ex's outside-click guard
+            // doesn't immediately close the popup on the opening press.
+            ctx.hover_root = ctx.next_hover_root = cnt;
+            mu_bring_to_front(ctx, cnt);
+        }
+    }
+
+    if (mu_begin_popup(ctx, popupName.ptr, cast(int) popupName.length))
+    {
+        drawStatusPopupRow(ctx, state, "Join Me", "join me");
+        drawStatusPopupRow(ctx, state, "Online",  "active");
+        drawStatusPopupRow(ctx, state, "Ask Me",  "ask me");
+        drawStatusPopupRow(ctx, state, "DND",     "busy");
+        mu_end_popup(ctx);
+    }
+}
+
+/// One row inside the self-status popup: colored badge + label, clickable.
+/// The whole row (badge included) is one hit target; hover highlights and
+/// the active choice gets a persistent fill. Clicking stages the choice in
+/// selfStatusDraft and dismisses the popup; no network call happens until
+/// the Update button is pressed.
+private void drawStatusPopupRow(mu_Context* ctx, AppState* state,
+    string label, string value)
+{
+    enum mu_Color rowHover  = mu_Color(55, 62, 82, 255);
+    enum mu_Color rowActive = mu_Color(60, 80, 120, 255);
+
+    // Fixed width: -1 ("remaining") resolves to 0 inside an AUTOSIZE popup
+    // (its body width starts at 0 and grows from content), which would make
+    // the row invisible and un-hittable.
+    enum int rowW = 160;
+    static immutable int[1] rowCol = [rowW];
+    mu_layout_row(ctx, 1, rowCol.ptr, 32);
+    mu_Rect row = mu_layout_next(ctx);
+
+    // Whole-row hit target. Register before drawing so hover state is
+    // available for the highlight below.
+    mu_Id id = mu_get_id(ctx, &value, value.sizeof);
+    mu_update_control(ctx, id, row, 0);
+
+    string currentChoice = state.selfStatusDraft.length > 0
+        ? state.selfStatusDraft : state.selfStatus;
+    bool active = currentChoice == value;
+    bool hovered = ctx.hover == id;
+
+    // Background: active wins over hover.
+    if (active)
+        mu_draw_rect(ctx, row, rowActive);
+    else if (hovered)
+        mu_draw_rect(ctx, row, rowHover);
+
+    // Badge (clickable too, since the whole row is one target).
+    int badgeW = 28;
+    mu_Rect badge = mu_Rect(row.x, row.y, badgeW, row.h);
+    drawStatusCircle(ctx, badge, statusColor(value));
+
+    // Label, padded right of the badge.
+    mu_Rect lbl = mu_Rect(row.x + badgeW, row.y, row.w - badgeW, row.h);
+    mu_draw_control_text(ctx, label, lbl, MU_COLOR_TEXT, 0);
+
+    if (ctx.mouse_pressed == MU_MOUSE_LEFT && ctx.focus == id)
+    {
+        // Stage the choice. If the user picked back the live status,
+        // clear the draft entirely so the Update button stays inert.
+        state.selfStatusDraft = value == state.selfStatus ? "" : value;
+        mu_Container* pcnt = mu_get_current_container(ctx);
+        if (pcnt) pcnt.open = 0;
+    }
 }
 
 /// Draw a single friend as a flexbox-style card. Clicks fire via wasClick,

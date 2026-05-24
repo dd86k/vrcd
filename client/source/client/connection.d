@@ -199,6 +199,25 @@ class ServerConnection
         ]));
     }
 
+    /// Change the logged-in user's VRChat status and/or custom status message.
+    /// Pass `setStatus = false` to leave the status unchanged; same for the
+    /// description. Server replies with `set_status_result`.
+    void sendSetStatus(bool setStatus, string status,
+        bool setDescription, string description)
+    {
+        logDebugging("sendSetStatus: status=%s desc=%s",
+            setStatus ? status : "(unchanged)",
+            setDescription ? description : "(unchanged)");
+        JSONValue msg = JSONValue([
+            "type": JSONValue("set_status"),
+        ]);
+        if (setStatus)
+            msg["status"] = JSONValue(status);
+        if (setDescription)
+            msg["status_description"] = JSONValue(description);
+        sendMessage(msg);
+    }
+
     /// Request server statistics.
     void requestStats()
     {
@@ -482,6 +501,30 @@ private:
                     break;
                 case "ping":
                     sendMessage(JSONValue(["type": JSONValue("pong")]));
+                    break;
+                case "self":
+                    // CLI doesn't track self state; just log the snapshot.
+                    string selfName;
+                    if (const(JSONValue)* v = "displayName" in msg)
+                        selfName = v.str;
+                    string selfStatus;
+                    if (const(JSONValue)* v = "status" in msg)
+                        selfStatus = v.str;
+                    logInfo("Self: %s (%s)", selfName, selfStatus);
+                    break;
+                case "set_status_result":
+                    bool ok;
+                    if (const(JSONValue)* v = "success" in msg)
+                        ok = v.type == JSONType.true_;
+                    if (ok)
+                        logInfo("Status updated");
+                    else
+                    {
+                        string err;
+                        if (const(JSONValue)* v = "error" in msg)
+                            err = v.str;
+                        logWarn("Status update failed: %s", err);
+                    }
                     break;
                 default:
                     logWarn("Unknown message type: %s", msgType);

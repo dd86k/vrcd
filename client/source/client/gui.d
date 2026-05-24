@@ -625,6 +625,22 @@ private void eventLoop(mu_Context* uictx)
                 logError("Failed to load font");
         }
 
+        // Drain pending status change request.
+        if (appState.pendingSetStatus.length > 0 || appState.pendingSetStatusDescriptionSet)
+        {
+            if (conn && appState.connected && appState.statusUpdateInFlight == false)
+            {
+                bool setStatus = appState.pendingSetStatus.length > 0;
+                bool setDesc = appState.pendingSetStatusDescriptionSet;
+                conn.sendSetStatus(setStatus, appState.pendingSetStatus,
+                    setDesc, appState.pendingSetStatusDescription);
+                appState.statusUpdateInFlight = true;
+            }
+            appState.pendingSetStatus = null;
+            appState.pendingSetStatusDescription = null;
+            appState.pendingSetStatusDescriptionSet = false;
+        }
+
         // Drain pending notification actions.
         if (appState.pendingActions.length > 0)
         {
@@ -934,6 +950,53 @@ private void drainNetworkMessages()
 
             case "friends":
                 applyFriendsSnapshot(msg);
+                break;
+
+            case "self":
+                if (const(JSONValue)* v = "id" in msg)
+                    appState.selfUserId = v.str;
+                if (const(JSONValue)* v = "displayName" in msg)
+                    appState.selfDisplayName = v.str;
+                if (const(JSONValue)* v = "status" in msg)
+                    appState.selfStatus = v.str;
+                if (const(JSONValue)* v = "statusDescription" in msg)
+                {
+                    appState.selfStatusDescription = v.str;
+                    // Sync the textbox buffer when not in-flight, so the
+                    // user doesn't see their own typed text overwritten by
+                    // a snapshot that crosses paths with their edit.
+                    if (appState.statusUpdateInFlight == false)
+                    {
+                        import std.algorithm : min;
+                        appState.statusDescriptionInput[] = '\0';
+                        size_t n = min(v.str.length, appState.statusDescriptionInput.length - 1);
+                        appState.statusDescriptionInput[0 .. n] = v.str[0 .. n];
+                    }
+                }
+                break;
+
+            case "set_status_result":
+                appState.statusUpdateInFlight = false;
+                bool ok;
+                if (const(JSONValue) *jsuccess = "success" in msg)
+                    ok = jsuccess.type == JSONType.true_;
+                if (ok)
+                {
+                    // Server will follow up with a fresh `self` snapshot.
+                    appState.statusUpdateError = null;
+                    appState.selfStatusDraft = null;
+                    appState.addFeedEntry(0, "system", "",
+                        "Status updated", timeNow(), "", false, EventSource.system);
+                }
+                else
+                {
+                    string errMsg;
+                    if (const(JSONValue)* v = "error" in msg)
+                        errMsg = v.str;
+                    appState.statusUpdateError = errMsg.length > 0 ? errMsg : "Unknown error";
+                    appState.addFeedEntry(0, "error", "",
+                        "Status update failed: " ~ errMsg, timeNow(), "", false, EventSource.system);
+                }
                 break;
 
             case "error":
