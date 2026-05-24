@@ -105,6 +105,18 @@ Request world name resolution.
 | `type`     | string | `"get_world"`                |
 | `world_id` | string | World ID (e.g. `"wrld_..."`) |
 
+### `set_status`
+
+Set the logged-in user's status and/or custom status message. The server issues a `PUT users/{selfUserId}` to VRChat, updates its self entry from the response, broadcasts a fresh `self` snapshot to all authenticated clients, and replies to the requester with `set_status_result`.
+
+Either field may be omitted to leave it unchanged; at least one must be present.
+
+| Field                | Type   | Description                                                  |
+|----------------------|--------|-------------------------------------------------------------|
+| `type`               | string | `"set_status"`                                              |
+| `status`             | string | Optional. One of `"active"`, `"join me"`, `"ask me"`, `"busy"` |
+| `status_description` | string | Optional. Custom status message text                        |
+
 ### `pong`
 
 Keepalive response to server's `ping`.
@@ -210,6 +222,28 @@ Each friend entry (in both `instances[].friends` and `offline`):
 | `platform`          | string | `"standalonewindows"`, `"android"`, etc. |
 | `location`          | string | Instance ID, `"private"`, or `"offline"` |
 
+### `self`
+
+Snapshot of the logged-in user's own status. Sent after auth (immediately following `status`) and whenever the self status changes (e.g. after a successful `set_status`). Omitted if the server does not yet know the logged-in user.
+
+| Field               | Type   | Description                                                |
+|---------------------|--------|------------------------------------------------------------|
+| `type`              | string | `"self"`                                                   |
+| `id`                | string | User ID (`usr_...`)                                        |
+| `displayName`       | string | Display name                                               |
+| `status`            | string | `"active"`, `"join me"`, `"ask me"`, `"busy"`              |
+| `statusDescription` | string | Custom status text                                         |
+
+### `set_status_result`
+
+Reply to a `set_status` request, sent only to the requesting client. On success, a `self` broadcast precedes this for all clients.
+
+| Field     | Type   | Description                                  |
+|-----------|--------|----------------------------------------------|
+| `type`    | string | `"set_status_result"`                        |
+| `success` | bool   | Whether the VRChat update succeeded          |
+| `error`   | string | Error description (present only on failure)  |
+
 ### `world`
 
 Response to `get_world`.
@@ -300,6 +334,7 @@ Client                          Server
   |                                |
   |<- {"type":"auth_ok",...} ------|
   |<- {"type":"status",...} -------|
+  |<- {"type":"self",...} ---------|
   |<- {"type":"friends",...} ------|
   |                                |
   |-- {"type":"catch_up",          |
