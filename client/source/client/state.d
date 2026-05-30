@@ -219,7 +219,9 @@ struct AppState
     // UI textbox buffer for the custom status message. Synced from
     // selfStatusDescription whenever the server pushes a new snapshot
     // and the user isn't actively editing.
-    char[64] statusDescriptionInput = '\0';
+    // Sized for 32 UTF-8 code points (VRChat's status_description limit)
+    // at up to 4 bytes each, plus the null terminator.
+    char[32 * 4 + 1] statusDescriptionInput = '\0';
     // Draft status the user picked in the popup but hasn't committed yet.
     // Empty means "no draft, use selfStatus". The Update button compares
     // this and the textbox against selfStatus / selfStatusDescription and

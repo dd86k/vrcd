@@ -9,6 +9,7 @@ import core.time : MonoTime;
 import std.string : toStringz;
 import std.uni : toLower;
 import std.format : sformat;
+import std.utf : stride, UTFException;
 
 import ddui;
 
@@ -901,6 +902,10 @@ private void drawSelfStatusSection(mu_Context* ctx, AppState* state)
         mu_Rect tbRect = mu_layout_next(ctx);
         mu_textbox_raw(ctx, tbBuf,
             cast(int) state.statusDescriptionInput.length, tbId, tbRect, 0);
+        // VRChat caps status_description at 32 code points; the REST API
+        // responds with HTTP 400 if you send more (observed with 34 chars).
+        // Truncate per-frame so the textbox shows (and submits) at most 32.
+        truncateUtf8CodePoints(state.statusDescriptionInput[], 32);
         if (state.statusDescriptionInput[0] == '\0' && ctx.focus != tbId)
             mu_draw_control_text(ctx, "Enter a custom status...",
                 tbRect, MU_COLOR_TEXT, 0);
@@ -980,6 +985,32 @@ private void setTextboxFrom(char[] buf, string src)
     buf[] = '\0';
     size_t n = min(src.length, buf.length - 1);
     buf[0 .. n] = src[0 .. n];
+}
+
+/// Truncate a NUL-terminated UTF-8 buffer to at most `maxCodePoints` code
+/// points by zeroing the trailing bytes. Invalid sequences are also cut at
+/// the bad byte so we never leave a half-character in the textbox.
+private void truncateUtf8CodePoints(char[] buf, size_t maxCodePoints)
+{
+    size_t i;
+    size_t cp;
+    while (i < buf.length && buf[i] != '\0' && cp < maxCodePoints)
+    {
+        size_t s;
+        try
+            s = stride(buf, i);
+        catch (UTFException)
+            break;
+        if (s == 0 || i + s > buf.length)
+            break;
+        i += s;
+        cp++;
+    }
+    while (i < buf.length && buf[i] != '\0')
+    {
+        buf[i] = '\0';
+        i++;
+    }
 }
 
 /// True if the NUL-terminated textbox content differs from `cmp`.
