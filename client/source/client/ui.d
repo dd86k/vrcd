@@ -880,18 +880,10 @@ private void drawSelfStatusSection(mu_Context* ctx, AppState* state)
         && state.selfStatusDraft != state.selfStatus;
     bool dirty = descChanged || statusChanged;
 
-    // Layout: the cancel button only takes a column while there's something to
-    // cancel, like a form input's clear-X. Textbox flexes to fill the rest.
-    if (dirty)
-    {
-        int[4] cols = [-(cancelW + circleW + setW + 12), cancelW, circleW, setW];
-        mu_layout_row(ctx, 4, cols.ptr, 40);
-    }
-    else
-    {
-        int[3] cols = [-(circleW + setW + 8), circleW, setW];
-        mu_layout_row(ctx, 3, cols.ptr, 40);
-    }
+    // Layout: cancel button is always present so the user can clear the
+    // textbox in one click even when nothing is pending. Textbox flexes.
+    int[4] cols = [-(cancelW + circleW + setW + 12), cancelW, circleW, setW];
+    mu_layout_row(ctx, 4, cols.ptr, 40);
 
     // Textbox. mu_textbox shows what's in the buffer, so an empty buffer
     // simply shows nothing; we overlay a placeholder string when empty
@@ -904,25 +896,26 @@ private void drawSelfStatusSection(mu_Context* ctx, AppState* state)
             cast(int) state.statusDescriptionInput.length, tbId, tbRect, 0);
         // VRChat caps status_description at 32 code points; the REST API
         // responds with HTTP 400 if you send more (observed with 34 chars).
-        // Truncate per-frame so the textbox shows (and submits) at most 32.
-        truncateUtf8CodePoints(state.statusDescriptionInput[], 32);
+        // VRChat's own client also strips emoji on input - the backend is
+        // almost certainly MySQL utf8 (3-byte max), not utf8mb4, so any
+        // code point >= U+10000 (4-byte UTF-8) is silently dropped on their
+        // end. Strip them here too, then truncate to 32 code points.
+        sanitizeStatusInput(state.statusDescriptionInput[], 32);
         if (state.statusDescriptionInput[0] == '\0' && ctx.focus != tbId)
             mu_draw_control_text(ctx, "Enter a custom status...",
                 tbRect, MU_COLOR_TEXT, 0);
     }
 
     // Cancel ("X"): reverts both the draft status and the textbox to the live
-    // values, discarding the pending edit. Only present while dirty.
-    if (dirty)
+    // values, discarding any pending edit. Always present so it doubles as a
+    // one-click "clear" for the textbox.
+    if (mu_button(ctx, "X"))
     {
-        if (mu_button(ctx, "X"))
-        {
-            state.selfStatusDraft = null;
-            setTextboxFrom(state.statusDescriptionInput[],
-                state.selfStatusDescription);
-            state.statusUpdateError = null;
-            requestRepaint();
-        }
+        state.selfStatusDraft = null;
+        setTextboxFrom(state.statusDescriptionInput[],
+            state.selfStatusDescription);
+        state.statusUpdateError = null;
+        requestRepaint();
     }
 
     // Status indicator "circle". Shows the draft color while a selection is
@@ -990,26 +983,39 @@ private void setTextboxFrom(char[] buf, string src)
 /// Truncate a NUL-terminated UTF-8 buffer to at most `maxCodePoints` code
 /// points by zeroing the trailing bytes. Invalid sequences are also cut at
 /// the bad byte so we never leave a half-character in the textbox.
-private void truncateUtf8CodePoints(char[] buf, size_t maxCodePoints)
+/// In-place sanitize a NUL-terminated UTF-8 status buffer:
+///   - drop any code point that requires a 4-byte UTF-8 sequence
+///     (>= U+10000, i.e. nearly all emoji) since VRChat's backend
+///     looks like MySQL utf8 (3-byte max) and strips them anyway,
+///   - then truncate to at most `maxCodePoints` code points,
+///   - and re-NUL the trailing bytes.
+private void sanitizeStatusInput(char[] buf, size_t maxCodePoints)
 {
-    size_t i;
+    size_t read;
+    size_t write;
     size_t cp;
-    while (i < buf.length && buf[i] != '\0' && cp < maxCodePoints)
+    while (read < buf.length && buf[read] != '\0' && cp < maxCodePoints)
     {
         size_t s;
         try
-            s = stride(buf, i);
+            s = stride(buf, read);
         catch (UTFException)
             break;
-        if (s == 0 || i + s > buf.length)
+        if (s == 0 || read + s > buf.length)
             break;
-        i += s;
-        cp++;
+        if (s < 4)
+        {
+            if (write != read)
+                buf[write .. write + s] = buf[read .. read + s];
+            write += s;
+            cp++;
+        }
+        read += s;
     }
-    while (i < buf.length && buf[i] != '\0')
+    while (write < buf.length && buf[write] != '\0')
     {
-        buf[i] = '\0';
-        i++;
+        buf[write] = '\0';
+        write++;
     }
 }
 
