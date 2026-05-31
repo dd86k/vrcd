@@ -906,14 +906,14 @@ private void drawSelfStatusSection(mu_Context* ctx, AppState* state)
                 tbRect, MU_COLOR_TEXT, 0);
     }
 
-    // Cancel ("X"): reverts both the draft status and the textbox to the live
-    // values, discarding any pending edit. Always present so it doubles as a
-    // one-click "clear" for the textbox.
+    // Clear ("X"): empties the textbox and drops any pending status draft.
+    // The user then commits the empty description via Update, same as any
+    // other edit. Always present so it's a one-click clear regardless of
+    // whether a description is currently committed.
     if (mu_button(ctx, "X"))
     {
         state.selfStatusDraft = null;
-        setTextboxFrom(state.statusDescriptionInput[],
-            state.selfStatusDescription);
+        state.statusDescriptionInput[] = '\0';
         state.statusUpdateError = null;
         requestRepaint();
     }
