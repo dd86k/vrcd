@@ -115,6 +115,9 @@ struct FriendInfo
     string statusDescription;
     string platform;
     string location;
+    string bio;
+    string pronouns;
+    string[] bioLinks;
 }
 
 /// Friends grouped by instance for the friends tab.

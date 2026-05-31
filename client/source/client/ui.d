@@ -1260,8 +1260,31 @@ private void drawFriendProfile(mu_Context* ctx, AppState* state, int scrollDelta
     if (f.statusDescription)
     {
         mu_layout_row(ctx, 2, labelValCols.ptr, 0);
-        mu_label(ctx, "Bio");
+        mu_label(ctx, "Status Note");
         clickableValue(ctx, state, f.statusDescription);
+    }
+
+    if (f.pronouns)
+    {
+        mu_layout_row(ctx, 2, labelValCols.ptr, 0);
+        mu_label(ctx, "Pronouns");
+        clickableValue(ctx, state, f.pronouns);
+    }
+
+    if (f.bio)
+    {
+        mu_layout_row(ctx, 2, labelValCols.ptr, 0);
+        mu_label(ctx, "Bio");
+        clickableValue(ctx, state, f.bio);
+    }
+
+    foreach (link; f.bioLinks)
+    {
+        if (link.length == 0)
+            continue;
+        mu_layout_row(ctx, 2, labelValCols.ptr, 0);
+        mu_label(ctx, "Link");
+        clickableValue(ctx, state, link);
     }
 
     if (f.platform)
@@ -1960,6 +1983,7 @@ string prettyEventType(string eventType)
         case "instance-queue-left":         return "Queue Left";
         case "instance-closed":             return "Instance Closed";
         case "avatar-change":               return "Avatar Change";
+        case "profile-change":              return "Profile Change";
         case "content-refresh":             return "Content Refresh";
         case "player-joining":              return "Player Joining";
         case "player-joined":               return "Player Joined";

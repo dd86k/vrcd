@@ -833,8 +833,9 @@ private void drainNetworkMessages()
                 if (const(JSONValue) *content = "content" in msg)
                 {
                     rawContent = content.toString(); // full json
-                    // avatar-change carries isSelf in its content.
-                    if (eventType == "avatar-change" && content.type == JSONType.object)
+                    // avatar-change and profile-change carry isSelf in their content.
+                    if ((eventType == "avatar-change" || eventType == "profile-change")
+                        && content.type == JSONType.object)
                         if (const(JSONValue)* v = "isSelf" in *content)
                             if (v.type == JSONType.true_)
                                 isSelfEvent = true;
@@ -895,7 +896,8 @@ private void drainNetworkMessages()
                 if (const(JSONValue) *content = "content" in msg)
                 {
                     rawContent = content.toString();
-                    if (eventType == "avatar-change" && content.type == JSONType.object)
+                    if ((eventType == "avatar-change" || eventType == "profile-change")
+                        && content.type == JSONType.object)
                         if (const(JSONValue)* v = "isSelf" in *content)
                             if (v.type == JSONType.true_)
                                 isSelfEvent = true;
@@ -1306,6 +1308,21 @@ private void extractEventFields(string eventType, JSONValue msg, out string user
                         detail = shortAvatarId(v.str);
                 return;
 
+            case "profile-change":
+                // Synthetic carries previous*/current* pairs for whichever
+                // subfields changed. Surface the field names in display order
+                // so the feed reads "bio" / "bio, pronouns" / etc.
+                string[] fields;
+                if ("currentBio" in c)       fields ~= "bio";
+                if ("currentPronouns" in c)  fields ~= "pronouns";
+                if ("currentBioLinks" in c)  fields ~= "bioLinks";
+                if (fields.length > 0)
+                {
+                    import std.array : join;
+                    detail = fields.join(", ");
+                }
+                return;
+
             case "content-refresh":
                 if (const(JSONValue)* v = "contentType" in c)
                     if (v.str.length > 0)
@@ -1451,6 +1468,17 @@ private FriendInfo parseFriendInfo(JSONValue f)
         fi.platform = v.str;
     if (const(JSONValue)* v = "location" in f)
         fi.location = v.str;
+    if (const(JSONValue)* v = "bio" in f)
+        if (v.type == JSONType.string)
+            fi.bio = v.str;
+    if (const(JSONValue)* v = "pronouns" in f)
+        if (v.type == JSONType.string)
+            fi.pronouns = v.str;
+    if (const(JSONValue)* v = "bioLinks" in f)
+        if (v.type == JSONType.array)
+            foreach (ref const(JSONValue) item; v.array)
+                if (item.type == JSONType.string)
+                    fi.bioLinks ~= item.str;
     return fi;
 }
 
