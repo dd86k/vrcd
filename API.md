@@ -221,6 +221,9 @@ Each friend entry (in both `instances[].friends` and `offline`):
 | `statusDescription` | string | Custom status text       |
 | `platform`          | string | `"standalonewindows"`, `"android"`, etc. |
 | `location`          | string | Instance ID, `"private"`, or `"offline"` |
+| `bio`               | string | Long-form profile blurb (distinct from `statusDescription`) |
+| `pronouns`          | string | User-set pronouns        |
+| `bioLinks`          | array  | Profile URLs the user pinned |
 
 ### `self`
 
@@ -233,6 +236,9 @@ Snapshot of the logged-in user's own status. Sent after auth (immediately follow
 | `displayName`       | string | Display name                                               |
 | `status`            | string | `"active"`, `"join me"`, `"ask me"`, `"busy"`              |
 | `statusDescription` | string | Custom status text                                         |
+| `bio`               | string | Long-form profile blurb                                    |
+| `pronouns`          | string | User-set pronouns                                          |
+| `bioLinks`          | array  | Profile URLs the user pinned                               |
 
 ### `set_status_result`
 
@@ -319,6 +325,7 @@ Events forwarded from VRChat's WebSocket, stored and broadcast as `event` messag
 Derived on the server, not produced by VRChat's WebSocket.
 
 - `avatar-change` *(persisted)* - A tracked entry's `currentAvatar` changed between updates. Content: `{ userId, displayName, previousAvatar, currentAvatar, isSelf }`.
+- `profile-change` *(persisted)* - A tracked entry's `bio`, `pronouns`, or `bioLinks` changed between two non-empty values. First sighting of a subfield and clears (non-empty -> empty) seed silently and do not emit. A single edit covering multiple subfields produces one combined event. Content: `{ userId, displayName, isSelf, previousBio?, currentBio?, previousPronouns?, currentPronouns?, previousBioLinks?, currentBioLinks? }` - only the `previous*`/`current*` pairs for subfields that actually changed are included.
 - `friend-traveling` *(ephemeral, `id == 0`)* - A friend's client is loading the next world (raw `friend-location` with `location == "traveling"`). Broadcast live for "Joining X" UI; never stored. The concrete arrival arrives shortly after as a normal `friend-location`. Content: `{ userId, displayName, travelingToLocation, world?, worldName? }`.
 
 ## Connection Flow
