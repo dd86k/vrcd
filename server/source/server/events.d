@@ -54,6 +54,7 @@ enum EventType : string
 
     // Synthesized (not from VRChat; derived by the server from other events)
     avatarChange    = "avatar-change",
+    profileChange   = "profile-change",
     friendTraveling = "friend-traveling",
 
     // Unknown
@@ -77,11 +78,11 @@ struct VRCEvent
     string rawJson;       /// Original raw JSON message for storage.
 }
 
-/// True for raw event types that VRChat re-emits constantly during an
-/// avatar swap (location/update spam). When the tracker derives a synthetic
-/// avatar-change from one of these, the raw event is dropped: it carries no
-/// new information beyond what the synthetic plus prior state already convey.
-/// Other avatar-change triggers (e.g. friend-online, friend-active) remain
+/// True for raw event types that VRChat re-emits constantly and that the
+/// tracker may turn into a synthetic (avatar-change, profile-change). When
+/// a synthetic is produced from one of these, the raw event is dropped: it
+/// carries no new information beyond what the synthetic plus prior state
+/// already convey. Other triggers (e.g. friend-online, friend-active) remain
 /// meaningful on their own and are not suppressed.
 bool isAvatarNoiseEvent(EventType type)
 {

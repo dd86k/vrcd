@@ -30,6 +30,9 @@ class FriendsTracker
         string worldName;
         string platform;         // "standalonewindows", "android", etc.
         string currentAvatar;    // "avtr_..." of currently-equipped avatar
+        string bio;              // Long-form profile blurb (not statusDescription)
+        string pronouns;         // User-set pronouns
+        string[] bioLinks;       // URLs the user pinned on their profile
         bool online;             // Online in-game
     }
 
@@ -62,7 +65,8 @@ class FriendsTracker
     /// through the same avatar-diff logic, but buildFriendsMessage filters
     /// it out so clients never see themselves in the friends list.
     void setSelf(string userId, string displayName, string currentAvatar,
-        string status, string statusDescription)
+        string status, string statusDescription,
+        string bio, string pronouns, string[] bioLinks)
     {
         if (userId.length == 0)
             return;
@@ -78,6 +82,12 @@ class FriendsTracker
                 f.status = status;
             if (statusDescription.length > 0)
                 f.statusDescription = statusDescription;
+            if (bio.length > 0)
+                f.bio = bio;
+            if (pronouns.length > 0)
+                f.pronouns = pronouns;
+            if (bioLinks.length > 0)
+                f.bioLinks = bioLinks;
         }
     }
 
@@ -105,6 +115,9 @@ class FriendsTracker
                 "displayName":       JSONValue(f.displayName),
                 "status":            JSONValue(f.status),
                 "statusDescription": JSONValue(f.statusDescription),
+                "bio":               JSONValue(f.bio),
+                "pronouns":          JSONValue(f.pronouns),
+                "bioLinks":          JSONValue(f.bioLinks),
             ]);
         }
     }
@@ -184,6 +197,16 @@ class FriendsTracker
             if (const(JSONValue)* v = "currentAvatar" in f)
                 if (v.type == JSONType.string)
                     state.currentAvatar = v.str;
+
+            if (const(JSONValue)* v = "bio" in f)
+                if (v.type == JSONType.string)
+                    state.bio = v.str;
+            if (const(JSONValue)* v = "pronouns" in f)
+                if (v.type == JSONType.string)
+                    state.pronouns = v.str;
+            if (const(JSONValue)* v = "bioLinks" in f)
+                if (v.type == JSONType.array)
+                    state.bioLinks = jsonStringArray(*v);
 
             normalizeOfflinePlatform(state);
             result[userId] = state;
@@ -286,6 +309,9 @@ class FriendsTracker
         string platform;
         string location;
         string worldName;
+        string bio;
+        string pronouns;
+        string[] bioLinks;
         bool online;
     }
 
@@ -302,6 +328,9 @@ class FriendsTracker
         v.platform = f.platform;
         v.location = canonicalLocation(f.location);
         v.worldName = f.worldName;
+        v.bio = f.bio;
+        v.pronouns = f.pronouns;
+        v.bioLinks = f.bioLinks;
         v.online = f.online;
         return v;
     }
@@ -417,6 +446,9 @@ class FriendsTracker
             "statusDescription": JSONValue(f.statusDescription),
             "platform": JSONValue(f.platform),
             "location": JSONValue(f.location),
+            "bio": JSONValue(f.bio),
+            "pronouns": JSONValue(f.pronouns),
+            "bioLinks": JSONValue(f.bioLinks),
         ]);
     }
 
@@ -516,6 +548,7 @@ private:
         }
 
         if (applyAvatarUpdate(f, c)) changed = true;
+        if (applyProfileUpdate(f, c)) changed = true;
         return changed;
     }
 
@@ -596,6 +629,7 @@ private:
         }
 
         if (applyAvatarUpdate(f, c)) changed = true;
+        if (applyProfileUpdate(f, c)) changed = true;
         return changed;
     }
 
@@ -675,6 +709,7 @@ private:
         }
 
         if (applyAvatarUpdate(f, c)) changed = true;
+        if (applyProfileUpdate(f, c)) changed = true;
         return changed;
     }
 
@@ -709,6 +744,7 @@ private:
         }
 
         if (applyAvatarUpdate(f, c)) changed = true;
+        if (applyProfileUpdate(f, c)) changed = true;
         return changed;
     }
 
@@ -748,6 +784,7 @@ private:
         }
 
         if (applyAvatarUpdate(f, c)) changed = true;
+        if (applyProfileUpdate(f, c)) changed = true;
         // Self is filtered out of buildFriendsMessage, so no snapshot push.
         return false;
     }
@@ -781,6 +818,7 @@ private:
         }
 
         if (applyAvatarUpdate(f, c)) changed = true;
+        if (applyProfileUpdate(f, c)) changed = true;
         // Self is filtered out of buildFriendsMessage, so no snapshot push.
         return false;
     }
@@ -878,6 +916,106 @@ private:
         return changed;
     }
 
+    /// Diff incoming bio / pronouns / bioLinks against cached state and queue
+    /// a synthetic profile-change when one or more of them transitions between
+    /// two non-empty values (mirrors VRCX's Bio feed gating). First sighting
+    /// of each subfield seeds silently; field-cleared transitions (non-empty
+    /// to empty) also seed silently to avoid offline-purge noise. The
+    /// synthetic is combined: edits to bio + pronouns in the same frame
+    /// produce one event listing both.
+    bool applyProfileUpdate(FriendState* f, JSONValue c)
+    {
+        bool stateChanged = false;
+        string[string] changedScalars; // field name -> "previous" value
+
+        string newBio;
+        if (extractProfileString(c, "bio", newBio))
+        {
+            if (newBio != f.bio)
+            {
+                bool emit = f.bio.length > 0 && newBio.length > 0;
+                if (emit)
+                    changedScalars["bio"] = f.bio;
+                f.bio = newBio;
+                stateChanged = true;
+            }
+        }
+
+        string newPronouns;
+        if (extractProfileString(c, "pronouns", newPronouns))
+        {
+            if (newPronouns != f.pronouns)
+            {
+                bool emit = f.pronouns.length > 0 && newPronouns.length > 0;
+                if (emit)
+                    changedScalars["pronouns"] = f.pronouns;
+                f.pronouns = newPronouns;
+                stateChanged = true;
+            }
+        }
+
+        string[] newBioLinks;
+        bool bioLinksChangedAndEmit = false;
+        string[] previousBioLinks;
+        if (extractProfileBioLinks(c, newBioLinks))
+        {
+            if (bioLinksDiffer(f.bioLinks, newBioLinks))
+            {
+                bool emit = f.bioLinks.length > 0 && newBioLinks.length > 0;
+                if (emit)
+                {
+                    bioLinksChangedAndEmit = true;
+                    previousBioLinks = f.bioLinks;
+                }
+                f.bioLinks = newBioLinks;
+                stateChanged = true;
+            }
+        }
+
+        if (changedScalars.length == 0 && bioLinksChangedAndEmit == false)
+            return stateChanged;
+
+        JSONValue content = JSONValue([
+            "userId":      JSONValue(f.userId),
+            "displayName": JSONValue(f.displayName),
+            "isSelf":      JSONValue(f.userId == selfUserId),
+        ]);
+
+        if (auto prev = "bio" in changedScalars)
+        {
+            content["previousBio"] = JSONValue(*prev);
+            content["currentBio"] = JSONValue(f.bio);
+        }
+        if (auto prev = "pronouns" in changedScalars)
+        {
+            content["previousPronouns"] = JSONValue(*prev);
+            content["currentPronouns"] = JSONValue(f.pronouns);
+        }
+        if (bioLinksChangedAndEmit)
+        {
+            content["previousBioLinks"] = JSONValue(previousBioLinks);
+            content["currentBioLinks"] = JSONValue(f.bioLinks);
+        }
+
+        VRCEvent syn = VRCEvent(
+            EventType.profileChange,
+            "profile-change",
+            content,
+            Clock.currTime(),
+            JSONValue([
+                "type":    JSONValue("profile-change"),
+                "content": JSONValue(content.toString()),
+            ]).toString()
+        );
+
+        pendingSynthetics ~= syn;
+        logTrace("applyProfileUpdate: queued profile-change for %s "
+            ~ "(scalars=%d bioLinks=%s)",
+            f.userId, changedScalars.length, bioLinksChangedAndEmit);
+
+        return stateChanged;
+    }
+
     // VRChat sometimes sends fields as "" rather than omitting them
     // (e.g. friend-offline carries "platform":""). Treat both as absent
     // so enrichContent can fill from cache.
@@ -939,6 +1077,69 @@ private:
                     return wn.str;
 
         return null;
+    }
+
+    /// Read a profile string (e.g. bio, pronouns) from event content. Profile
+    /// fields can appear top-level (user-update payload variants) or nested
+    /// under "user" (friend-* events). Returns true when the field is present;
+    /// the empty string is a valid value (means "user cleared it").
+    static bool extractProfileString(JSONValue c, string field, out string value)
+    {
+        if (const(JSONValue)* v = field in c)
+            if (v.type == JSONType.string)
+            {
+                value = v.str;
+                return true;
+            }
+        if (const(JSONValue)* u = "user" in c)
+            if (u.type == JSONType.object)
+                if (const(JSONValue)* v = field in *u)
+                    if (v.type == JSONType.string)
+                    {
+                        value = v.str;
+                        return true;
+                    }
+        return false;
+    }
+
+    /// Read bioLinks (an array of URL strings) from event content. Same
+    /// top-level / nested-under-"user" search as extractProfileString.
+    static bool extractProfileBioLinks(JSONValue c, out string[] value)
+    {
+        if (const(JSONValue)* v = "bioLinks" in c)
+            if (v.type == JSONType.array)
+            {
+                value = jsonStringArray(*v);
+                return true;
+            }
+        if (const(JSONValue)* u = "user" in c)
+            if (u.type == JSONType.object)
+                if (const(JSONValue)* v = "bioLinks" in *u)
+                    if (v.type == JSONType.array)
+                    {
+                        value = jsonStringArray(*v);
+                        return true;
+                    }
+        return false;
+    }
+
+    static string[] jsonStringArray(JSONValue arr)
+    {
+        string[] result;
+        foreach (ref JSONValue item; arr.array)
+            if (item.type == JSONType.string)
+                result ~= item.str;
+        return result;
+    }
+
+    static bool bioLinksDiffer(const(string)[] a, const(string)[] b)
+    {
+        if (a.length != b.length)
+            return true;
+        foreach (i, ref s; a)
+            if (s != b[i])
+                return true;
+        return false;
     }
 
     /// Read a nested user field from event content as a string.

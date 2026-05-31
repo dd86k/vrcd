@@ -30,6 +30,9 @@ struct AuthState
     string currentAvatar; /// Self avatar ID at login (avtr_...).
     string status;            /// Self status ("active", "join me", "ask me", "busy").
     string statusDescription; /// Self custom status message.
+    string bio;               /// Self long-form profile blurb.
+    string pronouns;          /// Self pronouns.
+    string[] bioLinks;        /// Self profile URLs.
 }
 
 /// Authenticate with VRChat and obtain a WebSocket token.
@@ -337,6 +340,17 @@ AuthState finishAuth(HTTPClient client, JSONValue userJson)
         state.status = v.str;
     if (const(JSONValue)* v = "statusDescription" in userJson)
         state.statusDescription = v.str;
+    if (const(JSONValue)* v = "bio" in userJson)
+        if (v.type == JSONType.string)
+            state.bio = v.str;
+    if (const(JSONValue)* v = "pronouns" in userJson)
+        if (v.type == JSONType.string)
+            state.pronouns = v.str;
+    if (const(JSONValue)* v = "bioLinks" in userJson)
+        if (v.type == JSONType.array)
+            foreach (ref const(JSONValue) item; v.array)
+                if (item.type == JSONType.string)
+                    state.bioLinks ~= item.str;
     return state;
 }
 
