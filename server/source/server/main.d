@@ -262,6 +262,9 @@ void cmdRun(ref Config config)
 
         if (friendsChanged)
             apiServer.broadcastFriendsSnapshot();
+
+        if (tracker.takePendingSelfChange())
+            apiServer.broadcastSelf();
     });
     vrcws.setReconnectBackoff(config.reconnectInterval, config.reconnectMax);
     // This is the callback when the WS connection status changes

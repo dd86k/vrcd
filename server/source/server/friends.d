@@ -42,6 +42,7 @@ class FriendsTracker
     private InstanceCache instanceCache;
     private string selfUserId;           // also stored in `friends`, filtered from snapshots
     private VRCEvent[] pendingSynthetics; // derived events (e.g. avatar-change)
+    private bool pendingSelfChange;       // self snapshot fields moved; broadcast a fresh `self`
 
     this()
     {
@@ -152,6 +153,19 @@ class FriendsTracker
             VRCEvent[] result = pendingSynthetics;
             pendingSynthetics = null;
             return result;
+        }
+    }
+
+    /// Drain a queued "self snapshot changed" flag set when an incoming event
+    /// (typically user-update from an in-game status edit) mutated one of the
+    /// fields the client renders for self. Caller broadcasts a fresh `self`.
+    bool takePendingSelfChange()
+    {
+        synchronized (friendsMutex)
+        {
+            bool r = pendingSelfChange;
+            pendingSelfChange = false;
+            return r;
         }
     }
 
@@ -281,15 +295,20 @@ class FriendsTracker
                     return false;
             }
 
-            // Self never appears in client snapshots — its mutations are
-            // not "visible state changes" for broadcast purposes.
+            VisibleState after = userId.length > 0 ? visibleStateOf(userId) : VisibleState.init;
+
+            // Self never appears in the friends snapshot, but a change to its
+            // status/description/bio/etc still needs to reach the client via a
+            // fresh `self` push (e.g. user toggled status from the VRChat menu).
             if (userId.length > 0 && selfUserId.length > 0 && userId == selfUserId)
             {
-                logDebugging("processEvent: type=%s self-update suppressed", event.typeRaw);
+                if (before != after)
+                    pendingSelfChange = true;
+                logDebugging("processEvent: type=%s self-update selfChanged=%s",
+                    event.typeRaw, pendingSelfChange);
                 return false;
             }
 
-            VisibleState after = userId.length > 0 ? visibleStateOf(userId) : VisibleState.init;
             bool changed = before != after;
             logDebugging("processEvent: type=%s changed=%s friends=%d",
                 event.typeRaw, changed, friends.length);
