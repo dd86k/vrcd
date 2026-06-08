@@ -494,15 +494,32 @@ class FriendsTracker
             cachedPlatform = f.platform;
         }
 
+        bool changed;
+
         if (isMissingOrEmpty(event.content, "displayName") && cachedDisplayName.length > 0)
         {
             event.content["displayName"] = JSONValue(cachedDisplayName);
+            changed = true;
             logTrace("enrichContent: added displayName=%s for %s",
                 cachedDisplayName, userId);
         }
 
         if (isMissingOrEmpty(event.content, "platform") && cachedPlatform.length > 0)
+        {
             event.content["platform"] = JSONValue(cachedPlatform);
+            changed = true;
+        }
+
+        // Rebuild rawJson so storage reflects the enriched content; otherwise
+        // catch-up replays the original wire payload and loses the displayName
+        // for events like friend-offline that VRChat sends as userId-only.
+        if (changed)
+        {
+            event.rawJson = JSONValue([
+                "type":    JSONValue(event.typeRaw),
+                "content": JSONValue(event.content.toString()),
+            ]).toString();
+        }
     }
 
 private:
