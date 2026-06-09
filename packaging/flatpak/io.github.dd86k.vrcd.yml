@@ -148,6 +148,7 @@ modules:
       # Install
       - install -Dm755 client/vrcd_client /app/bin/vrcd_client
       - install -Dm644 packaging/flatpak/io.github.dd86k.vrcd.desktop /app/share/applications/io.github.dd86k.vrcd.desktop
+      - install -Dm644 packaging/flatpak/io.github.dd86k.vrcd.metainfo.xml /app/share/metainfo/io.github.dd86k.vrcd.metainfo.xml
       - install -Dm644 packaging/flatpak/io.github.dd86k.vrcd.png /app/share/icons/hicolor/512x512/apps/io.github.dd86k.vrcd.png
     sources:
       ## Project source

@@ -1,6 +1,9 @@
 [Desktop Entry]
 Name=vrcd Client
+Comment=VRChat companion: live friend feed, screenshot metadata, log monitoring
 Exec=vrcd_client
 Icon=io.github.dd86k.vrcd
 Type=Application
-Categories=Utility;
+Categories=Network;Utility;
+Keywords=VRChat;VR;
+StartupWMClass=io.github.dd86k.vrcd

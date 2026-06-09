@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.dd86k.vrcd</id>
+
+  <name>vrcd</name>
+  <summary>VRChat companion: live friend feed, log watching, screenshot metadata</summary>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>BSD-3-Clause-Clear</project_license>
+
+  <developer id="io.github.dd86k">
+    <name>dd86k</name>
+  </developer>
+
+  <launchable type="desktop-id">io.github.dd86k.vrcd.desktop</launchable>
+
+  <description>
+    <p>
+      vrcd is a companion application for VRChat. The client connects to a vrcd
+      server that maintains a live link to VRChat's event stream, lets you
+      browse friend activity and instance state, monitors the local game log,
+      and writes rich metadata (author, world, players) into screenshots.
+    </p>
+    <p>The UI is built for VR-friendly interaction with large, clearly labeled controls.</p>
+  </description>
+
+  <url type="homepage">https://github.com/dd86k/vrcd</url>
+  <url type="bugtracker">https://github.com/dd86k/vrcd/issues</url>
+  <url type="vcs-browser">https://github.com/dd86k/vrcd</url>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>Event feed with friend activity history</caption>
+      <image>https://raw.githubusercontent.com/dd86k/vrcd/main/packaging/flatpak/screenshots/main.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Online friends grouped by instance</caption>
+      <image>https://raw.githubusercontent.com/dd86k/vrcd/main/packaging/flatpak/screenshots/second.png</image>
+    </screenshot>
+  </screenshots>
+
+  <categories>
+    <category>Network</category>
+    <category>Utility</category>
+  </categories>
+
+  <content_rating type="oars-1.1" />
+
+  <releases>
+    <release version="0.1.0" date="2026-06-09">
+      <description>
+        <p>Initial Flathub release.</p>
+      </description>
+    </release>
+  </releases>
+</component>
