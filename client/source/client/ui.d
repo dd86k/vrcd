@@ -230,6 +230,22 @@ private void drawFeedFilterPopup(mu_Context* ctx, AppState* state, int scrollDel
             if (s > 0)
                 spacer(ctx, 8);
             sectionHeader(ctx, section.title);
+
+            // "Show self events" is a master toggle that gates every
+            // entry in the Self & Avatar section, so it lives at the top
+            // of that group instead of in its own ad-hoc section.
+            if (section.title == "Self & Avatar")
+            {
+                mu_layout_row(ctx, 1, fullCol.ptr, rowH);
+                int prevShowSelf = state.feedShowSelfEvents;
+                mu_checkbox(ctx, "Show self events", &state.feedShowSelfEvents);
+                if (state.feedShowSelfEvents != prevShowSelf)
+                {
+                    feedPage = 0;
+                    changed = true;
+                }
+            }
+
             foreach (size_t idx; section.indices)
             {
                 mu_layout_row(ctx, 1, fullCol.ptr, rowH);
@@ -241,19 +257,6 @@ private void drawFeedFilterPopup(mu_Context* ctx, AppState* state, int scrollDel
                     changed = true;
                 }
             }
-        }
-
-        spacer(ctx, 8);
-
-        // Visibility
-        sectionHeader(ctx, "Visibility");
-        mu_layout_row(ctx, 1, fullCol.ptr, rowH);
-        int prevShowSelf = state.feedShowSelfEvents;
-        mu_checkbox(ctx, "Show self events", &state.feedShowSelfEvents);
-        if (state.feedShowSelfEvents != prevShowSelf)
-        {
-            feedPage = 0;
-            changed = true;
         }
 
         mu_end_panel(ctx);
@@ -1371,8 +1374,28 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
         // mutate state.notifications while iterating it.
         string[] dismissedIds;
 
+        // Header row with "Dismiss all". Queues hide actions for every
+        // non-pending notification.
+        static immutable int[2] headerCols = [-130, 120];
+        mu_layout_row(ctx, 2, headerCols.ptr, 30);
+        mu_label(ctx, "");
+        if (mu_button(ctx, "Dismiss all"))
+        {
+            foreach (ref NotificationEntry n; state.notifications)
+            {
+                if (n.actionPending)
+                    continue;
+                state.pendingActions ~= NotificationAction(n.notificationId, "hide");
+                dismissedIds ~= n.notificationId;
+            }
+        }
+
         foreach (ref NotificationEntry n; state.notifications)
         {
+            // Scope widget IDs by notificationId so identical button labels
+            // ("Dismiss", "Accept", ...) across rows don't collide in microui.
+            mu_push_id(ctx, n.notificationId.ptr, cast(int) n.notificationId.length);
+
             // Info row: Type | From | Message | Date
             mu_layout_row(ctx, 4, infoCols.ptr, 0);
             gridCell(ctx, prettyNotifType(n.notificationType), lineColor);
@@ -1426,6 +1449,8 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
             // Row separator.
             mu_layout_row(ctx, 1, fullCol.ptr, 1);
             mu_draw_rect(ctx, mu_layout_next(ctx), lineColor);
+
+            mu_pop_id(ctx);
         }
 
         // Apply optimistic removals.
