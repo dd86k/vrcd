@@ -44,6 +44,10 @@ private void setStatusFlash(AppState* state, string msg, int ms = 1500)
 /// Draw the full-window UI layout.
 void drawFullWindow(mu_Context* ctx, AppState* state, int scrollDelta)
 {
+    // When the filter popup is open it consumes scroll input; the main
+    // window's tab panels should not also move.
+    int tabScroll = filterPopupOpen ? 0 : scrollDelta;
+
     enum opt = MU_OPT_NOTITLE | MU_OPT_NORESIZE | MU_OPT_NOCLOSE | MU_OPT_NOFRAME | MU_OPT_NOSCROLL;
     if (mu_begin_window_ex(ctx, "Main", mu_Rect(0, 0, window_width, window_height), opt))
     {
@@ -68,7 +72,7 @@ void drawFullWindow(mu_Context* ctx, AppState* state, int scrollDelta)
             // and the inter-row spacing inserted between pagination and status
             // (otherwise the status bar lands one spacing lower than on other tabs).
             mu_layout_row(ctx, 1, fullCol.ptr, -(50 + 25 + ctx.style.spacing));
-            drawFeedTab(ctx, state, scrollDelta);
+            drawFeedTab(ctx, state, tabScroll);
 
             // Pagination row (50px).
             mu_layout_row(ctx, 1, fullCol.ptr, 50);
@@ -81,10 +85,10 @@ void drawFullWindow(mu_Context* ctx, AppState* state, int scrollDelta)
             final switch (activeTab)
             {
                 case Tab.feed:          break; // handled above
-                case Tab.online:        drawOnlineTab(ctx, state, scrollDelta);        break;
-                case Tab.notifications: drawNotificationsTab(ctx, state, scrollDelta); break;
-                case Tab.tools:         drawToolsTab(ctx, state);                      break;
-                case Tab.settings:      drawSettingsTab(ctx, state, scrollDelta);       break;
+                case Tab.online:        drawOnlineTab(ctx, state, tabScroll);        break;
+                case Tab.notifications: drawNotificationsTab(ctx, state, tabScroll); break;
+                case Tab.tools:         drawToolsTab(ctx, state);                    break;
+                case Tab.settings:      drawSettingsTab(ctx, state, tabScroll);      break;
             }
         }
 
@@ -96,7 +100,7 @@ void drawFullWindow(mu_Context* ctx, AppState* state, int scrollDelta)
     }
 
     // Filter popup must be outside the main window to render on top.
-    drawFeedFilterPopup(ctx, state);
+    drawFeedFilterPopup(ctx, state, scrollDelta);
 
     // Self-status popup (anchored under the status circle in the Online tab).
     drawSelfStatusPopup(ctx, state);
@@ -149,6 +153,29 @@ private void drawTabButton(mu_Context* ctx, string label, Tab tab)
 
 bool filterPopupOpen;
 
+/// Compute the filter popup rect from current window dimensions.
+/// Shared between drawFeedFilterPopup and the event loop's click-outside
+/// dismissal check.
+mu_Rect filterPopupRect()
+{
+    enum int maxW = 560;
+    enum int margin = 40;
+    int popupW = window_width - margin * 2;
+    if (popupW > maxW)
+        popupW = maxW;
+    int popupH = window_height - margin * 2;
+    int popupX = (window_width - popupW) / 2;
+    int popupY = margin;
+    return mu_Rect(popupX, popupY, popupW, popupH);
+}
+
+/// Whether (x, y) falls inside the filter popup rect.
+bool filterPopupContains(int x, int y)
+{
+    mu_Rect r = filterPopupRect();
+    return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
+}
+
 /// Draw the feed search bar (called from main window layout).
 private void drawFeedSearchBar(mu_Context* ctx)
 {
@@ -165,43 +192,56 @@ private void drawFeedSearchBar(mu_Context* ctx)
 }
 
 /// Draw the filter popup as a standalone window.
-private void drawFeedFilterPopup(mu_Context* ctx, AppState* state)
+///
+/// Layout: a scroll panel containing sections of large checkbox rows
+/// (VR-friendly hit targets) plus a sticky bottom bar with bulk actions.
+private void drawFeedFilterPopup(mu_Context* ctx, AppState* state, int scrollDelta)
 {
     if (filterPopupOpen == false)
         return;
 
-    if (mu_begin_window_ex(ctx, "Filters", mu_Rect(10, 100, 340, 500),
-        MU_OPT_NOTITLE | MU_OPT_NORESIZE | MU_OPT_AUTOSIZE | MU_OPT_NOSCROLL))
+    mu_Rect rect = filterPopupRect();
+
+    if (mu_begin_window_ex(ctx, "Filters", rect,
+        MU_OPT_NOTITLE | MU_OPT_NORESIZE | MU_OPT_NOSCROLL))
     {
-        // Keep popup above the full-screen main window so it receives input.
-        mu_bring_to_front(ctx, mu_get_current_container(ctx));
-        enum cols = 2;
-        enum totalItems = feedEventLabels.length;
-        enum rows = (totalItems + cols - 1) / cols;
-        static immutable int[cols] filterCols = [160, 160];
+        // Keep popup above the full-screen main window so it receives input,
+        // and pin its rect each frame so it tracks window resizes.
+        mu_Container* pc = mu_get_current_container(ctx);
+        pc.rect = rect;
+        mu_bring_to_front(ctx, pc);
+
+        enum int rowH = 36;       // big touch target for VR
+        enum int btnRowH = 50;    // sticky bottom bar
+        static immutable int[1] fullCol = [-1];
 
         bool changed;
 
-        foreach (size_t row; 0 .. rows)
+        // Scroll region: fills the popup minus the sticky bottom bar
+        // (and the inter-row spacing the layout inserts between them).
+        mu_layout_row(ctx, 1, fullCol.ptr, -(btnRowH + ctx.style.spacing));
+        mu_begin_panel(ctx, "FilterScroll");
+        applyScroll(ctx, scrollDelta);
+
+        // Event Types
+        sectionHeader(ctx, "Event Types");
+        foreach (size_t i, string label; feedEventLabels)
         {
-            mu_layout_row(ctx, cols, filterCols.ptr, 0);
-            foreach (size_t col; 0 .. cols)
+            mu_layout_row(ctx, 1, fullCol.ptr, rowH);
+            int prev = state.feedEventVisible[i];
+            mu_checkbox(ctx, label, &state.feedEventVisible[i]);
+            if (state.feedEventVisible[i] != prev)
             {
-                size_t i = col * rows + row;
-                if (i < totalItems)
-                {
-                    int prev = state.feedEventVisible[i];
-                    mu_checkbox(ctx, feedEventLabels[i], &state.feedEventVisible[i]);
-                    if (state.feedEventVisible[i] != prev)
-                        changed = true;
-                }
-                else
-                    mu_layout_next(ctx); // empty cell
+                feedPage = 0;
+                changed = true;
             }
         }
 
-        static immutable int[1] selfCol = [320];
-        mu_layout_row(ctx, 1, selfCol.ptr, 0);
+        spacer(ctx, 8);
+
+        // Visibility
+        sectionHeader(ctx, "Visibility");
+        mu_layout_row(ctx, 1, fullCol.ptr, rowH);
         int prevShowSelf = state.feedShowSelfEvents;
         mu_checkbox(ctx, "Show self events", &state.feedShowSelfEvents);
         if (state.feedShowSelfEvents != prevShowSelf)
@@ -210,8 +250,11 @@ private void drawFeedFilterPopup(mu_Context* ctx, AppState* state)
             changed = true;
         }
 
-        static immutable int[2] btnCols = [160, 160];
-        mu_layout_row(ctx, 2, btnCols.ptr, 30);
+        mu_end_panel(ctx);
+
+        // Sticky bottom bar
+        static immutable int[3] btnCols = [-2, -2, -1];
+        mu_layout_row(ctx, 3, btnCols.ptr, btnRowH);
         if (mu_button(ctx, "All On"))
         {
             state.feedEventVisible[] = 1;
@@ -224,7 +267,6 @@ private void drawFeedFilterPopup(mu_Context* ctx, AppState* state)
             feedPage = 0;
             changed = true;
         }
-
         if (mu_button(ctx, "Close"))
             filterPopupOpen = false;
 

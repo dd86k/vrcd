@@ -76,6 +76,11 @@ private DragState dragState = DragState.idle;
 /// Mouse position when left button was pressed (for threshold check).
 private int dragStartX, dragStartY;
 
+/// True while a press's mousedown has been withheld from ddui, to be sent
+/// only if the press resolves as a click (not a drag). Used inside the
+/// filter popup so dragging the surface doesn't toggle checkboxes underneath.
+private bool deferredMousedown;
+
 /// Previous mouse Y during an active drag (for delta calculation).
 private int dragPrevY;
 
@@ -385,21 +390,29 @@ private void eventLoop(mu_Context* uictx)
                 case SDL_MOUSEBUTTONDOWN:
                     if (e.button.button == SDL_BUTTON_LEFT)
                     {
-                        if (filterPopupOpen)
+                        // Click-outside dismissal for the filter popup. The
+                        // click is swallowed (no ddui input, no wasClick) so
+                        // it doesn't activate something behind the popup.
+                        if (filterPopupOpen &&
+                            filterPopupContains(e.button.x, e.button.y) == false)
                         {
-                            // Pass directly to ddui,  no drag in popup mode.
-                            mu_input_mousedown(uictx, e.button.x, e.button.y, MU_MOUSE_LEFT);
+                            filterPopupOpen = false;
+                            requestRepaint();
+                            break;
                         }
-                        else
-                        {
-                            // Defer scroll-drag decision, but pass to ddui immediately
-                            // so controls like sliders can track while held.
-                            dragState = DragState.pending;
-                            dragStartX = e.button.x;
-                            dragStartY = e.button.y;
-                            momentumVY = 0.0f;  // Stop any active momentum.
+                        // Defer scroll-drag decision. Normally we pass mousedown
+                        // to ddui immediately so controls like sliders can
+                        // track while held, but inside the popup the contents
+                        // are checkboxes that toggle on mousedown, so we
+                        // withhold the press until the gesture resolves.
+                        dragState = DragState.pending;
+                        dragStartX = e.button.x;
+                        dragStartY = e.button.y;
+                        momentumVY = 0.0f;  // Stop any active momentum.
+                        deferredMousedown = filterPopupOpen
+                            && filterPopupContains(e.button.x, e.button.y);
+                        if (deferredMousedown == false)
                             mu_input_mousedown(uictx, e.button.x, e.button.y, MU_MOUSE_LEFT);
-                        }
                     }
                     else
                     {
@@ -412,23 +425,26 @@ private void eventLoop(mu_Context* uictx)
                 case SDL_MOUSEBUTTONUP:
                     if (e.button.button == SDL_BUTTON_LEFT)
                     {
-                        if (filterPopupOpen)
+                        if (dragState == DragState.pending)
                         {
-                            // Pass directly to ddui,  no drag in popup mode.
-                            mu_input_mouseup(uictx, e.button.x, e.button.y, MU_MOUSE_LEFT);
-                        }
-                        else if (dragState == DragState.pending)
-                        {
-                            // Was a click, not a drag,  mousedown already sent.
+                            // Was a click, not a drag. If the mousedown was
+                            // deferred (popup case), send it now so the click
+                            // registers as a complete press+release this frame.
+                            if (deferredMousedown)
+                                mu_input_mousedown(uictx, e.button.x, e.button.y, MU_MOUSE_LEFT);
                             mu_input_mouseup(uictx, e.button.x, e.button.y, MU_MOUSE_LEFT);
                             wasClick = true;
                         }
                         else if (dragState == DragState.dragging)
                         {
-                            // Scroll-drag ended,  release ddui control.
-                            mu_input_mouseup(uictx, e.button.x, e.button.y, MU_MOUSE_LEFT);
+                            // Scroll-drag ended. If mousedown was deferred
+                            // we never sent a press, so no release is needed
+                            // and ddui never saw the click.
+                            if (deferredMousedown == false)
+                                mu_input_mouseup(uictx, e.button.x, e.button.y, MU_MOUSE_LEFT);
                         }
                         dragState = DragState.idle;
+                        deferredMousedown = false;
                     }
                     else
                     {
@@ -440,6 +456,15 @@ private void eventLoop(mu_Context* uictx)
 
                 case SDL_KEYDOWN:
                 case SDL_KEYUP:
+                    // Escape dismisses the filter popup.
+                    if (e.type == SDL_KEYDOWN &&
+                        e.key.keysym.sym == SDLK_ESCAPE &&
+                        filterPopupOpen)
+                    {
+                        filterPopupOpen = false;
+                        requestRepaint();
+                        break;
+                    }
                     // Ctrl+V paste
                     if (e.type == SDL_KEYDOWN &&
                         (e.key.keysym.mod & KMOD_CTRL) &&
