@@ -13,7 +13,8 @@ import std.utf : stride, UTFException;
 
 import ddui;
 
-import client.notifications : notifyEventLabels, feedEventLabels, feedFilterSections;
+import client.notifications : notifyEventLabels, feedEventLabels, feedFilterSections,
+    feedEventIndex, prettyEventType;
 import client.renderer : window_width, window_height;
 import client.gui : wasClick, requestRepaint;
 import client.state;
@@ -715,17 +716,10 @@ private bool passesFilter(ref FeedEntry entry, string query, AppState* state)
     if (state.feedShowSelfEvents == 0 && entry.isSelf)
         return false;
 
-    // Event type filter.
-    bool typeAllowed = true;
-    foreach (size_t i, string label; feedEventLabels)
-    {
-        if (prettyEventType(entry.eventType) == label)
-        {
-            typeAllowed = state.feedEventVisible[i] != 0;
-            break;
-        }
-    }
-    if (typeAllowed == false)
+    // Event type filter. Unknown raw types (size_t.max) fall through
+    // as visible so new VRChat events stay debuggable.
+    size_t idx = feedEventIndex(entry.eventType);
+    if (idx != size_t.max && state.feedEventVisible[idx] == 0)
         return false;
 
     // Text search filter.
@@ -1990,64 +1984,6 @@ string shortAvatarId(string s)
     return s;
 }
 
-/// Map VRChat WebSocket event type strings to readable names.
-string prettyEventType(string eventType)
-{
-    switch (eventType)
-    {
-        // VRChat
-        case "friend-online":               return "Online";
-        case "friend-offline":              return "Offline";
-        case "friend-active":               return "Active";
-        case "friend-add":                  return "Friend Add";
-        case "friend-delete":               return "Friend Remove";
-        case "friend-update":               return "Friend Update";
-        case "friend-location":             return "Friend Location";
-        case "friend-traveling":            return "Friend Traveling";
-        case "user-update":                 return "Update";
-        case "user-location":               return "Location";
-        case "user-badge-assigned":         return "Badge Assigned";
-        case "user-badge-unassigned":       return "Badge Unassigned";
-        case "notification":
-        case "notification-v2":             return "Notification";
-        case "notification-v2-delete":      return "Notif Delete";
-        case "notification-v2-update":      return "Notif Update";
-        case "see-notification":            return "Notif Seen";
-        case "hide-notification":           return "Notif Hidden";
-        case "response-notification":       return "Notif Response";
-        case "group-joined":                return "Group Joined";
-        case "group-left":                  return "Group Left";
-        case "group-role-updated":          return "Group Role";
-        case "group-member-updated":        return "Group Member";
-        case "instance-queue-joined":       return "Queue Joined";
-        case "instance-queue-position":     return "Queue Position";
-        case "instance-queue-ready":        return "Queue Ready";
-        case "instance-queue-left":         return "Queue Left";
-        case "instance-closed":             return "Instance Closed";
-        case "avatar-change":               return "Avatar Change";
-        case "profile-change":              return "Profile Change";
-        case "content-refresh":             return "Content Refresh";
-        case "player-joining":              return "Player Joining";
-        case "player-joined":               return "Player Joined";
-        case "player-left":                 return "Player Left";
-        case "photo-taken":                 return "Photo Taken";
-        case "url-video":                   return "URL Video";
-        case "url-string":                  return "URL String";
-        case "url-image":                   return "URL Image";
-        // DAP integration
-        case "dap-pair-start":
-        case "dap-pair-code":
-        case "dap-paired":                  return "DAP Pairing";
-        case "dap-login-ok":
-        case "dap-started":                 return "DAP";
-        case "dap-error":
-        case "dap-login-error":             return "DAP Error";
-        // VRCD specific
-        case "system":                      return "System";
-        case "error":                       return "Error";
-        default:                            return eventType;
-    }
-}
 
 /// Draw the auth delegation dialog (modal popup).
 private void drawAuthDialog(mu_Context* ctx, AppState* state)

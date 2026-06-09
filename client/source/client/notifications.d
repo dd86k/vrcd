@@ -12,47 +12,114 @@ import ddlogger;
 
 import client.settings;
 
-/// Event types shown in the feed tab filter popup.
-/// Order matches feedEventVisible arrays in Settings and AppState.
-/// New entries MUST be appended at the end: saved settings reference
-/// these positions by index, so reordering would silently flip filters
-/// for users with existing config.
-immutable string[] feedEventLabels = [
-    "Online", "Offline", "Active",
-    "Friend Add", "Friend Remove", "Friend Update", "Friend Location",
-    "Update", "Location",
-    "Notification", "Notif Delete", "Notif Update",
-    "Group Joined", "Group Left", "Group Role", "Group Member",
-    "Content Refresh", "Queue Position",
-    "Player Joining", "Player Joined", "Player Left",
-    "Avatar Change",
-    // Appended
-    "Friend Traveling",
-    "Profile Change",
-    "Badge Assigned", "Badge Unassigned",
-    "Notif Seen", "Notif Hidden", "Notif Response",
-    "Queue Joined", "Queue Ready", "Queue Left",
-    "Instance Closed",
-    "Photo Taken",
-    "URL Video", "URL String", "URL Image",
-    "DAP Pairing", "DAP", "DAP Error",
-    "System", "Error",
+/// Metadata for one feed event type: the human-readable label shown in
+/// the UI, the raw event-type strings that map to it (one label can
+/// collapse multiple wire types,  e.g. "Notification" covers both
+/// "notification" and "notification-v2"), and whether the filter
+/// toggle starts on or off by default.
+struct FeedEventType
+{
+    string label;
+    immutable(string)[] rawTypes;
+    bool defaultVisible;
+}
+
+/// Single source of truth for feed event types.
+///
+/// Position in this array is the persistence index for feedEventVisible
+/// in Settings and AppState. New entries MUST be appended at the end:
+/// saved settings reference these positions by index, so reordering
+/// would silently flip filters for users with existing config.
+immutable FeedEventType[] feedEventTypes = [
+    // VRChat WS, friends
+    FeedEventType("Online",            ["friend-online"],                                 true),
+    FeedEventType("Offline",           ["friend-offline"],                                true),
+    FeedEventType("Active",            ["friend-active"],                                 true),
+    FeedEventType("Friend Add",        ["friend-add"],                                    true),
+    FeedEventType("Friend Remove",     ["friend-delete"],                                 true),
+    FeedEventType("Friend Update",     ["friend-update"],                                 true),
+    FeedEventType("Friend Location",   ["friend-location"],                               true),
+    // VRChat WS, self
+    FeedEventType("Update",            ["user-update"],                                   true),
+    FeedEventType("Location",          ["user-location"],                                 true),
+    // VRChat WS, notifications
+    FeedEventType("Notification",      ["notification", "notification-v2"],               true),
+    FeedEventType("Notif Delete",      ["notification-v2-delete"],                        true),
+    FeedEventType("Notif Update",      ["notification-v2-update"],                        true),
+    // VRChat WS, groups
+    FeedEventType("Group Joined",      ["group-joined"],                                  true),
+    FeedEventType("Group Left",        ["group-left"],                                    true),
+    FeedEventType("Group Role",        ["group-role-updated"],                            true),
+    FeedEventType("Group Member",      ["group-member-updated"],                          true),
+    // VRChat WS, misc
+    FeedEventType("Content Refresh",   ["content-refresh"],                               true),
+    FeedEventType("Queue Position",    ["instance-queue-position"],                       true),
+    // Local logs
+    FeedEventType("Player Joining",    ["player-joining"],                                true),
+    FeedEventType("Player Joined",     ["player-joined"],                                 true),
+    FeedEventType("Player Left",       ["player-left"],                                   true),
+    // Synthetic
+    FeedEventType("Avatar Change",     ["avatar-change"],                                 true),
+    // Appended (keep order to preserve persistence indices)
+    FeedEventType("Friend Traveling",  ["friend-traveling"],                              false),
+    FeedEventType("Profile Change",    ["profile-change"],                                true),
+    FeedEventType("Badge Assigned",    ["user-badge-assigned"],                           true),
+    FeedEventType("Badge Unassigned",  ["user-badge-unassigned"],                         true),
+    FeedEventType("Notif Seen",        ["see-notification"],                              true),
+    FeedEventType("Notif Hidden",      ["hide-notification"],                             true),
+    FeedEventType("Notif Response",    ["response-notification"],                         true),
+    FeedEventType("Queue Joined",      ["instance-queue-joined"],                         true),
+    FeedEventType("Queue Ready",       ["instance-queue-ready"],                          true),
+    FeedEventType("Queue Left",        ["instance-queue-left"],                           true),
+    FeedEventType("Instance Closed",   ["instance-closed"],                               true),
+    FeedEventType("Photo Taken",       ["photo-taken"],                                   true),
+    FeedEventType("URL Video",         ["url-video"],                                     true),
+    FeedEventType("URL String",        ["url-string"],                                    true),
+    FeedEventType("URL Image",         ["url-image"],                                     true),
+    FeedEventType("DAP Pairing",       ["dap-pair-start", "dap-pair-code", "dap-paired"], true),
+    FeedEventType("DAP",               ["dap-login-ok", "dap-started"],                   true),
+    FeedEventType("DAP Error",         ["dap-error", "dap-login-error"],                  true),
+    FeedEventType("System",            ["system"],                                        true),
+    FeedEventType("Error",             ["error"],                                         true),
 ];
 
-/// Default visibility for each feed event type. Most events are visible
-/// by default; a few high-volume or debug-oriented entries opt the user
-/// in rather than out.
-immutable bool[feedEventLabels.length] feedEventDefaultVisible = () {
-    bool[feedEventLabels.length] r = true;
-    foreach (size_t i, string label; feedEventLabels)
-    {
-        // Friend Traveling is an ephemeral ping used to drive Player Joining
-        // detection,  very noisy if shown unfiltered. Power users can opt in.
-        if (label == "Friend Traveling")
-            r[i] = false;
-    }
+/// Display labels, derived from feedEventTypes. Kept as a separate symbol
+/// so existing code (settings persistence, UI rendering) keeps reading
+/// labels by index without churn.
+immutable string[] feedEventLabels = () {
+    string[feedEventTypes.length] r;
+    foreach (size_t i, ref t; feedEventTypes)
+        r[i] = t.label;
+    return r[].idup;
+}();
+
+/// Default visibility, derived from feedEventTypes.
+immutable bool[feedEventTypes.length] feedEventDefaultVisible = () {
+    bool[feedEventTypes.length] r;
+    foreach (size_t i, ref t; feedEventTypes)
+        r[i] = t.defaultVisible;
     return r;
 }();
+
+/// Look up a raw event type's index in feedEventTypes. Returns size_t.max
+/// when the raw type is unrecognized (e.g. a new VRChat event we haven't
+/// added,  the entry will still display in the feed but won't be filterable).
+size_t feedEventIndex(string rawType)
+{
+    foreach (size_t i, ref t; feedEventTypes)
+        foreach (string raw; t.rawTypes)
+            if (raw == rawType)
+                return i;
+    return size_t.max;
+}
+
+/// Human-readable label for a raw event type. Falls through to the raw
+/// string when unknown so unrecognized events stay visible (and debuggable).
+string prettyEventType(string rawType)
+{
+    size_t i = feedEventIndex(rawType);
+    return i == size_t.max ? rawType : feedEventTypes[i].label;
+}
 
 /// A topical group of feed event labels shown together in the filter popup.
 /// Topical grouping is purely a display concern,  feedEventLabels' index
