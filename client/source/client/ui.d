@@ -88,7 +88,7 @@ void drawFullWindow(mu_Context* ctx, AppState* state, int scrollDelta)
                 case Tab.feed:          break; // handled above
                 case Tab.online:        drawOnlineTab(ctx, state, tabScroll);        break;
                 case Tab.notifications: drawNotificationsTab(ctx, state, tabScroll); break;
-                case Tab.tools:         drawToolsTab(ctx, state);                    break;
+                case Tab.tools:         drawToolsTab(ctx, state, tabScroll);         break;
                 case Tab.settings:      drawSettingsTab(ctx, state, tabScroll);      break;
             }
         }
@@ -1351,12 +1351,27 @@ private void drawFriendProfile(mu_Context* ctx, AppState* state, int scrollDelta
 }
 
 /// Notifications tab: friend requests, invites, etc.
+///
+/// Layout: each entry is a two-line cell with action buttons stacked on
+/// the right (VR-friendly touch targets). Stacking the message below the
+/// metadata row gives "Synthetic friend request" room to breathe without
+/// fighting fixed column widths.
+///
+///   +----------------------------------+--------+
+///   | Type       | From       | Date   | Accept |  (friendRequest)
+///   | Message                          |   X    |
+///   +----------------------------------+--------+
+///
+/// Deny was removed because it sent the same "hide" as Dismiss, so the
+/// X covers both cases.
 private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDelta)
 {
-    static immutable int[4] infoCols = [120, 150, -1, 100];
-    static immutable int[3] btnCols = [100, 100, 100];
-    static immutable int[1] dismissCol = [-1];
-    static immutable int[1] fullCol = [-1];
+    static immutable int[2] outerCols  = [-170, 160];
+    static immutable int[3] metaCols   = [200, -200, 100];
+    static immutable int[1] fullCol    = [-1];
+    static immutable int[2] headerCols = [-130, 120];
+    enum int rowHeight    = 80;
+    enum int actionHeight = 36; // two stacked buttons fit in ~80px row
     enum lineColor = mu_Color(50, 50, 60, 255);
 
     mu_begin_panel(ctx, "NotificationsPanel");
@@ -1376,7 +1391,6 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
 
         // Header row with "Dismiss all". Queues hide actions for every
         // non-pending notification.
-        static immutable int[2] headerCols = [-130, 120];
         mu_layout_row(ctx, 2, headerCols.ptr, 30);
         mu_label(ctx, "");
         if (mu_button(ctx, "Dismiss all"))
@@ -1393,58 +1407,57 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
         foreach (ref NotificationEntry n; state.notifications)
         {
             // Scope widget IDs by notificationId so identical button labels
-            // ("Dismiss", "Accept", ...) across rows don't collide in microui.
+            // ("X", "Accept") across rows don't collide in microui.
             mu_push_id(ctx, n.notificationId.ptr, cast(int) n.notificationId.length);
 
-            // Info row: Type | From | Message | Date
-            mu_layout_row(ctx, 4, infoCols.ptr, 0);
-            gridCell(ctx, prettyNotifType(n.notificationType), lineColor);
-            gridCell(ctx, n.senderName, lineColor);
-            gridCell(ctx, n.message, lineColor);
-            gridCell(ctx, n.receivedAt, lineColor, true);
+            mu_layout_row(ctx, 2, outerCols.ptr, rowHeight);
 
-            // Action row.
-            if (n.actionPending)
-            {
-                mu_layout_row(ctx, 1, fullCol.ptr, 30);
-                mu_label(ctx, "Pending...");
-            }
-            else if (n.notificationType == "friendRequest")
-            {
-                // Friend requests can be accepted, denied, or dismissed.
-                // Deny and Dismiss both send "hide"; Dismiss is the clearer
-                // label for stale requests already accepted on another client.
-                mu_layout_row(ctx, 3, btnCols.ptr, 30);
-                if (mu_button(ctx, "Accept"))
+            // Left column: metadata row on top, message below.
+            mu_layout_begin_column(ctx);
+                mu_layout_row(ctx, 3, metaCols.ptr, 0);
+                gridCell(ctx, prettyNotifType(n.notificationType), lineColor);
+                gridCell(ctx, n.senderName, lineColor);
+                gridCell(ctx, n.receivedAt, lineColor, true);
+
+                mu_layout_row(ctx, 1, fullCol.ptr, 0);
+                gridCell(ctx, n.message, lineColor, true);
+            mu_layout_end_column(ctx);
+
+            // Right column: stacked action buttons.
+            mu_layout_begin_column(ctx);
+                if (n.actionPending)
                 {
-                    // Keep pending-confirmation flow for Accept: the user
-                    // wants to know whether the friendship was actually made.
-                    n.actionPending = true;
-                    state.pendingActions ~= NotificationAction(n.notificationId, "accept");
+                    mu_layout_row(ctx, 1, fullCol.ptr, 0);
+                    mu_label(ctx, "Pending...");
                 }
-                if (mu_button(ctx, "Deny"))
+                else if (n.notificationType == "friendRequest")
                 {
-                    // Fire-and-forget: remove locally, send "hide" to server.
-                    state.pendingActions ~= NotificationAction(n.notificationId, "hide");
-                    dismissedIds ~= n.notificationId;
+                    mu_layout_row(ctx, 1, fullCol.ptr, actionHeight);
+                    if (mu_button(ctx, "Accept"))
+                    {
+                        // Keep pending-confirmation flow for Accept: the user
+                        // wants to know whether the friendship was actually made.
+                        n.actionPending = true;
+                        state.pendingActions ~= NotificationAction(n.notificationId, "accept");
+                    }
+                    mu_layout_row(ctx, 1, fullCol.ptr, actionHeight);
+                    if (mu_button(ctx, "X"))
+                    {
+                        state.pendingActions ~= NotificationAction(n.notificationId, "hide");
+                        dismissedIds ~= n.notificationId;
+                    }
                 }
-                if (mu_button(ctx, "Dismiss"))
+                else
                 {
-                    state.pendingActions ~= NotificationAction(n.notificationId, "hide");
-                    dismissedIds ~= n.notificationId;
+                    // Other types (invite, requestInvite, ...) only support hide.
+                    mu_layout_row(ctx, 1, fullCol.ptr, 0);
+                    if (mu_button(ctx, "X"))
+                    {
+                        state.pendingActions ~= NotificationAction(n.notificationId, "hide");
+                        dismissedIds ~= n.notificationId;
+                    }
                 }
-            }
-            else
-            {
-                // Other notification types (invite, requestInvite, message, ...)
-                // can only be dismissed (hide). Fire-and-forget.
-                mu_layout_row(ctx, 1, dismissCol.ptr, 30);
-                if (mu_button(ctx, "Dismiss"))
-                {
-                    state.pendingActions ~= NotificationAction(n.notificationId, "hide");
-                    dismissedIds ~= n.notificationId;
-                }
-            }
+            mu_layout_end_column(ctx);
 
             // Row separator.
             mu_layout_row(ctx, 1, fullCol.ptr, 1);
@@ -1476,7 +1489,7 @@ string prettyNotifType(string notifType)
 }
 
 /// Tools tab: utility buttons.
-private void drawToolsTab(mu_Context* ctx, AppState* state)
+private void drawToolsTab(mu_Context* ctx, AppState* state, int scrollDelta)
 {
     if (state.stripMetadataPage)
     {
@@ -1487,6 +1500,8 @@ private void drawToolsTab(mu_Context* ctx, AppState* state)
     static immutable int[1] fullCol  = [-1];
     static immutable int    COLCOUNT = cast(int) fullCol.length;
     mu_begin_panel(ctx, "ToolsPanel");
+
+    applyScroll(ctx, scrollDelta);
 
     sectionHeader(ctx, "Pictures");
 
@@ -1543,6 +1558,19 @@ private void drawToolsTab(mu_Context* ctx, AppState* state)
     {
         import client.directories : vrcdAppDataPath;
         openFolder(vrcdAppDataPath());
+    }
+
+    mu_layout_row(ctx, COLCOUNT, fullCol.ptr, 60);
+    if (mu_button(ctx, "Inject Test Notification"))
+    {
+        import std.datetime.systime : Clock;
+        import std.conv : to;
+        // Synthetic id with "test_" prefix so the server-bound action would
+        // be a no-op if accidentally dispatched, and unique per click so the
+        // dedup in addNotification doesn't swallow repeats.
+        string id = "test_" ~ to!string(Clock.currTime.toUnixTime!long());
+        state.addNotification(id, "friendRequest", "TestUser",
+            "Synthetic friend request", "now");
     }
 
     mu_end_panel(ctx);
