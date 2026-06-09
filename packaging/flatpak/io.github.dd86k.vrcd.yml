@@ -152,10 +152,10 @@ modules:
       - install -Dm644 packaging/flatpak/io.github.dd86k.vrcd.png /app/share/icons/hicolor/512x512/apps/io.github.dd86k.vrcd.png
     sources:
       ## Project source
-      # For local development testing use type:dir. For a Flathub submission
-      # replace with type:git + tag + commit.
-      - type: dir
-        path: ../..
+      # Swap to `type: dir` with `path: ../..` otherwise
+      - type: git
+        url: https://github.com/dd86k/vrcd.git
+        commit: bfd4bd3879a64e1d6d83063eedffb932b2e8a6ee
 
       ## dub registry packages
       # Each archive is extracted (strip-components:1 drops the top-level
