@@ -160,3 +160,117 @@ class AuthDelegator
         return msg;
     }
 }
+
+/// One-way pair-request delegator for the Drop-a-Portal companion.
+///
+/// Unlike `AuthDelegator`, the server doesn't need a structured response
+/// payload: pairing is the RFC 8628 device-code flow and the server polls
+/// dropaport.al directly. The delegator's job is to surface the user code
+/// and verification URL to a connected client so the user can approve it
+/// in a browser, and to signal cancellation if the user clicks "Cancel".
+class DropaPortalDelegator
+{
+    /// Active pair-request to replay to clients that connect mid-flow.
+    private Mutex mtx;
+    private bool active;
+    private JSONValue pendingMsg;
+    private bool cancelled;
+    private void delegate(JSONValue) broadcastFn;
+
+    this()
+    {
+        mtx = new Mutex();
+    }
+
+    /// Set the callback used to broadcast `dap_pair_request` / status
+    /// updates to connected clients.
+    void setBroadcastCallback(void delegate(JSONValue) fn)
+    {
+        mtx.lock();
+        scope(exit) mtx.unlock();
+        broadcastFn = fn;
+    }
+
+    /// Begin a pair flow. Broadcasts the user-code / URL to clients and
+    /// stores the message so clients connecting mid-flow can be brought
+    /// up to speed via `getPendingRequestMessage`.
+    void beginPairing(string userCode, string verificationUri, long expiresIn, long pollInterval)
+    {
+        JSONValue msg = JSONValue([
+            "type": JSONValue("dap_pair_request"),
+            "user_code": JSONValue(userCode),
+            "verification_uri": JSONValue(verificationUri),
+            "expires_in": JSONValue(expiresIn),
+            "interval": JSONValue(pollInterval),
+        ]);
+
+        mtx.lock();
+        active = true;
+        cancelled = false;
+        pendingMsg = msg;
+        void delegate(JSONValue) fn = broadcastFn;
+        mtx.unlock();
+
+        logInfo("DropaPortal: broadcasting pair request (code=%s)", userCode);
+        if (fn)
+            fn(msg);
+    }
+
+    /// Broadcast a terminal status update (paired / error / login_error) and
+    /// clear the active pair flow. The `type` field of `msg` should already
+    /// be set to one of `dap_pair_complete`, `dap_pair_error`, `dap_login_error`.
+    void endPairing(JSONValue msg)
+    {
+        mtx.lock();
+        active = false;
+        cancelled = false;
+        pendingMsg = JSONValue(null);
+        void delegate(JSONValue) fn = broadcastFn;
+        mtx.unlock();
+
+        if (fn)
+            fn(msg);
+    }
+
+    /// Mark the active pair flow as cancelled by a client. The pairing thread
+    /// polls `wasCancelled` between auth/poll attempts.
+    void cancel()
+    {
+        mtx.lock();
+        scope(exit) mtx.unlock();
+        if (active == false)
+        {
+            logDebugging("DropaPortalDelegator.cancel: no active pair flow, ignoring");
+            return;
+        }
+        cancelled = true;
+        logInfo("DropaPortal: pairing cancelled by client");
+    }
+
+    /// True if a `cancel()` call landed since the current pair flow began.
+    bool wasCancelled()
+    {
+        mtx.lock();
+        scope(exit) mtx.unlock();
+        return cancelled;
+    }
+
+    /// Non-blocking check for an active pair flow. Used when a new client connects.
+    bool hasPendingRequest()
+    {
+        mtx.lock();
+        scope(exit) mtx.unlock();
+        return active;
+    }
+
+    /// Returns the pending pair-request message as JSON. Call only if
+    /// `hasPendingRequest()` is true.
+    JSONValue getPendingRequestMessage()
+    {
+        mtx.lock();
+        scope(exit) mtx.unlock();
+        if (active == false)
+            return JSONValue(null);
+        return pendingMsg;
+    }
+}

@@ -17,6 +17,7 @@ import ddcurl;
 import server.api;
 import server.authdelegate;
 import server.config;
+import server.dropaportal;
 import server.events;
 import server.friends;
 import server.instancecache;
@@ -153,6 +154,13 @@ void cmdRun(ref Config config)
     apiServer.setRateLimiter(rateLimiter);
     apiServer.setAPIMutex(vrcApiMutex);
 
+    // Drop a Portal companion sidecar. Owns its own thread; the rest of
+    // the server only ever calls enqueueVisit() and (via the API) triggerPair().
+    DropaPortalDelegator dapDelegator = new DropaPortalDelegator();
+    DropaPortal dropaPortal = new DropaPortal(store, dapDelegator);
+    apiServer.setDropaPortalDelegator(dapDelegator, &dropaPortal.triggerPair);
+    dropaPortal.start();
+
     // Install the re-seed callback the worker thread will call on its
     // periodic tick or when requested via requestReseed().
     apiServer.setReseedCallback({
@@ -187,6 +195,29 @@ void cmdRun(ref Config config)
         // Process event to see if a friend changed
         bool friendsChanged = tracker.processEvent(event);
         VRCEvent[] synthetics = tracker.takePendingSynthetics();
+
+        // Surface self world transitions to the DropAPortal sidecar.
+        // Filter raw events here so the sidecar stays self-contained.
+        // enqueueVisit is mutex-guarded and safe to call regardless of
+        // thread state, so no liveness check is needed.
+        if (event.type == EventType.userLocation)
+        {
+            string selfId = tracker.getSelfUserId();
+            string evUserId;
+            if (const(JSONValue)* v = "userId" in event.content)
+                if (v.type == JSONType.string)
+                    evUserId = v.str;
+            if (selfId.length > 0 && evUserId == selfId)
+            {
+                string location;
+                if (const(JSONValue)* v = "location" in event.content)
+                    if (v.type == JSONType.string)
+                        location = v.str;
+                string worldId = WorldCache.extractWorldId(location);
+                if (worldId.length > 0)
+                    dropaPortal.enqueueVisit(worldId, event.receivedAt.toUnixTime!long());
+            }
+        }
 
         // A friend-location with location="traveling" is the first half of a
         // world transition; the arrival event follows seconds later carrying

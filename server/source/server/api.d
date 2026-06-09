@@ -53,6 +53,8 @@ class APIServer
     private HTTPClient httpClient;
     private Mutex apiMutex; // Shared VRChat API serializer, injected via setAPIMutex.
     private AuthDelegator authDelegator;
+    private DropaPortalDelegator dapDelegator;
+    private void delegate() dapPairTrigger;
     private RateLimitTracker rateLimiter;
     private void* sslCtx;
     private ushort tlsPort;
@@ -146,6 +148,26 @@ class APIServer
     {
         authDelegator = d;
         // When the auth thread needs input, broadcast to all authenticated clients.
+        d.setBroadcastCallback((JSONValue msg) {
+            string line = msg.toString() ~ "\n";
+            clientsMutex.lock();
+            scope(exit) clientsMutex.unlock();
+            foreach (client; clients)
+            {
+                if (client.authenticated)
+                    client.sendLine(line);
+            }
+        });
+    }
+
+    /// Set the Drop-a-Portal pair-request delegator. Mirrors the auth
+    /// delegator wiring: messages broadcast to all authenticated clients,
+    /// and clients connecting mid-flow get a replay via handleAuth.
+    /// `pairTrigger` is invoked when a client sends `dap_pair_start`.
+    void setDropaPortalDelegator(DropaPortalDelegator d, void delegate() pairTrigger)
+    {
+        dapDelegator = d;
+        dapPairTrigger = pairTrigger;
         d.setBroadcastCallback((JSONValue msg) {
             string line = msg.toString() ~ "\n";
             clientsMutex.lock();
@@ -619,6 +641,26 @@ private class ClientHandler
                     }
                     handleAuthResponse(msg);
                     break;
+                case "dap_pair_start":
+                    if (authenticated == false)
+                    {
+                        sendError("Not authenticated");
+                        return;
+                    }
+                    if (server.dapPairTrigger)
+                        server.dapPairTrigger();
+                    else
+                        sendError("Drop-a-Portal not configured");
+                    break;
+                case "dap_pair_cancel":
+                    if (authenticated == false)
+                    {
+                        sendError("Not authenticated");
+                        return;
+                    }
+                    if (server.dapDelegator)
+                        server.dapDelegator.cancel();
+                    break;
                 case "get_stats":
                     if (authenticated == false)
                     {
@@ -671,6 +713,15 @@ private class ClientHandler
                 JSONValue authReq = server.authDelegator.getPendingRequestMessage();
                 if (authReq.type != JSONType.null_)
                     sendLine(authReq.toString() ~ "\n");
+            }
+
+            // If a Drop-a-Portal pair flow is active, replay the prompt so
+            // a client connecting mid-flow can show the code.
+            if (server.dapDelegator && server.dapDelegator.hasPendingRequest())
+            {
+                JSONValue dapReq = server.dapDelegator.getPendingRequestMessage();
+                if (dapReq.type != JSONType.null_)
+                    sendLine(dapReq.toString() ~ "\n");
             }
         }
         else

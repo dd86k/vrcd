@@ -205,6 +205,39 @@ class Database
         return stats;
     }
 
+    /// Read a value from the persistent key-value store.
+    /// Returns null if the key is missing.
+    string getState(string key)
+    {
+        foreach (row; db.query(
+            "SELECT value FROM server_state WHERE key = ?",
+            key,
+        ))
+            return row[0];
+        return null;
+    }
+
+    /// Write (or overwrite) a value in the persistent key-value store.
+    /// A null or empty value is still stored as such.
+    void setState(string key, string value)
+    {
+        foreach (_; db.query(
+            "INSERT INTO server_state (key, value) VALUES (?, ?) " ~
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            key,
+            value,
+        )) {}
+    }
+
+    /// Delete a key from the persistent key-value store.
+    void deleteState(string key)
+    {
+        foreach (_; db.query(
+            "DELETE FROM server_state WHERE key = ?",
+            key,
+        )) {}
+    }
+
     /// Close the database.
     void close()
     {

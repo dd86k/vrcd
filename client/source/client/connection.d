@@ -233,6 +233,25 @@ class ServerConnection
         sendMessage(msg);
     }
 
+    /// Ask the server to begin a Drop-a-Portal pairing flow. Server
+    /// responds with `dap_pair_request` carrying the user code & URL.
+    void sendDapPairStart()
+    {
+        logDebugging("sendDapPairStart");
+        sendMessage(JSONValue([
+            "type": JSONValue("dap_pair_start"),
+        ]));
+    }
+
+    /// Cancel an in-progress Drop-a-Portal pairing flow.
+    void sendDapPairCancel()
+    {
+        logDebugging("sendDapPairCancel");
+        sendMessage(JSONValue([
+            "type": JSONValue("dap_pair_cancel"),
+        ]));
+    }
+
     /// Read and dispatch messages until the connection closes.
     /// This blocks the calling thread.
     void run()
