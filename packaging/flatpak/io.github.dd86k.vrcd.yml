@@ -8,7 +8,7 @@ command: vrcd_client
 # - sudo apt install flatpak flatpak-builder
 # - flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 # - flatpak install --system flathub org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08
-# - flatpak-builder --state-dir=/tmp/flatpak-state --force-clean /tmp/flatpak-build packaging/flatpak/io.github.dd86k.vrcd.yml
+# - flatpak-builder --state-dir=/tmp/flatpak-state --force-clean /tmp/flatpak-build/flatpak/io.github.dd86k.vrcd.yml
 #   - can add "--user --install" to install
 #   - can also just use "--run"
 # - flatpak-builder --run build-dir packaging/flatpak/io.github.dd86k.vrcd.yml vrcd_client
@@ -124,7 +124,12 @@ modules:
       # deps pointing at the pre-extracted archives, then drop the git entries
       # from selections.json so there is no version conflict.
       - sed -i 's|dependency "ddlogger" repository=.*|dependency "ddlogger" path="../.dub/packages/ddlogger/4ec9bc06bb90c4a7844f62fcfc1429bc7cdb1378/ddlogger"|' client/dub.sdl
-      - sed -i 's|dependency "ddui" repository=.*|dependency "ddui" path="../.dub/packages/ddui/e7eac1f742194be0ce4b8124309eb645e4f51834/ddui"|' client/dub.sdl
+      - sed -i 's|dependency "ddcurl" repository=.*|dependency "ddcurl" path="../.dub/packages/ddcurl/0bc787a2d9aae09a382d7e1ad67aecfbbd02f399/ddcurl"|' client/dub.sdl
+      - sed -i 's|dependency "ddui" repository=.*|dependency "ddui" path="../.dub/packages/ddui/f33c4d246b40a26d560dad492a36ca532f331b94/ddui"|' client/dub.sdl
+      # ddcurl pulls ddlogger + ddloader transitively; rewrite those too so its
+      # resolver doesn't reach for git.
+      - sed -i 's|dependency "ddlogger" repository=.*|dependency "ddlogger" path="../../../ddlogger/4ec9bc06bb90c4a7844f62fcfc1429bc7cdb1378/ddlogger"|' .dub/packages/ddcurl/0bc787a2d9aae09a382d7e1ad67aecfbbd02f399/ddcurl/dub.sdl
+      - sed -i 's|dependency "ddloader" repository=.*|dependency "ddloader" path="../../../ddloader/c3eb54d31a17e63a7722f8449033ce13764b7636/ddloader"|' .dub/packages/ddcurl/0bc787a2d9aae09a382d7e1ad67aecfbbd02f399/ddcurl/dub.sdl
       - |
         python3 <<'PYEOF'
         import json
@@ -185,7 +190,19 @@ modules:
         strip-components: 1
 
       - type: archive
-        url: https://github.com/dd86k/ddui/archive/e7eac1f742194be0ce4b8124309eb645e4f51834.tar.gz
-        sha256: e626bbaa7464c4d67b9561c3889e88ecfd0f3eb3cd4b6249991b9bcf49ea50c0
-        dest: .dub/packages/ddui/e7eac1f742194be0ce4b8124309eb645e4f51834/ddui
+        url: https://github.com/dd86k/ddui/archive/f33c4d246b40a26d560dad492a36ca532f331b94.tar.gz
+        sha256: 22565c20dc472b6064e33ea35a0e0d3433bf2ec4c5db489338bba1e1b1c8c368
+        dest: .dub/packages/ddui/f33c4d246b40a26d560dad492a36ca532f331b94/ddui
+        strip-components: 1
+
+      - type: archive
+        url: https://github.com/dd86k/ddcurl/archive/0bc787a2d9aae09a382d7e1ad67aecfbbd02f399.tar.gz
+        sha256: c30f63ecfdff887df6c75df1e5fe52f8741952b131b8e1ea658c0244afa538c8
+        dest: .dub/packages/ddcurl/0bc787a2d9aae09a382d7e1ad67aecfbbd02f399/ddcurl
+        strip-components: 1
+
+      - type: archive
+        url: https://github.com/dd86k/ddloader/archive/c3eb54d31a17e63a7722f8449033ce13764b7636.tar.gz
+        sha256: b0e76aa4553d1b4f20cba90bb4bfe7fbe105428d51698347b2e911d93f9cb171
+        dest: .dub/packages/ddloader/c3eb54d31a17e63a7722f8449033ce13764b7636/ddloader
         strip-components: 1
