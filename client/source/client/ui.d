@@ -13,7 +13,7 @@ import std.utf : stride, UTFException;
 
 import ddui;
 
-import client.notifications : notifyEventLabels, feedEventLabels;
+import client.notifications : notifyEventLabels, feedEventLabels, feedFilterSections;
 import client.renderer : window_width, window_height;
 import client.gui : wasClick, requestRepaint;
 import client.state;
@@ -223,17 +223,22 @@ private void drawFeedFilterPopup(mu_Context* ctx, AppState* state, int scrollDel
         mu_begin_panel(ctx, "FilterScroll");
         applyScroll(ctx, scrollDelta);
 
-        // Event Types
-        sectionHeader(ctx, "Event Types");
-        foreach (size_t i, string label; feedEventLabels)
+        // Event Types, grouped by topic
+        foreach (size_t s, ref section; feedFilterSections)
         {
-            mu_layout_row(ctx, 1, fullCol.ptr, rowH);
-            int prev = state.feedEventVisible[i];
-            mu_checkbox(ctx, label, &state.feedEventVisible[i]);
-            if (state.feedEventVisible[i] != prev)
+            if (s > 0)
+                spacer(ctx, 8);
+            sectionHeader(ctx, section.title);
+            foreach (size_t idx; section.indices)
             {
-                feedPage = 0;
-                changed = true;
+                mu_layout_row(ctx, 1, fullCol.ptr, rowH);
+                int prev = state.feedEventVisible[idx];
+                mu_checkbox(ctx, feedEventLabels[idx], &state.feedEventVisible[idx]);
+                if (state.feedEventVisible[idx] != prev)
+                {
+                    feedPage = 0;
+                    changed = true;
+                }
             }
         }
 
@@ -708,11 +713,6 @@ private bool passesFilter(ref FeedEntry entry, string query, AppState* state)
     // Self events (user-update, user-location, self avatar changes, etc) are
     // hidden unless explicitly shown.
     if (state.feedShowSelfEvents == 0 && entry.isSelf)
-        return false;
-
-    // friend-traveling is an ephemeral ping used to drive the Player Joining
-    // detection; it's not interesting to show in the feed.
-    if (entry.eventType == "friend-traveling")
         return false;
 
     // Event type filter.

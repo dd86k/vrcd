@@ -14,6 +14,9 @@ import client.settings;
 
 /// Event types shown in the feed tab filter popup.
 /// Order matches feedEventVisible arrays in Settings and AppState.
+/// New entries MUST be appended at the end: saved settings reference
+/// these positions by index, so reordering would silently flip filters
+/// for users with existing config.
 immutable string[] feedEventLabels = [
     "Online", "Offline", "Active",
     "Friend Add", "Friend Remove", "Friend Update", "Friend Location",
@@ -23,7 +26,110 @@ immutable string[] feedEventLabels = [
     "Content Refresh", "Queue Position",
     "Player Joining", "Player Joined", "Player Left",
     "Avatar Change",
+    // Appended
+    "Friend Traveling",
+    "Profile Change",
+    "Badge Assigned", "Badge Unassigned",
+    "Notif Seen", "Notif Hidden", "Notif Response",
+    "Queue Joined", "Queue Ready", "Queue Left",
+    "Instance Closed",
+    "Photo Taken",
+    "URL Video", "URL String", "URL Image",
+    "DAP Pairing", "DAP", "DAP Error",
+    "System", "Error",
 ];
+
+/// Default visibility for each feed event type. Most events are visible
+/// by default; a few high-volume or debug-oriented entries opt the user
+/// in rather than out.
+immutable bool[feedEventLabels.length] feedEventDefaultVisible = () {
+    bool[feedEventLabels.length] r = true;
+    foreach (size_t i, string label; feedEventLabels)
+    {
+        // Friend Traveling is an ephemeral ping used to drive Player Joining
+        // detection,  very noisy if shown unfiltered. Power users can opt in.
+        if (label == "Friend Traveling")
+            r[i] = false;
+    }
+    return r;
+}();
+
+/// A topical group of feed event labels shown together in the filter popup.
+/// Topical grouping is purely a display concern,  feedEventLabels' index
+/// order is the persistence contract and must not change.
+struct FeedFilterSection
+{
+    string title;
+    immutable(size_t)[] indices;
+}
+
+/// CTFE label lookup. Fails to compile if a section references a label
+/// that doesn't exist,  keeping the section table and the label list in sync.
+private size_t labelIdx(string label) pure
+{
+    foreach (size_t i, string l; feedEventLabels)
+        if (l == label)
+            return i;
+    assert(0, "Unknown feed event label: " ~ label);
+}
+
+/// Topical sections for the filter popup. Order here is display order.
+/// Every feedEventLabels entry must appear in exactly one section
+/// (enforced by the static assert below).
+immutable FeedFilterSection[] feedFilterSections = [
+    FeedFilterSection("Self & Avatar", [
+        labelIdx("Update"), labelIdx("Location"),
+        labelIdx("Profile Change"), labelIdx("Avatar Change"),
+        labelIdx("Badge Assigned"), labelIdx("Badge Unassigned"),
+    ]),
+    FeedFilterSection("Friends", [
+        labelIdx("Online"), labelIdx("Offline"), labelIdx("Active"),
+        labelIdx("Friend Add"), labelIdx("Friend Remove"),
+        labelIdx("Friend Update"), labelIdx("Friend Location"),
+        labelIdx("Friend Traveling"),
+    ]),
+    FeedFilterSection("Notifications", [
+        labelIdx("Notification"), labelIdx("Notif Delete"),
+        labelIdx("Notif Update"), labelIdx("Notif Seen"),
+        labelIdx("Notif Hidden"), labelIdx("Notif Response"),
+    ]),
+    FeedFilterSection("Groups", [
+        labelIdx("Group Joined"), labelIdx("Group Left"),
+        labelIdx("Group Role"), labelIdx("Group Member"),
+    ]),
+    FeedFilterSection("Instances", [
+        labelIdx("Queue Joined"), labelIdx("Queue Position"),
+        labelIdx("Queue Ready"), labelIdx("Queue Left"),
+        labelIdx("Instance Closed"), labelIdx("Content Refresh"),
+    ]),
+    FeedFilterSection("In-Game", [
+        labelIdx("Player Joining"), labelIdx("Player Joined"),
+        labelIdx("Player Left"), labelIdx("Photo Taken"),
+        labelIdx("URL Video"), labelIdx("URL String"), labelIdx("URL Image"),
+    ]),
+    FeedFilterSection("DAP", [
+        labelIdx("DAP Pairing"), labelIdx("DAP"), labelIdx("DAP Error"),
+    ]),
+    FeedFilterSection("System", [
+        labelIdx("System"), labelIdx("Error"),
+    ]),
+];
+
+/// Compile-time check: every label appears in exactly one section.
+static assert(() {
+    bool[feedEventLabels.length] seen;
+    foreach (sec; feedFilterSections)
+        foreach (idx; sec.indices)
+        {
+            if (seen[idx])
+                return false;
+            seen[idx] = true;
+        }
+    foreach (s; seen)
+        if (s == false)
+            return false;
+    return true;
+}(), "feedFilterSections must cover every feedEventLabels entry exactly once");
 
 /// Event types that can trigger VR notifications.
 /// Order matches notifyEventFilter arrays in Settings and AppState.

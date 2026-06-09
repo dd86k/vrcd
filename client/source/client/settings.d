@@ -11,7 +11,7 @@ import std.path : buildPath, dirName;
 import ddlogger;
 
 import client.directories : settingsFilePath;
-import client.notifications : notifyEventLabels, feedEventLabels;
+import client.notifications : notifyEventLabels, feedEventLabels, feedEventDefaultVisible;
 
 /// Persistent application settings, saved as JSON.
 struct Settings
@@ -42,7 +42,7 @@ struct Settings
     bool insertPictureMetadata = true;
 
     // Feed tab filter (which event types appear in the feed list).
-    bool[feedEventLabels.length] feedEventVisible = true;
+    bool[feedEventLabels.length] feedEventVisible = feedEventDefaultVisible;
     bool feedShowSelfEvents;
 
     // Highest event id processed from the server. Used on reconnect
