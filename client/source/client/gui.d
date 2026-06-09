@@ -213,6 +213,9 @@ int runGui(string host, ushort port, string secret, long sinceId,
     //       It's a note here because it WAS used to do "software rendering", and
     //       here it meant the Xorg server was just holding the bag for us.
     SDL_SetHint(SDL_HINT_VIDEO_HIGHDPI_DISABLED, "0");
+    // Match Wayland app_id / X11 WM_CLASS to the desktop file so launchers
+    // (and Flatpak) associate the window with the correct icon and entry.
+    SDL_SetHint(SDL_HINT_APP_NAME, "io.github.dd86k.vrcd");
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_EVENTS) != 0)
     {
         logError("SDL_Init failed: %s", fromStringz( SDL_GetError() ));
