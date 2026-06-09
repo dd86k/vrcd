@@ -22,13 +22,19 @@ vrcd-test-*
 *.lst
 *.json
 
-perso/
 *.log
 *.db
 *.db-shm
 *.db-wal
+
 *.crt
+
+perso/
+
+# Packages
 *.zip
+*.deb
+*.rpm
 
 # AppImage
 /vrcd-client.AppDir
