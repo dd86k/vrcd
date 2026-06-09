@@ -10,6 +10,11 @@ It features a server-client architecture, to avoid having multiple connections t
 > 
 > Otherwise, get ready to frequently pull, upgrade dependencies, and build!
 
+> [!WARNING]
+> The client requires an active running vrcd server and packages do not come with the server.
+>
+> There are plans to fix this.
+
 Client features:
 - Relatively light client using software rendering; Hardware option available
 - VR friendly UI
@@ -28,11 +33,11 @@ Feel free to join the official [VRChat group](https://vrc.group/VRCD.7796) (`VRC
 
 ### Feed Page
 
-![Feed with event's date, type, user, and detail columns](res/shot-feed.png)
+![Feed with event's date, type, user, and detail columns](packaging/flatpak/screenshots/main.png)
 
 ### Online Page
 
-![List of instances (current and capacity) and friends in each of them with color indicators](res/shot-online.png)
+![List of instances (current and capacity) and friends in each of them with color indicators](packaging/flatpak/screenshots/second.png)
 
 # For Developers
 
