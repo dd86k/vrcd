@@ -383,6 +383,9 @@ class DropaPortal
                 store.setState(KEY_USERNAME, username);
             }
             logInfo("DropaPortal: token valid, logged in as %s", username);
+            // Standing status: kept up-to-date for clients connecting after
+            // this point.
+            delegator.setPairedUsername(username);
             // Only announce once per token: routine token-check passes are
             // server bookkeeping, not user-visible events.
             if (pairCompleteAnnounced == false)
@@ -508,6 +511,7 @@ class DropaPortal
         stateMutex.unlock();
         store.deleteState(KEY_TOKEN);
         store.deleteState(KEY_USERNAME);
+        delegator.setPairedUsername(null);
         broadcastLoginError(detail);
     }
 

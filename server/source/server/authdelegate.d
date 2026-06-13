@@ -176,6 +176,10 @@ class DropaPortalDelegator
     private JSONValue pendingMsg;
     private bool cancelled;
     private void delegate(JSONValue) broadcastFn;
+    /// Current paired-account name. Empty when not paired. Held outside the
+    /// active/pendingMsg pair-flow state so a fresh client connection can
+    /// learn the standing pair status without re-triggering the pair UI.
+    private string pairedUsername;
 
     this()
     {
@@ -272,5 +276,31 @@ class DropaPortalDelegator
         if (active == false)
             return JSONValue(null);
         return pendingMsg;
+    }
+
+    /// Record the standing pair status. Does NOT broadcast; this is set by
+    /// the sidecar after each successful token-check so connecting clients
+    /// can be told the current state via `getPairStatusMessage`.
+    void setPairedUsername(string username)
+    {
+        mtx.lock();
+        scope(exit) mtx.unlock();
+        pairedUsername = username;
+    }
+
+    /// Returns a `dap_status` snapshot for a freshly-connected client, or
+    /// JSON null if not paired. Distinct from `dap_pair_complete` so the
+    /// client treats it as state, not a live event (no feed entry).
+    JSONValue getPairStatusMessage()
+    {
+        mtx.lock();
+        scope(exit) mtx.unlock();
+        if (pairedUsername.length == 0)
+            return JSONValue(null);
+        return JSONValue([
+            "type":     JSONValue("dap_status"),
+            "paired":   JSONValue(true),
+            "username": JSONValue(pairedUsername),
+        ]);
     }
 }

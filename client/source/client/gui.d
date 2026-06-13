@@ -1114,6 +1114,27 @@ private void drainNetworkMessages()
                 appState.authCode[] = '\0';
                 break;
 
+            case "dap_status":
+                {
+                    // Quiet state replay from the server, sent on
+                    // (re)connect. Updates the UI without producing a feed
+                    // entry; live transitions still come through
+                    // dap_pair_complete / dap_*_error.
+                    bool paired;
+                    if (const(JSONValue)* v = "paired" in msg)
+                        paired = v.type == JSONType.true_;
+                    string dapUsername;
+                    if (const(JSONValue)* v = "username" in msg)
+                        dapUsername = v.str;
+                    if (paired)
+                        appState.dapStatus = dapUsername.length > 0
+                            ? "Paired as " ~ dapUsername
+                            : "Paired";
+                    else
+                        appState.dapStatus = "";
+                }
+                break;
+
             case "dap_pair_request":
                 {
                     string userCode;

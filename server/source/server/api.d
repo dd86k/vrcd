@@ -723,6 +723,16 @@ private class ClientHandler
                 if (dapReq.type != JSONType.null_)
                     sendLine(dapReq.toString() ~ "\n");
             }
+
+            // Otherwise, send the standing pair status so the UI reflects
+            // a previously-completed pairing without re-triggering the
+            // pairing feed event.
+            if (server.dapDelegator)
+            {
+                JSONValue dapStat = server.dapDelegator.getPairStatusMessage();
+                if (dapStat.type != JSONType.null_)
+                    sendLine(dapStat.toString() ~ "\n");
+            }
         }
         else
         {
