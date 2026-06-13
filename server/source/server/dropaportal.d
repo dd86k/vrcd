@@ -61,6 +61,10 @@ class DropaPortal
     private PendingVisit[] pending;
     private string lastReportedWorldId;
     private bool pairRequested;
+    /// True once a `dap_pair_complete` has been broadcast for the current
+    /// token. Suppresses redundant broadcasts on every token-check pass so
+    /// the client feed doesn't fill with `dap-login-ok` entries.
+    private bool pairCompleteAnnounced;
 
     this(Database store, DropaPortalDelegator delegator)
     {
@@ -379,7 +383,13 @@ class DropaPortal
                 store.setState(KEY_USERNAME, username);
             }
             logInfo("DropaPortal: token valid, logged in as %s", username);
-            broadcastPairComplete(username);
+            // Only announce once per token: routine token-check passes are
+            // server bookkeeping, not user-visible events.
+            if (pairCompleteAnnounced == false)
+            {
+                broadcastPairComplete(username);
+                pairCompleteAnnounced = true;
+            }
             return true;
         }
 
@@ -494,6 +504,7 @@ class DropaPortal
         stateMutex.lock();
         accessToken = null;
         username = null;
+        pairCompleteAnnounced = false;
         stateMutex.unlock();
         store.deleteState(KEY_TOKEN);
         store.deleteState(KEY_USERNAME);
