@@ -846,7 +846,7 @@ private void drainNetworkMessages()
                     dispatchNotification(eventType, user, detail, saved);
 
                 // Store actionable notifications.
-                storeNotification(eventType, msg, user, receivedAt);
+                storeNotification(eventType, msg, user, rawReceivedAt);
 
                 // Detect "player joining" from friend-location events:
                 // when a friend's location is "traveling" and their
@@ -1529,8 +1529,17 @@ private immutable string[] actionableNotifTypes = [
 ];
 
 /// Store an actionable notification or remove on delete/hide events.
-private void storeNotification(string eventType, JSONValue msg, string user, string receivedAt)
+private void storeNotification(string eventType, JSONValue msg, string user, string rawReceivedAt)
 {
+    import std.datetime : SysTime;
+    long receivedAtUnix;
+    if (rawReceivedAt.length > 0)
+    {
+        try
+            receivedAtUnix = SysTime.fromISOExtString(rawReceivedAt).toUnixTime!long();
+        catch (Exception) {}
+    }
+
     const(JSONValue) *jcontent = "content" in msg;
     if (jcontent is null) // we depend on 'content' for all of these
         return;
@@ -1588,7 +1597,7 @@ private void storeNotification(string eventType, JSONValue msg, string user, str
                 }
             }
 
-            appState.addNotification(notifId, notifType, sender, notifMessage, receivedAt);
+            appState.addNotification(notifId, notifType, sender, notifMessage, receivedAtUnix);
             return;
 
         case "notification-v2-delete":

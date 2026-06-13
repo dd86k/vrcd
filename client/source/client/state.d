@@ -144,7 +144,7 @@ struct NotificationEntry
     string notificationType; // "friendRequest", "invite", "requestInvite"
     string senderName;
     string message;
-    string receivedAt;
+    long receivedAtUnix;     // 0 if unknown; UI formats relative to now
     bool actionPending;      // true while waiting for server response
 }
 
@@ -310,7 +310,7 @@ struct AppState
 
     /// Add a notification, deduplicating by notificationId.
     void addNotification(string notificationId, string notificationType,
-        string senderName, string message, string receivedAt)
+        string senderName, string message, long receivedAtUnix)
     {
         // Deduplicate.
         foreach (ref NotificationEntry n; notifications)
@@ -320,7 +320,7 @@ struct AppState
         }
         // Prepend (newest first).
         notifications = NotificationEntry(notificationId, notificationType,
-            senderName, message, receivedAt) ~ notifications;
+            senderName, message, receivedAtUnix) ~ notifications;
     }
 
     /// Remove a notification by its VRChat ID.

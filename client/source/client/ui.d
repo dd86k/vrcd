@@ -797,12 +797,40 @@ private bool clickButton(mu_Context* ctx, string label)
 }
 
 /// Draw a grid cell: text with a right-side vertical separator line.
-private void gridCell(mu_Context* ctx, string text, mu_Color lineColor, bool lastCol = false)
+private void gridCell(mu_Context* ctx, const(char)[] text, mu_Color lineColor, bool lastCol = false)
 {
     mu_Rect r = mu_layout_next(ctx);
-    mu_draw_control_text(ctx, text, r, MU_COLOR_TEXT, 0);
+    // Safe to cast: mu_draw_text memcpys the text into its command queue.
+    mu_draw_control_text(ctx, cast(string) text, r, MU_COLOR_TEXT, 0);
     if (lastCol == false)
         mu_draw_rect(ctx, mu_Rect(r.x + r.w - 1, r.y, 1, r.h), lineColor);
+}
+
+/// Format a unix timestamp as a short relative time ("just now", "5m ago",
+/// "3h ago", ...). Writes into the caller's buffer to avoid per-frame GC.
+/// Returns an empty slice for `unixTime == 0` (unknown).
+private const(char)[] formatRelative(long unixTime, char[] buf)
+{
+    import std.datetime : Clock;
+
+    if (unixTime == 0)
+        return null;
+
+    long diff = Clock.currTime.toUnixTime!long() - unixTime;
+    if (diff < 0)
+        diff = 0;
+
+    if (diff < 60)
+        return sformat(buf, "just now");
+    if (diff < 3600)
+        return sformat(buf, "%dm ago", diff / 60);
+    if (diff < 86_400)
+        return sformat(buf, "%dh ago", diff / 3600);
+    if (diff < 86_400 * 30)
+        return sformat(buf, "%dd ago", diff / 86_400);
+    if (diff < 86_400 * 365)
+        return sformat(buf, "%dmo ago", diff / (86_400 * 30));
+    return sformat(buf, "%dy ago", diff / (86_400 * 365));
 }
 
 /// Online tab: friends grouped by instance, or profile view.
@@ -1352,13 +1380,14 @@ private void drawFriendProfile(mu_Context* ctx, AppState* state, int scrollDelta
 
 /// Notifications tab: friend requests, invites, etc.
 ///
-/// Layout: each entry is a two-line cell with action buttons stacked on
-/// the right (VR-friendly touch targets). Stacking the message below the
-/// metadata row gives "Synthetic friend request" room to breathe without
-/// fighting fixed column widths.
+/// Layout: each entry is a three-line cell with action buttons stacked
+/// on the right (VR-friendly touch targets). At ~640px (half of a 1280
+/// screen) a single meta row squished the sender name, so the metadata
+/// is split across three short rows that all get the full column width.
 ///
 ///   +----------------------------------+--------+
-///   | Type       | From       | Date   | Accept |  (friendRequest)
+///   | Type . Date                      | Accept |
+///   | From                             |        |  (friendRequest)
 ///   | Message                          |   X    |
 ///   +----------------------------------+--------+
 ///
@@ -1367,11 +1396,10 @@ private void drawFriendProfile(mu_Context* ctx, AppState* state, int scrollDelta
 private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDelta)
 {
     static immutable int[2] outerCols  = [-170, 160];
-    static immutable int[3] metaCols   = [200, -200, 100];
     static immutable int[1] fullCol    = [-1];
     static immutable int[2] headerCols = [-130, 120];
-    enum int rowHeight    = 80;
-    enum int actionHeight = 36; // two stacked buttons fit in ~80px row
+    enum int rowHeight    = 90;
+    enum int actionHeight = 36; // two stacked buttons fit in ~90px row
     enum lineColor = mu_Color(50, 50, 60, 255);
 
     mu_begin_panel(ctx, "NotificationsPanel");
@@ -1412,12 +1440,20 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
 
             mu_layout_row(ctx, 2, outerCols.ptr, rowHeight);
 
-            // Left column: metadata row on top, message below.
+            // Left column: type+date / from / message, each on its own row.
+            char[32] relBuf = void;
+            const(char)[] relDate = formatRelative(n.receivedAtUnix, relBuf[]);
+            char[96] headBuf = void;
+            const(char)[] head = relDate.length > 0
+                ? sformat(headBuf[], "%s . %s", prettyNotifType(n.notificationType), relDate)
+                : prettyNotifType(n.notificationType);
+
             mu_layout_begin_column(ctx);
-                mu_layout_row(ctx, 3, metaCols.ptr, 0);
-                gridCell(ctx, prettyNotifType(n.notificationType), lineColor);
-                gridCell(ctx, n.senderName, lineColor);
-                gridCell(ctx, n.receivedAt, lineColor, true);
+                mu_layout_row(ctx, 1, fullCol.ptr, 0);
+                gridCell(ctx, head, lineColor, true);
+
+                mu_layout_row(ctx, 1, fullCol.ptr, 0);
+                gridCell(ctx, n.senderName, lineColor, true);
 
                 mu_layout_row(ctx, 1, fullCol.ptr, 0);
                 gridCell(ctx, n.message, lineColor, true);
@@ -1570,7 +1606,7 @@ private void drawToolsTab(mu_Context* ctx, AppState* state, int scrollDelta)
         // dedup in addNotification doesn't swallow repeats.
         string id = "test_" ~ to!string(Clock.currTime.toUnixTime!long());
         state.addNotification(id, "friendRequest", "TestUser",
-            "Synthetic friend request", "now");
+            "Synthetic friend request", Clock.currTime.toUnixTime!long());
     }
 
     mu_end_panel(ctx);
