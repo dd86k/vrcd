@@ -240,7 +240,13 @@ struct AppState
     // Last server-reported error from set_status, displayed inline.
     string statusUpdateError;
 
-    // Drop a Portal status ("", "Paired as <user>", etc.)
+    // Drop a Portal pairing state. Starts at `unknown` on (re)connect and
+    // resolves to paired/unpaired once the server sends a `dap_status`
+    // snapshot. The DAP UI stays disabled while unknown so we don't present
+    // a "Pair" button against a server that may already be paired.
+    enum DapPairState { unknown, unpaired, paired }
+    DapPairState dapPairState;
+    // Drop a Portal status label ("", "Paired as <user>", "Pairing: <code>").
     string dapStatus;
     bool dapPairRequested;
     bool dapUnpairRequested;

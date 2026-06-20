@@ -1564,21 +1564,32 @@ private void drawToolsTab(mu_Context* ctx, AppState* state, int scrollDelta)
     spacer(ctx);
     sectionHeader(ctx, "Drop a Portal");
 
-    if (state.dapStatus.length > 0)
+    if (state.dapPairState == AppState.DapPairState.unknown)
     {
+        // We don't yet know the server's pair state (just connected, or
+        // disconnected). Show a passive label instead of a Pair/Unpair
+        // button so a stray click can't fire a spurious pairing request.
         mu_layout_row(ctx, COLCOUNT, fullCol.ptr, 0);
-        mu_label(ctx, state.dapStatus);
-    }
-    mu_layout_row(ctx, COLCOUNT, fullCol.ptr, 60);
-    if (state.dapStatus.length > 0)
-    {
-        if (mu_button(ctx, "Unpair"))
-            state.dapUnpairRequested = true;
+        mu_label(ctx, state.connected ? "Checking pairing status..." : "Not connected");
     }
     else
     {
-        if (mu_button(ctx, "Pair"))
-            state.dapPairRequested = true;
+        if (state.dapStatus.length > 0)
+        {
+            mu_layout_row(ctx, COLCOUNT, fullCol.ptr, 0);
+            mu_label(ctx, state.dapStatus);
+        }
+        mu_layout_row(ctx, COLCOUNT, fullCol.ptr, 60);
+        if (state.dapStatus.length > 0)
+        {
+            if (mu_button(ctx, "Unpair"))
+                state.dapUnpairRequested = true;
+        }
+        else
+        {
+            if (mu_button(ctx, "Pair"))
+                state.dapPairRequested = true;
+        }
     }
 
     spacer(ctx);

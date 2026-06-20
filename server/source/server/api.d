@@ -716,22 +716,25 @@ private class ClientHandler
             }
 
             // If a Drop-a-Portal pair flow is active, replay the prompt so
-            // a client connecting mid-flow can show the code.
-            if (server.dapDelegator && server.dapDelegator.hasPendingRequest())
-            {
-                JSONValue dapReq = server.dapDelegator.getPendingRequestMessage();
-                if (dapReq.type != JSONType.null_)
-                    sendLine(dapReq.toString() ~ "\n");
-            }
-
-            // Otherwise, send the standing pair status so the UI reflects
-            // a previously-completed pairing without re-triggering the
-            // pairing feed event.
+            // a client connecting mid-flow can show the code. Otherwise send
+            // the standing pair status so the UI reflects the current state
+            // (paired or not) without re-triggering the pairing feed event.
+            // These are mutually exclusive: the standing status would clobber
+            // the pairing prompt on the client.
             if (server.dapDelegator)
             {
-                JSONValue dapStat = server.dapDelegator.getPairStatusMessage();
-                if (dapStat.type != JSONType.null_)
-                    sendLine(dapStat.toString() ~ "\n");
+                if (server.dapDelegator.hasPendingRequest())
+                {
+                    JSONValue dapReq = server.dapDelegator.getPendingRequestMessage();
+                    if (dapReq.type != JSONType.null_)
+                        sendLine(dapReq.toString() ~ "\n");
+                }
+                else
+                {
+                    JSONValue dapStat = server.dapDelegator.getPairStatusMessage();
+                    if (dapStat.type != JSONType.null_)
+                        sendLine(dapStat.toString() ~ "\n");
+                }
             }
         }
         else

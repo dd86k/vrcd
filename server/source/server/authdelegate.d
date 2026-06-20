@@ -288,15 +288,21 @@ class DropaPortalDelegator
         pairedUsername = username;
     }
 
-    /// Returns a `dap_status` snapshot for a freshly-connected client, or
-    /// JSON null if not paired. Distinct from `dap_pair_complete` so the
-    /// client treats it as state, not a live event (no feed entry).
+    /// Returns a `dap_status` snapshot for a freshly-connected client.
+    /// Always reports the standing state (paired true/false) so the client
+    /// can leave its initial "unknown" state and enable the pairing UI; an
+    /// unpaired server must say so explicitly rather than stay silent.
+    /// Distinct from `dap_pair_complete` so the client treats it as state,
+    /// not a live event (no feed entry).
     JSONValue getPairStatusMessage()
     {
         mtx.lock();
         scope(exit) mtx.unlock();
         if (pairedUsername.length == 0)
-            return JSONValue(null);
+            return JSONValue([
+                "type":   JSONValue("dap_status"),
+                "paired": JSONValue(false),
+            ]);
         return JSONValue([
             "type":     JSONValue("dap_status"),
             "paired":   JSONValue(true),

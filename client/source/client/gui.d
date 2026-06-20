@@ -540,6 +540,10 @@ private void eventLoop(mu_Context* uictx)
                     {
                         appState.connected = true;
                         appState.serverStatus = "Connected";
+                        // Pair state is unknown until the server replays a
+                        // dap_status snapshot for this connection.
+                        appState.dapPairState = AppState.DapPairState.unknown;
+                        appState.dapStatus = "";
                     }
                     break;
                 case ConnectionState.failed:
@@ -557,6 +561,9 @@ private void eventLoop(mu_Context* uictx)
                     {
                         appState.connected = false;
                         appState.serverStatus = "Disconnected";
+                        // We no longer know the server's pair state.
+                        appState.dapPairState = AppState.DapPairState.unknown;
+                        appState.dapStatus = "";
                     }
                     break;
             }
@@ -1127,11 +1134,17 @@ private void drainNetworkMessages()
                     if (const(JSONValue)* v = "username" in msg)
                         dapUsername = v.str;
                     if (paired)
+                    {
+                        appState.dapPairState = AppState.DapPairState.paired;
                         appState.dapStatus = dapUsername.length > 0
                             ? "Paired as " ~ dapUsername
                             : "Paired";
+                    }
                     else
+                    {
+                        appState.dapPairState = AppState.DapPairState.unpaired;
                         appState.dapStatus = "";
+                    }
                 }
                 break;
 
@@ -1148,6 +1161,9 @@ private void drainNetworkMessages()
                         import client.utils : openBrowser;
                         openBrowser(url);
                     }
+                    // Mid-pairing: state is known (unpaired) and the label
+                    // shows the code; the button becomes a cancel gesture.
+                    appState.dapPairState = AppState.DapPairState.unpaired;
                     JSONValue pairContent;
                     pairContent["user_code"] = userCode;
                     pairContent["url"] = url;
@@ -1168,6 +1184,7 @@ private void drainNetworkMessages()
                     string dapStatus = dapUsername.length > 0
                         ? "Paired as " ~ dapUsername
                         : "Paired";
+                    appState.dapPairState = AppState.DapPairState.paired;
                     appState.dapStatus = dapStatus;
                     appState.addFeedEntry(0, "dap-login-ok", "", dapStatus,
                         timeNow(), "", false, EventSource.dropaportal);
@@ -1178,6 +1195,7 @@ private void drainNetworkMessages()
                 string detail;
                 if (const(JSONValue)* v = "detail" in msg)
                     detail = v.str;
+                appState.dapPairState = AppState.DapPairState.unpaired;
                 appState.dapStatus = "";
                 appState.addFeedEntry(0, "dap-error", "",
                     detail.length > 0 ? detail : "Pairing failed",
@@ -1188,6 +1206,7 @@ private void drainNetworkMessages()
                 string detail;
                 if (const(JSONValue)* v = "detail" in msg)
                     detail = v.str;
+                appState.dapPairState = AppState.DapPairState.unpaired;
                 appState.dapStatus = "";
                 appState.addFeedEntry(0, "dap-login-error", "",
                     detail.length > 0 ? detail : "Drop a Portal session expired",
