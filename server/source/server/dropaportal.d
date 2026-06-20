@@ -141,6 +141,12 @@ class DropaPortal
     {
         stateMutex.lock();
         scope(exit) stateMutex.unlock();
+        // Ignore when a token already exists: the pairing branch only runs
+        // (and clears pairRequested) while unpaired, so latching it here
+        // would make waitForWork() return immediately every iteration and
+        // busy-loop token-check. Re-pairing must go through unpair first.
+        if (accessToken.length > 0)
+            return;
         pairRequested = true;
         stateCond.notifyAll();
     }
