@@ -855,6 +855,19 @@ int main(string[] args)
         logAddAppender(logAppender);
     }
     
+    // Useless: [ddcurl.utils:35] data=74DF5C6EE6ED size=105
+    logSetModuleLevel("ddcurl.utils", LogLevel.none);
+    // Useless: [ddcurl.websocket:86] curl_ws_recv: code=0 curl_ws_frame { age=0 flags=1 offset=0 left=0 len=2976 }
+    logSetModuleLevel("ddcurl.websocket", LogLevel.none);
+    // Redundant with server.main module logging info
+    logSetModuleLevel("server.vrchat.websocket", LogLevel.none);
+    // Useless: [server.api:473] sendLine: len=16
+    // Useless: [server.api:534] processMessage: type=pong authenticated=true len=15
+    // Useless: [server.api:610] processMessage: pong received
+    logSetModuleLevel("server.api", LogLevel.none);
+    
+    // ddhttp.http has some useful and useless entries, don't disable it yet
+    
     // Throws and prints by default
     if (args.length > 1)
     {
