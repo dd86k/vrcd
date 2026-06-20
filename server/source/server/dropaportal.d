@@ -24,6 +24,7 @@ import ddlogger;
 import ddcurl;
 
 import server.authdelegate : DropaPortalDelegator;
+import server.config : USER_AGENT;
 import server.database;
 
 private enum string BASE_URL         = "https://dropaport.al/api";
@@ -151,6 +152,7 @@ class DropaPortal
         HTTPClient client = new HTTPClient();
         client.setBaseUrl(BASE_URL);
         client.addHeader("Content-Type", "application/json");
+        client.addHeader("User-Agent", USER_AGENT);
 
         while (running)
         {

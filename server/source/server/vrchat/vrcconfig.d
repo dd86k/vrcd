@@ -4,5 +4,4 @@
 /// License: BSD-3-Clause-Clear
 module server.vrchat.vrcconfig;
 
-import server.config : VERSION;
-enum USER_AGENT = "vrcd/"~VERSION;
+public import server.config : USER_AGENT;

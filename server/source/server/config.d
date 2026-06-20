@@ -11,6 +11,9 @@ import std.string : strip, indexOf, lineSplitter;
 /// Server version
 immutable string VERSION = import("VERSION");
 
+/// HTTP User-Agent sent on all outbound requests (VRChat API, Drop a Portal, etc.).
+immutable string USER_AGENT = "vrcd/" ~ VERSION;
+
 /// Default friend state reseed interval.
 ///
 /// This variable dictates how often to re-fetch all friends from the VRChat API.
