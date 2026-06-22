@@ -195,6 +195,7 @@ private string steamRootWindows()
 {
     import core.sys.windows.winreg;
     import core.sys.windows.winerror : ERROR_SUCCESS;
+    import core.sys.windows.windef : KEY_READ, HKEY;
     import std.conv : to;
 
     HKEY key;
