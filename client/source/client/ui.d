@@ -866,14 +866,6 @@ private void drawOnlineTab(mu_Context* ctx, AppState* state, int scrollDelta)
     // Your-status section at the top.
     drawSelfStatusSection(ctx, state);
 
-    // Refresh button inside the panel.
-    mu_layout_row(ctx, 1, fullCol.ptr, 30);
-    if (mu_button(ctx, "Refresh"))
-    {
-        state.refreshFriendsRequested = true;
-        setStatusFlash(state, "  Refreshing friends...");
-    }
-
     mu_layout_row(ctx, 1, fullCol.ptr, 0);
 
     if (state.instances.length == 0 &&
@@ -948,9 +940,10 @@ private mu_Rect selfStatusCircleRect;
 /// Clicking the circle opens a popup with the four VRChat statuses.
 private void drawSelfStatusSection(mu_Context* ctx, AppState* state)
 {
-    enum int cancelW = 40;
-    enum int circleW = 40;
-    enum int setW    = 80;
+    enum int refreshW = 80;
+    enum int cancelW  = 40;
+    enum int circleW  = 40;
+    enum int setW     = 80;
     static immutable int[1] fullCol = [-1];
 
     bool busy = state.statusUpdateInFlight || state.connected == false;
@@ -963,10 +956,21 @@ private void drawSelfStatusSection(mu_Context* ctx, AppState* state)
         && state.selfStatusDraft != state.selfStatus;
     bool dirty = descChanged || statusChanged;
 
-    // Layout: cancel button is always present so the user can clear the
-    // textbox in one click even when nothing is pending. Textbox flexes.
-    int[4] cols = [-(cancelW + circleW + setW + 12), cancelW, circleW, setW];
-    mu_layout_row(ctx, 4, cols.ptr, 40);
+    // Layout: Refresh sits to the left of the textbox so it's clear of both
+    // the scrollable friend list below and the status controls to the right
+    // (it used to be a full-width strip above the list and caught stray taps).
+    // Cancel button is always present so the user can clear the textbox in one
+    // click even when nothing is pending. Textbox flexes.
+    int[5] cols =
+        [refreshW, -(cancelW + circleW + setW + 16), cancelW, circleW, setW];
+    mu_layout_row(ctx, 5, cols.ptr, 40);
+
+    // Refresh: asks the server to pull fresh friend state from VRChat.
+    if (mu_button(ctx, "Refresh"))
+    {
+        state.refreshFriendsRequested = true;
+        setStatusFlash(state, "  Refreshing friends...");
+    }
 
     // Textbox. mu_textbox shows what's in the buffer, so an empty buffer
     // simply shows nothing; we overlay a placeholder string when empty
