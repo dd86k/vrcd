@@ -10,6 +10,7 @@ import core.time : dur, Duration;
 import ddlogger;
 import ddcurl;
 import ddcurl.libcurl : CurlException;
+import ddcurl.websocket : WebSocketMessage, WebSocketStatus;
 
 import server.vrchat.vrcconfig : USER_AGENT;
 import server.events;
@@ -24,6 +25,37 @@ alias StatusCallback = void delegate(bool connected, string lastError);
 
 /// Callback for re-authentication when the auth token expires.
 alias ReAuthCallback = void delegate();
+
+/// RFC 6455 close status codes we react to specially. The pipeline does not
+/// publish its own code set, so we follow the standard meanings.
+private enum : ushort
+{
+    CLOSE_POLICY_VIOLATION = 1008, // Token rejected: re-auth and reconnect.
+    CLOSE_TRY_AGAIN_LATER  = 1013, // Explicit back-off request: go to max delay.
+}
+
+/// Human-readable description for an RFC 6455 close code.
+/// A zero code means the peer closed without sending one.
+private string describeCloseCode(ushort code)
+{
+    switch (code)
+    {
+    case 0:    return "no close code";
+    case 1000: return "normal closure";
+    case 1001: return "going away";
+    case 1002: return "protocol error";
+    case 1003: return "unsupported data";
+    case 1007: return "invalid payload data";
+    case 1008: return "policy violation";
+    case 1009: return "message too big";
+    case 1010: return "mandatory extension";
+    case 1011: return "internal server error";
+    case 1012: return "service restart";
+    case 1013: return "try again later";
+    case 1014: return "bad gateway";
+    default:   return "unknown close code";
+    }
+}
 
 /// Manages the VRChat WebSocket connection with automatic reconnection.
 class VRCWebSocket
@@ -118,32 +150,64 @@ private:
                 reconnectDelay = reconnectBase; // reset backoff on success
                 notifyStatus(true, "");
 
+                bool reconnectNow; // Skip backoff and reconnect immediately (e.g. after re-auth).
+
                 while (running && connected)
                 {
-                    ubyte[] data = ws.receive();
-                    if (data is null)
+                    WebSocketMessage msg = ws.receive();
+                    final switch (msg.status) with (WebSocketStatus)
                     {
-                        logInfo("WebSocket closed by server");
+                    case data:
+                        const(char)[] message = cast(const(char)[]) msg.data;
+                        logTrace("WS recv: %s", message);
+
+                        try
+                        {
+                            VRCEvent event = parseNewVrcEvent(message);
+                            // event.content.toString().length is wasteful, by the way
+                            logDebugging("WS parsed event: type=%s length=%s", event.typeRaw, message.length);
+                            onEvent(event);
+                        }
+                        catch (Exception e)
+                        {
+                            logError("Failed to parse event: %s -- message: %s", e.msg, message);
+                        }
+                        break;
+
+                    case timedOut:
+                        // No frame within the poll window. The VRChat pipeline can stay
+                        // quiet for long stretches and libcurl answers ping/pong for us,
+                        // so an idle timeout is not a disconnect: keep waiting.
+                        logTrace("WS idle (poll timeout), still connected");
+                        break;
+
+                    case closed:
                         connected = false;
-                        notifyStatus(false, "Connection closed by server");
+                        string reason = describeCloseCode(msg.closeCode);
+                        logInfo("WebSocket closed by server (code %d: %s)", msg.closeCode, reason);
+
+                        // 1008 (policy violation) is how the pipeline rejects a stale or
+                        // revoked auth token; treat it like an HTTP 401/403 and re-auth.
+                        if (msg.closeCode == CLOSE_POLICY_VIOLATION)
+                        {
+                            reconnectNow = tryReAuth(reason);
+                            break;
+                        }
+
+                        // 1013 (try again later) is an explicit back-off request, mirror 429.
+                        if (msg.closeCode == CLOSE_TRY_AGAIN_LATER)
+                        {
+                            logError("Pipeline asked to try again later (1013), jumping to max backoff");
+                            reconnectDelay = reconnectMax;
+                        }
+
+                        notifyStatus(false, reason);
                         break;
                     }
-
-                    const(char)[] message = cast(const(char)[]) data;
-                    logTrace("WS recv: %s", message);
-
-                    try
-                    {
-                        VRCEvent event = parseNewVrcEvent(message);
-                        // event.content.toString().length is wasteful, by the way
-                        logDebugging("WS parsed event: type=%s length=%s", event.typeRaw, message.length);
-                        onEvent(event);
-                    }
-                    catch (Exception e)
-                    {
-                        logError("Failed to parse event: %s -- message: %s", e.msg, message);
-                    }
                 }
+
+                if (reconnectNow)
+                    continue; // Reconnect immediately with the refreshed token.
             }
             catch (CurlException e)
             {
@@ -152,29 +216,8 @@ private:
 
                 if (e.statusCode == 401 || e.statusCode == 403)
                 {
-                    notifyStatus(false, "Auth token invalid or expired");
-
-                    if (onReAuth)
-                    {
-                        try
-                        {
-                            onReAuth();
-                            logInfo("Re-auth succeeded, reconnecting...");
-                            Thread.sleep(dur!"seconds"(2));
-                            continue; // Reconnect with new token.
-                        }
-                        catch (Exception reAuthEx)
-                        {
-                            import core.stdc.stdlib : exit;
-                            logError("Re-authentication failed: %s", reAuthEx.msg);
-                            logCritical("Exiting to avoid spamming VRChat API.");
-                            exit(2);
-                        }
-                    }
-                    else
-                    {
-                        logError("Auth token expired. Re-run 'auth' to refresh.");
-                    }
+                    if (tryReAuth("Auth token invalid or expired"))
+                        continue; // Reconnect with new token.
                 }
                 else
                 {
@@ -208,6 +251,37 @@ private:
     {
         if (onStatusChange)
             onStatusChange(status, error);
+    }
+
+    /// Attempt to refresh the auth token after the pipeline rejected it.
+    /// Returns: true when a new token was obtained and an immediate reconnect
+    /// should follow; false when no re-auth callback is configured.
+    /// Exits the process if re-auth fails, to avoid hammering the VRChat API.
+    bool tryReAuth(string statusMessage)
+    {
+        notifyStatus(false, statusMessage);
+
+        if (onReAuth is null)
+        {
+            logError("Auth token expired. Re-run 'auth' to refresh.");
+            return false;
+        }
+
+        try
+        {
+            onReAuth();
+            logInfo("Re-auth succeeded, reconnecting...");
+            Thread.sleep(dur!"seconds"(2));
+            return true;
+        }
+        catch (Exception reAuthEx)
+        {
+            import core.stdc.stdlib : exit;
+            logError("Re-authentication failed: %s", reAuthEx.msg);
+            logCritical("Exiting to avoid spamming VRChat API.");
+            exit(2);
+        }
+        assert(0);
     }
 
     void connect()
