@@ -540,10 +540,16 @@ private void eventLoop(mu_Context* uictx)
                     {
                         appState.connected = true;
                         appState.serverStatus = "Connected";
-                        // Pair state is unknown until the server replays a
-                        // dap_status snapshot for this connection.
-                        appState.dapPairState = AppState.DapPairState.unknown;
-                        appState.dapStatus = "";
+                        // Don't reset dapPairState here. The server sends its
+                        // dap_status snapshot right after auth_ok, so by the
+                        // time we observe this `connected` transition the
+                        // snapshot may already have been drained and applied
+                        // this same frame (drainNetworkMessages runs inside the
+                        // event loop, ahead of this reconcile). Resetting to
+                        // `unknown` here would clobber it and leave the UI stuck
+                        // on "Checking pairing status...". The reset is done at
+                        // connection initiation instead (startup default and
+                        // doReconnect / disconnect).
                     }
                     break;
                 case ConnectionState.failed:
@@ -1870,6 +1876,11 @@ private void doReconnect()
     logDebugging("doReconnect: connecting to %s:%d", host, port);
     appState.serverStatus = "Connecting...";
     appState.connected = false;
+    // Pair state is unknown until the new connection replays a dap_status
+    // snapshot. Reset here (initiation) rather than on the `connected`
+    // transition so we can't race-clobber the freshly arrived snapshot.
+    appState.dapPairState = AppState.DapPairState.unknown;
+    appState.dapStatus = "";
     string clientCert = cast(string) appState.settingsTlsClientCert[0 .. strlen(appState.settingsTlsClientCert.ptr)].idup;
     string clientKey  = cast(string) appState.settingsTlsClientKey[0 .. strlen(appState.settingsTlsClientKey.ptr)].idup;
     conn = new ServerConnection(host, port, secret,
