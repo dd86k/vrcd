@@ -833,6 +833,22 @@ private const(char)[] formatRelative(long unixTime, char[] buf)
     return sformat(buf, "%dy ago", diff / (86_400 * 365));
 }
 
+/// Extra vertical margin (in pixels) added to collapsible headers in the
+/// Online tab, on top of the style default, to make them easier to hit in VR.
+private enum int onlineHeaderExtraHeight = 16;
+
+/// Draw a collapsible header with extra height. mu_header forces a
+/// default-height layout row, so the only lever for its height is the style
+/// size; we bump it for the call and restore it right after.
+private int bigHeader(mu_Context* ctx, string label, int opt)
+{
+    int saved = ctx.style.size.y;
+    ctx.style.size.y = saved + onlineHeaderExtraHeight;
+    int res = mu_header_ex(ctx, label, opt);
+    ctx.style.size.y = saved;
+    return res;
+}
+
 /// Online tab: friends grouped by instance, or profile view.
 private void drawOnlineTab(mu_Context* ctx, AppState* state, int scrollDelta)
 {
@@ -876,7 +892,7 @@ private void drawOnlineTab(mu_Context* ctx, AppState* state, int scrollDelta)
             string baseName = grp.worldName.length > 0 ? grp.worldName : grp.instanceId;
             const(char)[] header = grp.nUsers >= 0 && grp.capacity > 0 ?
                 sformat(headerBuf, "%s (%d/%d)", baseName, grp.nUsers, grp.capacity) : baseName;
-            if (mu_header_ex(ctx, cast(string)header, MU_OPT_EXPANDED))
+            if (bigHeader(ctx, cast(string)header, MU_OPT_EXPANDED))
             {
                 foreach (ref FriendInfo f; grp.friends)
                     drawFriendCard(ctx, state, f);
@@ -888,7 +904,7 @@ private void drawOnlineTab(mu_Context* ctx, AppState* state, int scrollDelta)
         {
             if (grp.instanceId != "private")
                 continue;
-            if (mu_header_ex(ctx, "Private", MU_OPT_EXPANDED))
+            if (bigHeader(ctx, "Private", MU_OPT_EXPANDED))
             {
                 foreach (ref FriendInfo f; grp.friends)
                     drawFriendCard(ctx, state, f);
@@ -898,7 +914,7 @@ private void drawOnlineTab(mu_Context* ctx, AppState* state, int scrollDelta)
 
         if (state.activeElsewhereFriends.length > 0)
         {
-            if (mu_header_ex(ctx, "Active elsewhere", 0))
+            if (bigHeader(ctx, "Active elsewhere", 0))
             {
                 foreach (ref FriendInfo f; state.activeElsewhereFriends)
                     drawFriendCard(ctx, state, f);
@@ -908,7 +924,7 @@ private void drawOnlineTab(mu_Context* ctx, AppState* state, int scrollDelta)
 
         if (state.offlineFriends.length > 0)
         {
-            if (mu_header_ex(ctx, "Offline", 0))
+            if (bigHeader(ctx, "Offline", 0))
             {
                 foreach (ref FriendInfo f; state.offlineFriends)
                     drawFriendCard(ctx, state, f);
