@@ -1,7 +1,7 @@
 # ![speech bubble logo with D-like lettering](res/vrcd-logo-32.png) vcrd
 
-A little companion suite for VRChat to help you track friend activity, manage photos,
-and receive VR/desktop notifications.
+A little companion suite for VRChat to help you track friend activity,
+inject metadata into photos, and receive VR/desktop notifications.
 
 It features a server-client architecture, to avoid having multiple connections to VRC APIs.
 
@@ -16,18 +16,21 @@ It features a server-client architecture, to avoid having multiple connections t
 > There are plans to fix this.
 
 Client features:
-- Relatively light client using software rendering; Hardware option available
-- VR friendly UI
-- Embed world and player metadata into VRChat photos automatically
-- Strip VRChat and other metadata from VRChat photos
-- VR overlay notifications (XSOverlay/WayVR, OVR Toolkit) and desktop notifications
-- [Drop a Portal](https://dropaport.al/) integration
+- Relatively light client using software rendering; Hardware option available.
+- VR friendly UI.
+- Embed world and player metadata into VRChat photos automatically.
+- Strip VRChat and other metadata from VRChat photos.
+- VR overlay notifications (XSOverlay/WayVR, OVR Toolkit) and desktop notifications.
+- [Drop a Portal](https://dropaport.al/) integration.
 
 Server features:
-- Record incoming VRChat events
-- Event-stream API with 'catch-up' and 'back-fill' actions to know what you missed
+- Record incoming VRChat events.
+- Event-stream API with 'catch-up' and 'back-fill' actions to know what you missed.
 
 Feel free to join the official [VRChat group](https://vrc.group/VRCD.7796) (`VRCD.7796`)!
+
+Related projects:
+- [vrcd-server-container](https://github.com/ArcaneDisgea/vrcd-server-container) by ArcaneDisgea.
 
 ## Screenshots
 
@@ -63,9 +66,6 @@ Targets:
 
 Targets Windows and Linux.
 
-Related projects:
-- [vrcd-server-container](https://github.com/ArcaneDisgea/vrcd-server-container) by ArcaneDisgea.
-
 ## Compiling
 
 See each component's README for dependencies, configuration, and architecture details.
@@ -75,17 +75,19 @@ In short:
 - Server needs libcurl and sqlite static libraries and optionally OpenSSL.
 
 ```bash
-# Build server and client
+# Upgrade dependencies for server and client
+dub upgrade -s
+
+# Build, test, and run server (might be best to setup config first)
+# For more info, see server/README.md
 dub build :server
-dub build :client
-
-# Unit tests
 dub test :server
-dub test :client
+./client/vrcd_server
 
-# Run server, see server/README.md for configuration options
-./server/vrcd_server
-# Run client, see client/README.md for its architecture
+# Build, test, and run client
+# For more info, see client/README.md
+dub build :client
+dub test :client
 ./client/vrcd_client
 ```
 
@@ -93,14 +95,13 @@ See [API.md](./API.md) for server-client API details.
 
 ### Issues
 
-- Using LDC 1.41 on Windows will lead to compiling issues (undefined PAGESIZE in core.thread.fiber)
+- Using LDC 1.41 on Windows will lead to compiling issues: undefined PAGESIZE in core.thread.fiber
 
 # Contributing
 
 I'm unsure how I want to handle contributions at this moment, sorry.
 
-At this time, it's best to write Issues for bugs and feature requests, or start
-a Discussion.
+However, feel free to submit bugs in Issues and feature suggestions in Discussions, thanks.
 
 # Disclaimer
 
