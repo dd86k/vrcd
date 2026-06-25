@@ -5,7 +5,7 @@ authors "dd86k <dd@dax.moe>"
 copyright "Copyright © 2026, dd86k <dd@dax.moe>"
 license "BSD-3-Clause-Clear"
 
-dependency "ddlogger" repository="git+https://github.com/dd86k/ddlogger.git" version="4ec9bc06bb90c4a7844f62fcfc1429bc7cdb1378"
+dependency "ddlogger" repository="git+https://github.com/dd86k/ddlogger.git" version="653364f91d3febed0116eb792a3a899418f49927"
 dependency "bindbc-sdl" version="~>1.5.2"
 dependency "ddui" repository="git+https://github.com/dd86k/ddui.git" version="f33c4d246b40a26d560dad492a36ca532f331b94"
 
