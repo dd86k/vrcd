@@ -198,8 +198,12 @@ struct AppState
     // True when the server reports no events exist below oldestLoadedEventId.
     bool noOlderEvents;
 
-    // Feed detail
-    FeedEntry* selectedFeedEntry; // null = list view, non-null = detail view
+    // Feed detail. A value copy (not a pointer into feedEntries): the feed
+    // array reallocates on live `addFeedEntry` prepends and `fetch_older`
+    // back-fill, which would dangle a pointer into it. feedDetailOpen acts as
+    // the list-vs-detail toggle.
+    bool feedDetailOpen;
+    FeedEntry selectedFeedEntry;
 
     // Friends tab
     InstanceGroup[] instances;

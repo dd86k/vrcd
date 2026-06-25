@@ -289,7 +289,7 @@ private void drawFeedFilterPopup(mu_Context* ctx, AppState* state, int scrollDel
 /// Feed tab: scrollable list of events (newest first).
 private void drawFeedTab(mu_Context* ctx, AppState* state, int scrollDelta)
 {
-    if (state.selectedFeedEntry)
+    if (state.feedDetailOpen)
     {
         drawFeedDetail(ctx, state, scrollDelta);
         return;
@@ -364,7 +364,10 @@ private void drawFeedTab(mu_Context* ctx, AppState* state, int scrollDelta)
 
                 // Click to open detail (only on mouseup, not during drag scroll).
                 if (wasClick && mouseOver)
-                    state.selectedFeedEntry = &entry;
+                {
+                    state.selectedFeedEntry = entry;
+                    state.feedDetailOpen = true;
+                }
 
                 // Source accent strip on the left edge.
                 mu_draw_rect(ctx, mu_Rect(rowRect.x, rowRect.y, 4, rowRect.h), sourceColor(entry.source));
@@ -439,7 +442,7 @@ private void drawFeedDetail(mu_Context* ctx, AppState* state, int scrollDelta)
     static immutable int[2] labelValCols = [120, -1];
     enum lineColor = mu_Color(50, 50, 60, 255);
 
-    FeedEntry* e = state.selectedFeedEntry;
+    FeedEntry* e = &state.selectedFeedEntry;
 
     mu_begin_panel(ctx, "FeedDetailPanel");
 
@@ -449,7 +452,7 @@ private void drawFeedDetail(mu_Context* ctx, AppState* state, int scrollDelta)
     mu_layout_row(ctx, 1, fullCol.ptr, 40);
     if (clickButton(ctx, "< Back"))
     {
-        state.selectedFeedEntry = null;
+        state.feedDetailOpen = false;
         requestRepaint();
         mu_end_panel(ctx);
         return;

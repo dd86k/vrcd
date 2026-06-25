@@ -570,6 +570,10 @@ private void eventLoop(mu_Context* uictx)
                         // We no longer know the server's pair state.
                         appState.dapPairState = AppState.DapPairState.unknown;
                         appState.dapStatus = "";
+                        // A fetch_older in flight will never get its
+                        // `older_fetched` reply now; clear the flag so the
+                        // "Load older events" button isn't stuck disabled.
+                        appState.fetchingOlder = false;
                     }
                     break;
             }
