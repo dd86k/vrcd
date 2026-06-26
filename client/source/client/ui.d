@@ -1589,21 +1589,21 @@ private void drawToolsTab(mu_Context* ctx, AppState* state, int scrollDelta)
     sectionHeader(ctx, "Pictures");
 
     mu_layout_row(ctx, COLCOUNT, fullCol.ptr, 60);
-    if (mu_button(ctx, "Open Pictures Folder"))
+    if (clickButton(ctx, "Open Pictures Folder"))
     {
         import client.directories : vrchatPicturesDir;
         openFolder(vrchatPicturesDir());
     }
 
     mu_layout_row(ctx, COLCOUNT, fullCol.ptr, 60);
-    if (mu_button(ctx, "Open Steam Screenshots"))
+    if (clickButton(ctx, "Open Steam Screenshots"))
     {
         import client.directories : steamScreenshotDir;
         openFolder(steamScreenshotDir());
     }
 
     mu_layout_row(ctx, COLCOUNT, fullCol.ptr, 60);
-    if (mu_button(ctx, "Strip Metadata"))
+    if (clickButton(ctx, "Strip Metadata"))
     {
         state.stripMetadataPage = true;
     }
@@ -1629,12 +1629,12 @@ private void drawToolsTab(mu_Context* ctx, AppState* state, int scrollDelta)
         mu_layout_row(ctx, COLCOUNT, fullCol.ptr, 60);
         if (state.dapStatus.length > 0)
         {
-            if (mu_button(ctx, "Unpair"))
+            if (clickButton(ctx, "Unpair"))
                 state.dapUnpairRequested = true;
         }
         else
         {
-            if (mu_button(ctx, "Pair"))
+            if (clickButton(ctx, "Pair"))
                 state.dapPairRequested = true;
         }
     }
@@ -1643,19 +1643,19 @@ private void drawToolsTab(mu_Context* ctx, AppState* state, int scrollDelta)
     sectionHeader(ctx, "Diagnostics");
 
     mu_layout_row(ctx, COLCOUNT, fullCol.ptr, 60);
-    if (mu_button(ctx, "Open VRChat Logs Folder"))
+    if (clickButton(ctx, "Open VRChat Logs Folder"))
     {
         import client.directories : vrchatLogDir;
         openFolder(vrchatLogDir());
     }
-    if (mu_button(ctx, "Open VRCD Logs Folder"))
+    if (clickButton(ctx, "Open VRCD Logs Folder"))
     {
         import client.directories : vrcdAppDataPath;
         openFolder(vrcdAppDataPath());
     }
 
     mu_layout_row(ctx, COLCOUNT, fullCol.ptr, 60);
-    if (mu_button(ctx, "Inject Test Notification"))
+    if (clickButton(ctx, "Inject Test Notification"))
     {
         import std.datetime.systime : Clock;
         import std.conv : to;
