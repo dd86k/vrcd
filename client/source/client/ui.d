@@ -420,12 +420,20 @@ private void drawFeedTab(mu_Context* ctx, AppState* state, int scrollDelta)
         if (anyVisible == false)
         {
             mu_layout_row(ctx, 1, fullCol.ptr, 0);
-            mu_label(ctx, "No matching events.");
+            mu_label(ctx, filteredCount > 0
+                ? "No matching events on this page."
+                : "No events match the current filters.");
         }
-        else if (feedPage == totalPages - 1)
+
+        // On the last page (filters hiding everything counts as the last page,
+        // since totalPages clamps to 1), show how many of the loaded events the
+        // filters let through and offer the fetch-older sentinel. Drawing the
+        // row unconditionally here is deliberate: a heavily filtered view
+        // ("0 of N shown") would otherwise hide the fetch button entirely and
+        // leave no way to pull more history to look through.
+        if (feedPage >= totalPages - 1)
         {
-            // On the last page, append the Fetch Older button after the
-            // last row as an "infinite scroll" style sentinel.
+            drawFilterSummary(ctx, filteredCount, cast(int) state.feedEntries.length);
             drawFetchOlderRow(ctx, state, 45, false);
         }
     }
@@ -539,6 +547,22 @@ private void drawFeedDetail(mu_Context* ctx, AppState* state, int scrollDelta)
     }
 
     mu_end_panel(ctx);
+}
+
+/// Right-aligned caption showing how many of the loaded events pass the
+/// current filters. Sits above the fetch-older row so it's obvious when a
+/// heavily filtered view is hiding most of the buffer, which is why "load
+/// older" can feel like it does nothing.
+private void drawFilterSummary(mu_Context* ctx, int shown, int loaded)
+{
+    static immutable int[1] fullCol = [-1];
+
+    char[64] buf = void;
+    const(char)[] s = sformat(buf, "%d of %d events shown", shown, loaded);
+
+    mu_layout_row(ctx, 1, fullCol.ptr, 0);
+    mu_Rect r = mu_layout_next(ctx);
+    mu_draw_control_text(ctx, s.ptr, r, MU_COLOR_TEXT, MU_OPT_ALIGNRIGHT, cast(int) s.length);
 }
 
 /// Render a full-width "Fetch older events" row as the last item inside
