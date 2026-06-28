@@ -6,7 +6,7 @@ copyright "Copyright © 2026, dd86k <dd@dax.moe>"
 license "BSD-3-Clause-Clear"
 
 dependency "ddlogger" repository="git+https://github.com/dd86k/ddlogger.git" version="4ec9bc06bb90c4a7844f62fcfc1429bc7cdb1378"
-dependency "ddcurl" repository="git+https://github.com/dd86k/ddcurl.git" version="9fba100ea96c5fb7f4d2feb393d1397d1044d36a"
+dependency "ddcurl" repository="git+https://github.com/dd86k/ddcurl.git" version="69b2bcab3dde330289b474a4de3dbedb88fa6552"
 dependency "arsd-official:sqlite" version="~>11.0"
 
 # "." for dub.selections.json

@@ -28,6 +28,46 @@ import server.worldcache;
 import server.vrchat.auth;
 import server.vrchat.websocket;
 
+/// Graceful-shutdown flag. Cleared by the signal handlers so the main
+/// loop can exit and flush the cookie jar before the process terminates.
+private __gshared bool g_running = true;
+
+version (Posix)
+{
+    extern (C) void onTerminateSignal(int) nothrow @nogc @system
+    {
+        g_running = false;
+    }
+}
+else version (Windows)
+{
+    import core.sys.windows.windef : BOOL, DWORD, TRUE;
+    extern (Windows) BOOL onConsoleCtrl(DWORD) nothrow @nogc @system
+    {
+        g_running = false;
+        return TRUE;
+    }
+}
+
+/// Install SIGINT/SIGTERM (Ctrl+C) handlers so shutdown is graceful and
+/// the cookie jar gets flushed instead of the process being torn down.
+private void installSignalHandlers()
+{
+    version (Posix)
+    {
+        import core.sys.posix.signal : sigaction, sigaction_t, SIGINT, SIGTERM;
+        sigaction_t sa;
+        sa.sa_handler = &onTerminateSignal;
+        sigaction(SIGINT, &sa, null);
+        sigaction(SIGTERM, &sa, null);
+    }
+    else version (Windows)
+    {
+        import core.sys.windows.wincon : SetConsoleCtrlHandler;
+        SetConsoleCtrlHandler(&onConsoleCtrl, TRUE);
+    }
+}
+
 void cmdRun(ref Config config)
 {
     import core.stdc.stdlib : exit;
@@ -108,6 +148,11 @@ void cmdRun(ref Config config)
         exit(1);
     }
     logInfo("Authenticated as %s (%s)", authState.displayName, authState.userId);
+
+    // Persist cookies obtained or refreshed during authentication so a
+    // restart can reuse the session instead of forcing a re-login. Safe
+    // without the API mutex here: the HTTP client is not shared yet.
+    client.flushCookies();
 
     if (config.pruneRetain)
     {
@@ -324,15 +369,26 @@ void cmdRun(ref Config config)
         logInfo("Re-authenticating with VRChat...");
         AuthState newState = authenticate(config, client, delegator);
         vrcws.setToken(newState.authToken);
+        // Persist the rotated session cookie under the API mutex so we
+        // don't touch the curl handle concurrently with other callers.
+        synchronized (vrcApiMutex)
+            client.flushCookies();
         logInfo("Re-authenticated as %s", newState.displayName);
     });
     vrcws.start();
 
+    installSignalHandlers();
+
     logInfo(headless ? "Server running." : "Server running. Press Ctrl+C to stop.");
 
-    // Keep main thread alive.
-    while (true)
-        Thread.sleep(dur!"seconds"(1));
+    // Wait for a shutdown signal. The session cookie is already flushed
+    // after each (re)auth; we only need one more flush on the way out.
+    while (g_running)
+        Thread.sleep(dur!"msecs"(1000));
+
+    logInfo("Shutting down, flushing session...");
+    synchronized (vrcApiMutex)
+        client.flushCookies();
 }
 
 void cmdAuth(ref Config config)
