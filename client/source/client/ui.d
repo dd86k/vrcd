@@ -20,7 +20,7 @@ import client.renderer : window_width, window_height;
 import client.gui : wasClick, requestRepaint;
 import client.state;
 import client.stream : tlsAvailable;
-import client.utils : openFolder, openBrowser, openVRChatInstance;
+import client.utils : openFolder, openBrowser;
 
 /// Active tab selection.
 enum Tab { feed, online, notifications, tools, settings }
@@ -968,33 +968,26 @@ private void drawOnlineTab(mu_Context* ctx, AppState* state, int scrollDelta)
                 sformat(headerBuf, "%s (%d/%d)", baseName, grp.nUsers, grp.capacity) : baseName;
             if (bigHeader(ctx, cast(string)header, MU_OPT_EXPANDED))
             {
-                // Join this instance. Buttons are labeled by method so the
-                // behavior is predictable: "Self-Invite" asks the server to
-                // send our account an in-game invite (works everywhere,
-                // Proton included); "Open in VRChat" hands the launch URI to
-                // the OS handler (slick when it works, flaky under Proton).
-                // Uses the full location (region tags intact); falls back to
-                // the canonical grouping key if the server carried none.
+                // Join this instance. "Open in VRChat" hands the launch URI
+                // to the running client over its named pipe for a seamless
+                // in-client transition (gui.d drains pendingOpens: in-process
+                // on Windows, injected into the Proton container on Linux,
+                // falling back per platform). "Self-Invite" asks the server
+                // for an in-game invite instead: no setup, works everywhere,
+                // and covers URIs VRChat refuses (restricted instances
+                // without a shortName). Uses the full location (region tags
+                // intact); falls back to the canonical grouping key if the
+                // server carried none.
                 string joinLoc = grp.location.length > 0 ? grp.location : grp.instanceId;
                 if (joinLoc.length > 0)
                 {
-                    mu_layout_row(ctx, 1, fullCol.ptr, 40);
-                    version (Windows)
-                    {
-                        // The vrchat:// handler forwards to the running client
-                        // for slick in-client navigation.
-                        if (clickButton(ctx, "Open in VRChat"))
-                            openVRChatInstance(joinLoc);
-                    }
-                    else
-                    {
-                        // Proton's wineserver isolation breaks VRChat's URI
-                        // single-instance forwarding (a launch just cold-boots
-                        // a second offline client), so use a server self-invite
-                        // instead -- the same fallback VRCX uses on Linux.
-                        if (clickButton(ctx, "Self-Invite"))
-                            state.pendingJoins ~= joinLoc;
-                    }
+                    int half = mu_get_current_container(ctx).body_.w / 2;
+                    int[2] joinCols = [half, -1];
+                    mu_layout_row(ctx, 2, joinCols.ptr, 40);
+                    if (clickButton(ctx, "Open in VRChat"))
+                        state.pendingOpens ~= joinLoc;
+                    if (clickButton(ctx, "Self-Invite"))
+                        state.pendingJoins ~= joinLoc;
                 }
                 foreach (ref FriendInfo f; grp.friends)
                     drawFriendCard(ctx, state, f);

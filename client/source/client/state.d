@@ -219,6 +219,10 @@ struct AppState
     // Instance locations queued for a "Self-Invite" join, drained by gui.d.
     string[] pendingJoins;
 
+    // Instance locations queued for an "Open in VRChat" join (Linux: async
+    // IPC into the running Proton container), drained by gui.d.
+    string[] pendingOpens;
+
     // Current VRChat instance (from local log watcher).
     string currentLocation; // e.g. "wrld_xxx:12345~region(us)"
 

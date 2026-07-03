@@ -29,6 +29,9 @@ vrcd-test-*
 
 *.crt
 
+# pipehelper
+/pipehelper/vrcd-pipehelper
+
 perso/
 
 # Packages

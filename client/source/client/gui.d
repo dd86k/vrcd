@@ -28,6 +28,7 @@ import client.renderer;
 import client.settings;
 import client.state;
 import client.ui;
+import client.utils;
 
 /// Custom SDL event type for network wake-ups.
 /// __gshared: accessed by network thread (pushWakeEvent) and timer thread.
@@ -684,6 +685,68 @@ private void eventLoop(mu_Context* uictx)
                     conn.sendJoinInstance(loc);
             }
             appState.pendingJoins.length = 0;
+        }
+
+        // Drain pending "Open in VRChat" requests. Windows reaches the
+        // running client's launch pipe in-process (with a vrchat:// scheme
+        // fallback); on Linux the pipe write runs inside VRChat's Proton
+        // container, so it is spawned and polled asynchronously, with
+        // self-invite as the fallback.
+        if (appState.pendingOpens.length > 0)
+        {
+            foreach (string loc; appState.pendingOpens)
+            {
+                version (Windows)
+                {
+                    openVRChatInstance(loc);
+                }
+                else
+                {
+                    if (isVRChatRunning() == false)
+                    {
+                        // Cold boot straight into the instance via Steam.
+                        openVRChatInstance(loc);
+                        appState.addFeedEntry(0, "info", "",
+                            "Launching VRChat into instance", timeNow(), "", false, EventSource.system);
+                        continue;
+                    }
+                    final switch (startVRChatIPCJoin(loc)) with (IPCJoinStart)
+                    {
+                    case started:
+                        break;
+                    case busy:
+                        appState.addFeedEntry(0, "error", "",
+                            "A join request is already in progress", timeNow(), "", false, EventSource.system);
+                        break;
+                    case unavailable:
+                        appState.pendingJoins ~= loc;
+                        appState.addFeedEntry(0, "info", "",
+                            "VRChat IPC unavailable, self-inviting instead", timeNow(), "", false, EventSource.system);
+                        break;
+                    }
+                }
+            }
+            appState.pendingOpens.length = 0;
+        }
+
+        // Poll the in-flight IPC join attempt.
+        version (linux)
+        {
+            string ipcLoc;
+            final switch (pollVRChatIPCJoin(ipcLoc)) with (IPCJoinPoll)
+            {
+            case idle, running:
+                break;
+            case success:
+                appState.addFeedEntry(0, "info", "",
+                    "Join request sent to VRChat", timeNow(), "", false, EventSource.system);
+                break;
+            case failed:
+                appState.pendingJoins ~= ipcLoc;
+                appState.addFeedEntry(0, "info", "",
+                    "VRChat IPC join failed, self-inviting instead", timeNow(), "", false, EventSource.system);
+                break;
+            }
         }
 
         // Handle auth delegation responses.

@@ -70,6 +70,7 @@ private __gshared string cachedLogDir;
 private __gshared string cachedPicturesDir;
 private __gshared string cachedProtonPrefix; // Linux only, drive_c root
 private __gshared string cachedSteamRoot;    // Steam install root (has userdata)
+private __gshared string[] cachedLibraryPaths; // Linux only, all Steam libraries
 private __gshared bool resolved;
 
 /// Return the VRChat log directory for the current platform.
@@ -279,6 +280,8 @@ private void resolveLinux()
         try
         {
             string content = readText(vdfPath);
+            if (cachedLibraryPaths.length == 0)
+                cachedLibraryPaths = findAllLibraries(content);
             libraryPath = findLibraryForApp(content, VRCHAT_APP_ID);
             if (libraryPath)
             {
@@ -308,6 +311,80 @@ private void resolveLinux()
         "AppData", "LocalLow", "VRChat", "VRChat");
     cachedPicturesDir = buildPath(cachedProtonPrefix, "users", "steamuser",
         "Pictures", "VRChat");
+}
+
+version (linux)
+{
+private __gshared string cachedLaunchClient;
+private __gshared bool launchClientResolved;
+
+/// Locate Steam's `steam-runtime-launch-client` tool, used to inject
+/// commands into the pressure-vessel container of a running Proton game.
+/// It ships with the SteamLinuxRuntime depot(s), so scan every library's
+/// common folder for a `SteamLinuxRuntime*` install. Returns null when
+/// not found.
+string steamRuntimeLaunchClientPath()
+{
+    import std.algorithm.searching : startsWith;
+    import std.path : baseName;
+
+    resolve();
+    if (launchClientResolved)
+        return cachedLaunchClient;
+    launchClientResolved = true;
+
+    string[] libraries = cachedLibraryPaths;
+    if (libraries.length == 0 && cachedSteamRoot)
+        libraries = [cachedSteamRoot];
+
+    foreach (string library; libraries)
+    {
+        string common = buildPath(library, "steamapps", "common");
+        if (exists(common) == false)
+            continue;
+        try
+        {
+            foreach (DirEntry entry; dirEntries(common, SpanMode.shallow))
+            {
+                if (entry.isDir == false)
+                    continue;
+                if (baseName(entry.name).startsWith("SteamLinuxRuntime") == false)
+                    continue;
+                string candidate = buildPath(entry.name,
+                    "pressure-vessel", "bin", "steam-runtime-launch-client");
+                if (exists(candidate))
+                {
+                    logInfo("directories: launch-client at %s", candidate);
+                    cachedLaunchClient = candidate;
+                    return candidate;
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            logWarn("directories: failed to scan %s: %s", common, e.msg);
+        }
+    }
+    return null;
+}
+} // version (linux)
+
+/// Parse a libraryfolders.vdf body and return every library `path`.
+/// Returns an empty array on failure.
+string[] findAllLibraries(string vdf)
+{
+    VdfNode root = parseVdf(vdf);
+    VdfNode *libs = "libraryfolders" in root.children;
+    if (libs is null)
+        return null;
+
+    string[] paths;
+    foreach (entry; libs.children)
+    {
+        if (string *p = "path" in entry.values)
+            paths ~= *p;
+    }
+    return paths;
 }
 
 /// Parse a libraryfolders.vdf body and return the `path` of the first
@@ -469,6 +546,12 @@ unittest
     assert(findLibraryForApp(sample, "438100") == "/home/test/.local/share/Steam");
     assert(findLibraryForApp(sample, "220") == "/mnt/ssd/Steam");
     assert(findLibraryForApp(sample, "999999") == null);
+
+    import std.algorithm.sorting : sort;
+    string[] libs = findAllLibraries(sample);
+    sort(libs); // AA iteration order is unspecified
+    assert(libs == ["/home/test/.local/share/Steam", "/mnt/ssd/Steam"]);
+    assert(findAllLibraries("").length == 0);
 }
 
 unittest

@@ -1,0 +1,7 @@
+name "pipehelper"
+targetType "executable"
+targetName "vrcd-pipehelper"
+description "Sends a vrchat:// launch URI to a running VRChat client over its named pipe"
+authors "dd86k <dd@dax.moe>"
+copyright "Copyright © 2026, dd86k <dd@dax.moe>"
+license "BSD-3-Clause-Clear"

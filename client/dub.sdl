@@ -11,3 +11,8 @@ dependency "ddui" repository="git+https://github.com/dd86k/ddui.git" version="f3
 
 stringImportPaths ".."
 versions "SDL" "SDL_2022" "SDL_TTF_2_22" "SDL_Image_200"
+
+// Direct-IPC join support: the Windows client talks to VRChat's launch-URI
+// named pipe in-process, sharing the protocol code with the pipehelper
+// executable that Linux runs inside the Proton container instead.
+sourceFiles "../pipehelper/source/vrcpipe.d" platform="windows"
