@@ -10,6 +10,7 @@ import std.string : toStringz;
 import std.uni : toLower;
 import std.format : sformat;
 import std.utf : stride, UTFException;
+import std.json : JSONValue;
 
 import ddui;
 
@@ -19,7 +20,7 @@ import client.renderer : window_width, window_height;
 import client.gui : wasClick, requestRepaint;
 import client.state;
 import client.stream : tlsAvailable;
-import client.utils : openFolder;
+import client.utils : openFolder, openBrowser;
 
 /// Active tab selection.
 enum Tab { feed, online, notifications, tools, settings }
@@ -452,6 +453,23 @@ private void drawFeedDetail(mu_Context* ctx, AppState* state, int scrollDelta)
 
     FeedEntry* e = &state.selectedFeedEntry;
 
+    // Parse the raw content once (re-parsed each frame, like the rest of this
+    // immediate-mode view). Reused for the world-link button and the scalar
+    // content listing below.
+    JSONValue content;
+    bool haveContent;
+    if (e.rawContent.length > 0)
+    {
+        try
+        {
+            content = parseJSON(e.rawContent);
+            if (content.type == JSONType.string)
+                content = parseJSON(content.str);
+            haveContent = content.type == JSONType.object;
+        }
+        catch (Exception) {}
+    }
+
     mu_begin_panel(ctx, "FeedDetailPanel");
 
     applyScroll(ctx, scrollDelta);
@@ -505,8 +523,20 @@ private void drawFeedDetail(mu_Context* ctx, AppState* state, int scrollDelta)
         clickableValue(ctx, state, e.id.to!string);
     }
 
+    // Open the world in the VRChat website, for entries that carry a world id.
+    if (haveContent)
+    {
+        string worldId = extractWorldId(content);
+        if (worldId.length > 0)
+        {
+            mu_layout_row(ctx, 1, fullCol.ptr, 40);
+            if (clickButton(ctx, "Open in VRChat Website"))
+                openBrowser("https://vrchat.com/home/world/" ~ worldId ~ "/info");
+        }
+    }
+
     // Raw content fields (parsed from JSON).
-    if (e.rawContent.length > 0)
+    if (haveContent)
     {
         mu_layout_row(ctx, 1, fullCol.ptr, 1);
         mu_draw_rect(ctx, mu_layout_next(ctx), lineColor);
@@ -514,39 +544,64 @@ private void drawFeedDetail(mu_Context* ctx, AppState* state, int scrollDelta)
         mu_layout_row(ctx, 1, fullCol.ptr, 0);
         mu_label(ctx, "Content");
 
-        try
+        foreach (string key, JSONValue val; content.objectNoRef)
         {
-            JSONValue c = parseJSON(e.rawContent);
-            if (c.type == JSONType.string)
-                c = parseJSON(c.str);
+            // Skip nested objects/arrays, show scalar fields.
+            if (val.type == JSONType.object || val.type == JSONType.array)
+                continue;
 
-            if (c.type == JSONType.object)
-            {
-                foreach (string key, JSONValue val; c.objectNoRef)
-                {
-                    // Skip nested objects/arrays,  show scalar fields.
-                    if (val.type == JSONType.object || val.type == JSONType.array)
-                        continue;
+            string valStr;
+            if (val.type == JSONType.string)
+                valStr = val.str;
+            else
+                valStr = val.toString();
 
-                    string valStr;
-                    if (val.type == JSONType.string)
-                        valStr = val.str;
-                    else
-                        valStr = val.toString();
+            if (valStr.length == 0)
+                continue;
 
-                    if (valStr.length == 0)
-                        continue;
-
-                    mu_layout_row(ctx, 2, labelValCols.ptr, 0);
-                    mu_label(ctx, key);
-                    clickableValue(ctx, state, valStr);
-                }
-            }
+            mu_layout_row(ctx, 2, labelValCols.ptr, 0);
+            mu_label(ctx, key);
+            clickableValue(ctx, state, valStr);
         }
-        catch (Exception) {}
     }
 
     mu_end_panel(ctx);
+}
+
+/// Extract a bare VRChat world id ("wrld_...") from a feed entry's parsed
+/// content, if any. Location/instance fields carry the id with an instance
+/// suffix ("wrld_...:12345~region(us)"); only the world id portion is kept.
+/// Returns null when no world id is present.
+private string extractWorldId(ref JSONValue c)
+{
+    import std.json : JSONValue, JSONType;
+    import std.string : indexOf;
+
+    static string fromValue(const(JSONValue)* v)
+    {
+        if (v is null || v.type != JSONType.string)
+            return null;
+
+        string s = v.str;
+        ptrdiff_t colon = s.indexOf(':');   // trim instance suffix, if any
+        if (colon >= 0)
+            s = s[0 .. colon];
+
+        return s.length > 5 && s[0 .. 5] == "wrld_" ? s : null;
+    }
+
+    if (string id = fromValue("worldId" in c))
+        return id;
+    if (const(JSONValue)* w = "world" in c)
+        if (w.type == JSONType.object)
+            if (string id = fromValue("id" in *w))
+                return id;
+    if (string id = fromValue("location" in c))
+        return id;
+    if (string id = fromValue("instanceId" in c))
+        return id;
+
+    return null;
 }
 
 /// Right-aligned caption showing how many of the loaded events pass the
