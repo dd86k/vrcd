@@ -8,6 +8,9 @@ VERSION="$(cat "${SCRIPT_DIR}/VERSION")"
 BINARY="${SCRIPT_DIR}/client/vrcd_client"
 OUTPUT="${SCRIPT_DIR}/vrcd-client-${VERSION}-x86_64.AppImage"
 ICON="${SCRIPT_DIR}/res/vrcd-logo.png"
+# Windows build of the :pipehelper subpackage ("Open in VRChat" IPC on
+# Linux). Built separately on Windows; bundled when present.
+PIPEHELPER_EXE="${PIPEHELPER_EXE:-${SCRIPT_DIR}/pipehelper/vrcd-pipehelper.exe}"
 
 # CLI flag for compiler; env var DC is also respected natively by dub
 COMPILER=""
@@ -56,6 +59,19 @@ mkdir -p "${APPDIR}/usr/bin"
 
 cp "${BINARY}" "${APPDIR}/usr/bin/vrcd_client"
 
+# Bundle the pipe helper away from usr/bin: the client prefers the copy next
+# to its own binary, but the AppImage mount lives under /tmp, which VRChat's
+# pressure-vessel container does not share, so Wine inside the container
+# could never read it there. AppRun instead installs it to ~/.config/vrcd/
+# (shared home), where the client's fallback lookup finds it.
+if [[ -f "${PIPEHELPER_EXE}" ]]; then
+    mkdir -p "${APPDIR}/usr/share/vrcd"
+    cp "${PIPEHELPER_EXE}" "${APPDIR}/usr/share/vrcd/vrcd-pipehelper.exe"
+else
+    echo "warning: ${PIPEHELPER_EXE} not found (set PIPEHELPER_EXE=...)," >&2
+    echo "         \"Open in VRChat\" IPC will fall back to self-invite" >&2
+fi
+
 # Desktop entry
 cat > "${APPDIR}/vrcd-client.desktop" <<EOF
 [Desktop Entry]
@@ -74,6 +90,15 @@ cat > "${APPDIR}/AppRun" <<'EOF'
 #!/bin/bash
 HERE="$(dirname "$(readlink -f "${0}")")"
 export LD_LIBRARY_PATH="${HERE}/usr/lib:${LD_LIBRARY_PATH:-}"
+# Install/refresh the "Open in VRChat" pipe helper where both the client
+# and VRChat's Proton container can see it (the AppImage mount itself is
+# under /tmp, which the container does not share).
+HELPER="${HERE}/usr/share/vrcd/vrcd-pipehelper.exe"
+# Matches the client's vrcdConfigPath, which hardcodes ~/.config.
+CONFDIR="${HOME}/.config/vrcd"
+if [[ -f "${HELPER}" ]] && ! cmp -s "${HELPER}" "${CONFDIR}/vrcd-pipehelper.exe"; then
+    mkdir -p "${CONFDIR}" && cp "${HELPER}" "${CONFDIR}/vrcd-pipehelper.exe" || true
+fi
 exec "${HERE}/usr/bin/vrcd_client" "$@"
 EOF
 chmod +x "${APPDIR}/AppRun"
