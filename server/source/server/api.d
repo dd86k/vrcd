@@ -625,6 +625,14 @@ private class ClientHandler
                     }
                     handleNotificationAction(msg);
                     break;
+                case "join_instance":
+                    if (authenticated == false)
+                    {
+                        sendError("Not authenticated");
+                        return;
+                    }
+                    handleJoinInstance(msg);
+                    break;
                 case "set_status":
                     if (authenticated == false)
                     {
@@ -1023,6 +1031,95 @@ private class ClientHandler
                 "type": JSONValue("notification_action_result"),
                 "notification_id": JSONValue(notifId),
                 "action": JSONValue(action),
+                "success": JSONValue(false),
+            ]);
+            result["error"] = JSONValue(e.msg);
+            sendLine(result.toString() ~ "\n");
+        }
+    }
+
+    /// Self-invite the logged-in user to an instance ("Self-Invite" join).
+    /// VRChat sends the account an invite to the given location, which the
+    /// user then accepts in-game. Works on every platform (no URI handler or
+    /// named pipe), so it is the cross-platform / Proton-friendly join path.
+    void handleJoinInstance(JSONValue msg)
+    {
+        string location;
+        if (const(JSONValue)* v = "location" in msg)
+            location = v.str;
+
+        if (location.length == 0)
+        {
+            sendError("Missing location");
+            return;
+        }
+
+        if (server.httpClient is null || server.apiMutex is null)
+        {
+            sendError("Server HTTP client not configured");
+            return;
+        }
+
+        server.apiMutex.lock();
+        scope(exit) server.apiMutex.unlock();
+
+        if (server.rateLimiter && server.rateLimiter.isBlocked())
+        {
+            sendError("Rate limited by VRChat, try again later");
+            return;
+        }
+
+        try
+        {
+            // Restricted instances (friends/private/invite) require the
+            // instance's shortName in the invite body; fetch it first. A
+            // failure here is non-fatal: public instances self-invite fine
+            // without it, so fall through and let the POST decide.
+            string shortName;
+            HTTPResponse snResp = server.httpClient.get(
+                "/instances/" ~ location ~ "/shortName");
+            if (server.rateLimiter)
+                server.rateLimiter.update(snResp);
+            if (snResp.code >= 200 && snResp.code < 300)
+            {
+                try
+                {
+                    JSONValue sn = parseJSON(snResp.text);
+                    if (const(JSONValue)* v = "shortName" in sn)
+                        shortName = v.str;
+                }
+                catch (Exception) {}
+            }
+
+            string body_;
+            if (shortName.length > 0)
+                body_ = JSONValue(["shortName": JSONValue(shortName)]).toString();
+
+            HTTPResponse resp = server.httpClient.post(
+                "/invite/myself/to/" ~ location, body_);
+            logDebugging("handleJoinInstance: POST /invite/myself/to/%s -> HTTP %d",
+                location, resp.code);
+            if (server.rateLimiter)
+            {
+                server.rateLimiter.update(resp);
+                server.broadcastStatus();
+            }
+            bool success = resp.code >= 200 && resp.code < 300;
+
+            JSONValue result = JSONValue([
+                "type": JSONValue("join_instance_result"),
+                "location": JSONValue(location),
+                "success": JSONValue(success),
+            ]);
+            if (success == false)
+                result["error"] = JSONValue("HTTP " ~ resp.code.to!string);
+            sendLine(result.toString() ~ "\n");
+        }
+        catch (Exception e)
+        {
+            JSONValue result = JSONValue([
+                "type": JSONValue("join_instance_result"),
+                "location": JSONValue(location),
                 "success": JSONValue(false),
             ]);
             result["error"] = JSONValue(e.msg);
