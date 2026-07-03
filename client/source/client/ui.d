@@ -20,7 +20,7 @@ import client.renderer : window_width, window_height;
 import client.gui : wasClick, requestRepaint;
 import client.state;
 import client.stream : tlsAvailable;
-import client.utils : openFolder, openBrowser;
+import client.utils : openFolder, openBrowser, openVRChatInstance;
 
 /// Active tab selection.
 enum Tab { feed, online, notifications, tools, settings }
@@ -968,6 +968,34 @@ private void drawOnlineTab(mu_Context* ctx, AppState* state, int scrollDelta)
                 sformat(headerBuf, "%s (%d/%d)", baseName, grp.nUsers, grp.capacity) : baseName;
             if (bigHeader(ctx, cast(string)header, MU_OPT_EXPANDED))
             {
+                // Join this instance. Buttons are labeled by method so the
+                // behavior is predictable: "Self-Invite" asks the server to
+                // send our account an in-game invite (works everywhere,
+                // Proton included); "Open in VRChat" hands the launch URI to
+                // the OS handler (slick when it works, flaky under Proton).
+                // Uses the full location (region tags intact); falls back to
+                // the canonical grouping key if the server carried none.
+                string joinLoc = grp.location.length > 0 ? grp.location : grp.instanceId;
+                if (joinLoc.length > 0)
+                {
+                    mu_layout_row(ctx, 1, fullCol.ptr, 40);
+                    version (Windows)
+                    {
+                        // The vrchat:// handler forwards to the running client
+                        // for slick in-client navigation.
+                        if (clickButton(ctx, "Open in VRChat"))
+                            openVRChatInstance(joinLoc);
+                    }
+                    else
+                    {
+                        // Proton's wineserver isolation breaks VRChat's URI
+                        // single-instance forwarding (a launch just cold-boots
+                        // a second offline client), so use a server self-invite
+                        // instead -- the same fallback VRCX uses on Linux.
+                        if (clickButton(ctx, "Self-Invite"))
+                            state.pendingJoins ~= joinLoc;
+                    }
+                }
                 foreach (ref FriendInfo f; grp.friends)
                     drawFriendCard(ctx, state, f);
                 mu_layout_row(ctx, 1, fullCol.ptr, 0);

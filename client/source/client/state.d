@@ -123,7 +123,8 @@ struct FriendInfo
 /// Friends grouped by instance for the friends tab.
 struct InstanceGroup
 {
-    string instanceId;
+    string instanceId; // canonical grouping key (wrld_xxx:12345)
+    string location;   // full location with region tags, for launch URIs
     string worldName;
     FriendInfo[] friends;
     long nUsers   = -1; // -1 = unknown
@@ -214,6 +215,9 @@ struct AppState
     // Notifications tab
     NotificationEntry[] notifications;
     NotificationAction[] pendingActions;
+
+    // Instance locations queued for a "Self-Invite" join, drained by gui.d.
+    string[] pendingJoins;
 
     // Current VRChat instance (from local log watcher).
     string currentLocation; // e.g. "wrld_xxx:12345~region(us)"

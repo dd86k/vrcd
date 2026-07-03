@@ -199,6 +199,19 @@ class ServerConnection
         ]));
     }
 
+    /// Ask the server to self-invite us to an instance ("Self-Invite" join).
+    /// The server holds the authenticated VRChat session and issues the REST
+    /// call; we just pass the full location. Server replies with
+    /// `join_instance_result`.
+    void sendJoinInstance(string location)
+    {
+        logDebugging("sendJoinInstance: location=%s", location);
+        sendMessage(JSONValue([
+            "type": JSONValue("join_instance"),
+            "location": JSONValue(location),
+        ]));
+    }
+
     /// Change the logged-in user's VRChat status and/or custom status message.
     /// Pass `setStatus = false` to leave the status unchanged; same for the
     /// description. Server replies with `set_status_result`.

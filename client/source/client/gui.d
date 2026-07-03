@@ -675,6 +675,17 @@ private void eventLoop(mu_Context* uictx)
             appState.pendingActions.length = 0;
         }
 
+        // Drain pending self-invite join requests.
+        if (appState.pendingJoins.length > 0)
+        {
+            if (conn && appState.connected)
+            {
+                foreach (string loc; appState.pendingJoins)
+                    conn.sendJoinInstance(loc);
+            }
+            appState.pendingJoins.length = 0;
+        }
+
         // Handle auth delegation responses.
         if (appState.authDialogSubmit)
         {
@@ -1107,6 +1118,23 @@ private void drainNetworkMessages()
                 }
                 break;
 
+            case "join_instance_result":
+                const(JSONValue) *jok = "success" in msg;
+                if (jok && jok.type == JSONType.true_)
+                {
+                    appState.addFeedEntry(0, "info", "",
+                        "Self-invite sent, check your VRChat invites", timeNow(), "", false, EventSource.system);
+                }
+                else
+                {
+                    string errMsg;
+                    if (const(JSONValue)* v = "error" in msg)
+                        errMsg = v.str;
+                    appState.addFeedEntry(0, "error", "",
+                        "Self-invite failed: " ~ errMsg, timeNow(), "", false, EventSource.system);
+                }
+                break;
+
             case "auth_request":
                 string kind;
                 if (const(JSONValue)* v = "kind" in msg)
@@ -1422,6 +1450,8 @@ private void applyFriendsSnapshot(JSONValue msg)
             InstanceGroup ig;
             if (const(JSONValue)* v = "instance_id" in grp)
                 ig.instanceId = v.str;
+            if (const(JSONValue)* v = "location" in grp)
+                ig.location = v.str;
             if (const(JSONValue)* v = "world_name" in grp)
                 ig.worldName = v.str;
             if (const(JSONValue)* v = "n_users" in grp)
