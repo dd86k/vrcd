@@ -42,6 +42,25 @@ Related projects:
 
 ![List of instances (current and capacity) and friends in each of them with color indicators](packaging/flatpak/screenshots/second.png)
 
+## Installing
+
+See [Compiling](#compiling).
+
+After connecting to the server, the authentication will be forward to the
+first connected client. After connecting, you should be good to go!
+
+### Linux: pipehelper
+
+The pipehelper subpackage is used to make "Open in VRChat" button work.
+
+1. You'll need to make a Windows build of pipehelper with `dub build :pipehelper`
+   in Windows, and place `pipehelper.exe` next to the `vrcd_client` executable or
+   in `~/.config/vrcd`.
+2. Add `STEAM_COMPAT_LAUNCHER_SERVICE=proton` in your launch options.
+
+If either piece is missing, or the IPC attempt fails, the client falls back
+to a server-side self-invite.
+
 # For Developers
 
 ## Architecture
