@@ -158,8 +158,11 @@ class ContentService
         return prints;
     }
 
-    /// List own inventory items (props, emoji, stickers, bundles, ...).
+    /// List own inventory items (props, bundles, drone/portal skins, ...).
     /// Pages through the endpoint up to a sane cap. Throws on failure.
+    /// Emoji and stickers are excluded here: they have their own STUFF
+    /// sections sourced from the files endpoint, so the Items view only
+    /// shows true inventory items.
     /// Params:
     ///   archived = Include archived items instead of active ones.
     ///   totalCount = Receives the server-reported total.
@@ -174,6 +177,7 @@ class ContentService
         {
             string path = "/inventory?n=" ~ PAGE_SIZE.to!string ~
                 "&offset=" ~ offset.to!string ~
+                "&notTypes=emoji,sticker" ~
                 "&inventoryItemArchived=" ~ (archived ? "true" : "false");
             JSONValue page = getJSON(path);
 

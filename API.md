@@ -141,7 +141,7 @@ Request the logged-in user's prints. Server replies with `prints` (single page, 
 
 ### `get_inventory`
 
-Request the logged-in user's inventory items (props: drone skins, consumable emoji drops, etc.). The server pages through VRChat's inventory API (up to 500 items) and replies with `inventory`.
+Request the logged-in user's inventory items (props, bundles, drone/portal skins, warp effects). Emoji and stickers are excluded, since they have their own sections sourced from the files endpoint. The server pages through VRChat's inventory API (up to 500 items) and replies with `inventory`.
 
 | Field      | Type   | Description                              |
 |------------|--------|------------------------------------------|
