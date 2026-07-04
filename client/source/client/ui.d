@@ -1920,17 +1920,67 @@ private void drawPrintsGrid(mu_Context* ctx, AppState* state, mu_Container* pane
     }
 }
 
+/// The heading an item falls under: its item-type label ("Drone", "Item",
+/// ...), falling back to the raw type or a catch-all bucket.
+private const(char)[] itemCategory(ref InventoryEntry it)
+{
+    if (it.itemTypeLabel.length > 0)
+        return it.itemTypeLabel;
+    if (it.itemType.length > 0)
+        return it.itemType;
+    return "Other";
+}
+
 private void drawItemsGrid(mu_Context* ctx, AppState* state, mu_Container* panel)
 {
-    foreach (size_t i, ref InventoryEntry it; state.invItems)
+    static immutable int[1] fullCol = [-1];
+
+    // Distinct categories in first-seen order. Item count is small (the
+    // server caps at 500) and categories are few, so a linear scan per
+    // group is cheap and avoids per-frame allocation.
+    const(char)[][32] cats = void;
+    size_t catCount;
+    foreach (ref InventoryEntry it; state.invItems)
     {
-        gridRow(ctx, i, panel.body_.w);
-        if (imageCell(ctx, state, panel, it.imageFileId, it.imageVersion, it.name))
+        const(char)[] cat = itemCategory(it);
+        bool seen;
+        foreach (size_t c; 0 .. catCount)
+            if (cats[c] == cat)
+            {
+                seen = true;
+                break;
+            }
+        if (seen == false && catCount < cats.length)
+            cats[catCount++] = cat;
+    }
+
+    foreach (size_t c; 0 .. catCount)
+    {
+        const(char)[] cat = cats[c];
+
+        // Heading banner spanning the panel width.
+        mu_layout_row(ctx, 1, fullCol.ptr, 34);
+        mu_Rect head = mu_layout_next(ctx);
+        mu_draw_rect(ctx, head, mu_Color(45, 55, 75, 255));
+        // Safe cast: mu_draw_text copies the text into the command queue.
+        mu_draw_control_text(ctx, cast(string) cat, head, MU_COLOR_TEXT, 0);
+
+        // This category's items, indexed within the group so each group
+        // packs a fresh set of rows under its heading.
+        size_t index;
+        foreach (ref InventoryEntry it; state.invItems)
         {
-            state.selectedInvItem = it;
-            state.invDetailOpen = true;
-            state.invDeleteArmed = false;
-            requestRepaint();
+            if (itemCategory(it) != cat)
+                continue;
+            gridRow(ctx, index, panel.body_.w);
+            index++;
+            if (imageCell(ctx, state, panel, it.imageFileId, it.imageVersion, it.name))
+            {
+                state.selectedInvItem = it;
+                state.invDetailOpen = true;
+                state.invDeleteArmed = false;
+                requestRepaint();
+            }
         }
     }
 }
