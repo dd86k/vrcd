@@ -8,7 +8,7 @@ import std.algorithm.sorting : sort;
 import std.conv : to;
 import std.format : format;
 import std.json;
-import std.string : fromStringz;
+import std.string : fromStringz, indexOf;
 
 import core.thread;
 
@@ -22,6 +22,7 @@ import ddui;
 
 import client.connection;
 import client.stream : loadTLS;
+import client.imagecache;
 import client.logwatcher;
 import client.notifications;
 import client.renderer;
@@ -207,6 +208,9 @@ int runGui(string host, ushort port, string secret, long sinceId,
         logError("SDL2_image library too old");
         return 1;
     }
+
+    // Content image disk cache (gallery thumbnails, prints, ...).
+    initImageCache();
 
     // NOTE: SDL_HINT_FRAMEBUFFER_ACCELERATION is not set because we use
     //       SDL_CreateRenderer + owned surface instead of SDL_GetWindowSurface
@@ -814,6 +818,94 @@ private void eventLoop(mu_Context* uictx)
             doSaveSettings();
         }
 
+        // Handle inventory tab (re)load request for the current section.
+        if (appState.invRefreshRequested)
+        {
+            appState.invRefreshRequested = false;
+            if (conn && appState.connected)
+            {
+                int sec = cast(int) appState.invSection;
+                string tag = invSectionTag(appState.invSection);
+                if (tag)
+                    conn.requestFiles(tag, 60, 0);
+                else if (appState.invSection == InvSection.prints)
+                    conn.requestPrints();
+                else
+                    conn.requestInventory();
+                appState.invLoading[sec] = true;
+                appState.invStale[sec] = false;
+                appState.invError[sec] = null;
+            }
+        }
+
+        // Handle "Load more" for paged files sections.
+        if (appState.invLoadMoreRequested)
+        {
+            appState.invLoadMoreRequested = false;
+            int sec = cast(int) appState.invSection;
+            string tag = invSectionTag(appState.invSection);
+            if (tag && conn && appState.connected && appState.invLoading[sec] == false)
+            {
+                conn.requestFiles(tag, 60, appState.invFiles[sec].length);
+                appState.invLoading[sec] = true;
+            }
+        }
+
+        // Dispatch queued image requests: local disk cache first, then the
+        // server proxy. In-flight and known-failed keys are skipped so a
+        // visible placeholder re-enqueueing every frame stays cheap.
+        if (appState.pendingImageRequests.length > 0)
+        {
+            foreach (ref ImageRequest req; appState.pendingImageRequests)
+            {
+                string key = imageKey(req.fileId, req.fileVersion, req.size);
+                if (key in appState.imageRequestsInFlight)
+                    continue;
+                if (key in appState.failedImages)
+                    continue;
+                if (loadFromDisk(key))
+                    continue;
+                if (conn && appState.connected)
+                {
+                    conn.requestImage(req.fileId, req.fileVersion, req.size);
+                    appState.imageRequestsInFlight[key] = true;
+                }
+            }
+            appState.pendingImageRequests.length = 0;
+        }
+
+        // Drain queued content management actions.
+        if (appState.pendingContentActions.length > 0)
+        {
+            if (conn && appState.connected)
+            {
+                foreach (ref ContentAction act; appState.pendingContentActions)
+                {
+                    switch (act.kind)
+                    {
+                    case "delete_file":  conn.sendDeleteFile(act.id); break;
+                    case "delete_print": conn.sendDeletePrint(act.id); break;
+                    case "set_icon":     conn.sendSetUserIcon(act.id); break;
+                    case "equip", "unequip", "consume":
+                        conn.sendInventoryAction(act.kind, act.id, act.extra);
+                        break;
+                    default:
+                        logWarn("Unknown content action: %s", act.kind);
+                        continue;
+                    }
+                    appState.invActionInFlight = true;
+                }
+            }
+            appState.pendingContentActions.length = 0;
+        }
+
+        // Handle upload request from the inventory tab.
+        if (appState.invUploadRequested)
+        {
+            appState.invUploadRequested = false;
+            doInventoryUpload();
+        }
+
         // Build UI
         mu_begin(uictx);
         drawFullWindow(uictx, &appState, pendingScrollY);
@@ -844,7 +936,12 @@ private void eventLoop(mu_Context* uictx)
             {
                 case MU_COMMAND_TEXT: r_draw_text(cmd.text.str.ptr, cmd.text.pos, cmd.text.color); break;
                 case MU_COMMAND_RECT: r_draw_rect(cmd.rect.rect, cmd.rect.color); break;
-                case MU_COMMAND_ICON: r_draw_icon(cmd.icon.id, cmd.icon.rect, cmd.icon.color); break;
+                case MU_COMMAND_ICON:
+                    if (r_is_image_id(cmd.icon.id))
+                        r_draw_image(cmd.icon.id, cmd.icon.rect);
+                    else
+                        r_draw_icon(cmd.icon.id, cmd.icon.rect, cmd.icon.color);
+                    break;
                 case MU_COMMAND_CLIP: r_set_clip_rect(cmd.clip.rect); break;
                 default: break;
             }
@@ -938,6 +1035,12 @@ private void drainNetworkMessages()
 
                 // Store actionable notifications.
                 storeNotification(eventType, msg, user, rawReceivedAt);
+
+                // The user's files/prints/inventory changed somewhere else
+                // (in-game upload, another device). Mark the section stale
+                // so the STUFF tab reloads it when next viewed.
+                if (eventType == "content-refresh")
+                    markContentStale(msg);
 
                 // Detect "player joining" from friend-location events:
                 // when a friend's location is "traveling" and their
@@ -1314,6 +1417,50 @@ private void drainNetworkMessages()
                     timeNow(), "", false, EventSource.dropaportal);
                 break;
 
+            case "files":
+                applyFilesReply(msg);
+                break;
+
+            case "prints":
+                applyPrintsReply(msg);
+                break;
+
+            case "inventory":
+                applyInventoryReply(msg);
+                break;
+
+            case "image":
+                applyImageReply(msg);
+                break;
+
+            case "delete_file_result", "delete_print_result",
+                "set_user_icon_result", "inventory_action_result":
+                applyContentActionResult(msgType, msg);
+                break;
+
+            case "upload_image_result", "upload_print_result":
+                appState.invUploadInFlight = false;
+                const(JSONValue) *jup = "success" in msg;
+                if (jup && jup.type == JSONType.true_)
+                {
+                    appState.invUploadStatus = "Upload complete";
+                    // Reload the section so the new entry shows up.
+                    int sec = cast(int) appState.invSection;
+                    appState.invStale[sec] = true;
+                    appState.invRefreshRequested = true;
+                    if (appState.droppedFiles.length > 0)
+                        appState.droppedFiles = appState.droppedFiles[1 .. $];
+                }
+                else
+                {
+                    string errMsg;
+                    if (const(JSONValue)* v = "error" in msg)
+                        errMsg = v.str;
+                    appState.invUploadStatus = "Upload failed: "
+                        ~ (errMsg.length > 0 ? errMsg : "unknown error");
+                }
+                break;
+
             default:
                 break;
             }
@@ -1322,6 +1469,316 @@ private void drainNetworkMessages()
         {
             logError("Failed to parse message: %s", e.msg);
         }
+    }
+}
+
+/// Mark the inventory section named by a content-refresh event as stale.
+private void markContentStale(JSONValue msg)
+{
+    string contentType;
+    if (const(JSONValue)* content = "content" in msg)
+    {
+        if (content.type == JSONType.object)
+            if (const(JSONValue)* v = "contentType" in *content)
+                contentType = v.str;
+    }
+
+    InvSection section;
+    switch (contentType)
+    {
+    case "gallery":          section = InvSection.gallery; break;
+    case "icon":             section = InvSection.icons; break;
+    case "sticker":          section = InvSection.stickers; break;
+    case "emoji":            section = InvSection.emoji; break;
+    case "print", "prints":  section = InvSection.prints; break;
+    case "inventory":        section = InvSection.items; break;
+    default:
+        return;
+    }
+    appState.invStale[cast(int) section] = true;
+}
+
+/// Apply a `files` listing reply (gallery/icon/sticker/emoji page).
+private void applyFilesReply(JSONValue msg)
+{
+    string tag;
+    if (const(JSONValue)* v = "tag" in msg)
+        tag = v.str;
+
+    InvSection section;
+    switch (tag)
+    {
+    case "gallery": section = InvSection.gallery; break;
+    case "icon":    section = InvSection.icons; break;
+    case "sticker": section = InvSection.stickers; break;
+    case "emoji":   section = InvSection.emoji; break;
+    default:
+        logWarn("files reply with unknown tag: %s", tag);
+        return;
+    }
+    int sec = cast(int) section;
+
+    appState.invLoading[sec] = false;
+    appState.invLoaded[sec] = true;
+    if (const(JSONValue)* v = "error" in msg)
+    {
+        appState.invError[sec] = v.str;
+        return;
+    }
+    appState.invError[sec] = null;
+
+    long offset;
+    if (const(JSONValue)* v = "offset" in msg)
+        offset = v.integer;
+    long count;
+    if (const(JSONValue)* v = "count" in msg)
+        count = v.integer;
+
+    ContentFile[] page;
+    if (const(JSONValue)* files = "files" in msg)
+    {
+        foreach (ref const(JSONValue) f; files.array)
+        {
+            ContentFile entry;
+            if (const(JSONValue)* v = "id" in f)
+                entry.fileId = v.str;
+            if (const(JSONValue)* v = "name" in f)
+                entry.name = v.str;
+            if (const(JSONValue)* v = "version" in f)
+                entry.fileVersion = v.integer;
+            if (const(JSONValue)* v = "mimeType" in f)
+                entry.mimeType = v.str;
+            if (entry.fileId.length > 0 && entry.fileVersion > 0)
+                page ~= entry;
+        }
+    }
+
+    if (offset == 0)
+        appState.invFiles[sec] = page;
+    else
+        appState.invFiles[sec] ~= page;
+    // A full page means more entries may follow.
+    appState.invMoreAvailable[sec] = count >= 60;
+}
+
+/// Apply a `prints` listing reply.
+private void applyPrintsReply(JSONValue msg)
+{
+    int sec = cast(int) InvSection.prints;
+    appState.invLoading[sec] = false;
+    appState.invLoaded[sec] = true;
+    if (const(JSONValue)* v = "error" in msg)
+    {
+        appState.invError[sec] = v.str;
+        return;
+    }
+    appState.invError[sec] = null;
+
+    PrintEntry[] list;
+    if (const(JSONValue)* prints = "prints" in msg)
+    {
+        foreach (ref const(JSONValue) p; prints.array)
+        {
+            PrintEntry entry;
+            if (const(JSONValue)* v = "id" in p)
+                entry.printId = v.str;
+            if (const(JSONValue)* v = "file_id" in p)
+                entry.fileId = v.str;
+            if (const(JSONValue)* v = "file_version" in p)
+                entry.fileVersion = v.integer;
+            if (const(JSONValue)* v = "note" in p)
+                entry.note = v.str;
+            if (const(JSONValue)* v = "worldName" in p)
+                entry.worldName = v.str;
+            if (const(JSONValue)* v = "timestamp" in p)
+                entry.timestamp = v.str;
+            else if (const(JSONValue)* v = "createdAt" in p)
+                entry.timestamp = v.str;
+            if (entry.printId.length > 0)
+                list ~= entry;
+        }
+    }
+    appState.invPrints = list;
+}
+
+/// Apply an `inventory` listing reply.
+private void applyInventoryReply(JSONValue msg)
+{
+    int sec = cast(int) InvSection.items;
+    appState.invLoading[sec] = false;
+    appState.invLoaded[sec] = true;
+    if (const(JSONValue)* v = "error" in msg)
+    {
+        appState.invError[sec] = v.str;
+        return;
+    }
+    appState.invError[sec] = null;
+
+    if (const(JSONValue)* v = "total_count" in msg)
+        appState.invItemsTotal = v.integer;
+
+    InventoryEntry[] list;
+    if (const(JSONValue)* items = "items" in msg)
+    {
+        foreach (ref const(JSONValue) it; items.array)
+        {
+            InventoryEntry entry;
+            if (const(JSONValue)* v = "id" in it)
+                entry.id = v.str;
+            if (const(JSONValue)* v = "name" in it)
+                entry.name = v.str;
+            if (const(JSONValue)* v = "description" in it)
+                entry.description = v.str;
+            if (const(JSONValue)* v = "itemType" in it)
+                entry.itemType = v.str;
+            if (const(JSONValue)* v = "itemTypeLabel" in it)
+                entry.itemTypeLabel = v.str;
+            if (const(JSONValue)* v = "equipSlot" in it)
+                entry.equipSlot = v.str;
+            if (const(JSONValue)* v = "flags" in it)
+            {
+                if (v.type == JSONType.array)
+                    foreach (ref const(JSONValue) f; v.array)
+                        if (f.type == JSONType.string)
+                            entry.flags ~= f.str;
+            }
+            if (const(JSONValue)* v = "isArchived" in it)
+                entry.archived = v.type == JSONType.true_;
+            if (const(JSONValue)* v = "image_file_id" in it)
+                entry.imageFileId = v.str;
+            if (const(JSONValue)* v = "image_version" in it)
+                entry.imageVersion = v.integer;
+            if (entry.id.length > 0)
+                list ~= entry;
+        }
+    }
+    appState.invItems = list;
+}
+
+/// Apply an `image` reply: decode into the image cache, or record failure.
+private void applyImageReply(JSONValue msg)
+{
+    import std.base64 : Base64;
+
+    string fileId;
+    if (const(JSONValue)* v = "file_id" in msg)
+        fileId = v.str;
+    long fileVersion = 1;
+    if (const(JSONValue)* v = "version" in msg)
+        fileVersion = v.integer;
+    int size;
+    if (const(JSONValue)* v = "size" in msg)
+        size = cast(int) v.integer;
+
+    string key = imageKey(fileId, fileVersion, size);
+    appState.imageRequestsInFlight.remove(key);
+
+    const(JSONValue) *jok = "success" in msg;
+    if (jok is null || jok.type != JSONType.true_)
+    {
+        string errMsg;
+        if (const(JSONValue)* v = "error" in msg)
+            errMsg = v.str;
+        logWarn("image %s failed: %s", key, errMsg);
+        appState.failedImages[key] = true;
+        return;
+    }
+
+    const(ubyte)[] data;
+    if (const(JSONValue)* v = "data_base64" in msg)
+    {
+        try data = Base64.decode(v.str);
+        catch (Exception e)
+        {
+            logWarn("image %s: bad base64: %s", key, e.msg);
+            appState.failedImages[key] = true;
+            return;
+        }
+    }
+    if (insertEncoded(key, data) == false)
+        appState.failedImages[key] = true;
+}
+
+/// Apply a content management action result (delete/set icon/equip/...).
+private void applyContentActionResult(string msgType, JSONValue msg)
+{
+    appState.invActionInFlight = false;
+    appState.invDeleteArmed = false;
+
+    const(JSONValue) *jok = "success" in msg;
+    bool ok = jok && jok.type == JSONType.true_;
+    if (ok == false)
+    {
+        string errMsg;
+        if (const(JSONValue)* v = "error" in msg)
+            errMsg = v.str;
+        appState.addFeedEntry(0, "error", "",
+            "Action failed: " ~ (errMsg.length > 0 ? errMsg : msgType),
+            timeNow(), "", false, EventSource.system);
+        return;
+    }
+
+    switch (msgType)
+    {
+    case "delete_file_result":
+        string fileId;
+        if (const(JSONValue)* v = "file_id" in msg)
+            fileId = v.str;
+        // Splice out of every files section; a file lives in only one, but
+        // scanning all four is cheaper than tracking which.
+        foreach (size_t sec; 0 .. appState.invFiles.length)
+        {
+            ContentFile[] kept;
+            foreach (ref ContentFile f; appState.invFiles[sec])
+                if (f.fileId != fileId)
+                    kept ~= f;
+            appState.invFiles[sec] = kept;
+        }
+        if (appState.selectedInvFile.fileId == fileId)
+            appState.invDetailOpen = false;
+        appState.addFeedEntry(0, "system", "", "File deleted",
+            timeNow(), "", false, EventSource.system);
+        break;
+
+    case "delete_print_result":
+        string printId;
+        if (const(JSONValue)* v = "print_id" in msg)
+            printId = v.str;
+        PrintEntry[] kept;
+        foreach (ref PrintEntry p; appState.invPrints)
+            if (p.printId != printId)
+                kept ~= p;
+        appState.invPrints = kept;
+        if (appState.selectedInvPrint.printId == printId)
+            appState.invDetailOpen = false;
+        appState.addFeedEntry(0, "system", "", "Print deleted",
+            timeNow(), "", false, EventSource.system);
+        break;
+
+    case "set_user_icon_result":
+        string fileId;
+        if (const(JSONValue)* v = "file_id" in msg)
+            fileId = v.str;
+        appState.addFeedEntry(0, "system", "",
+            fileId.length > 0 ? "Profile icon updated" : "Profile icon cleared",
+            timeNow(), "", false, EventSource.system);
+        break;
+
+    case "inventory_action_result":
+        string action;
+        if (const(JSONValue)* v = "action" in msg)
+            action = v.str;
+        appState.addFeedEntry(0, "system", "",
+            "Inventory action done: " ~ action,
+            timeNow(), "", false, EventSource.system);
+        // Item state (equipSlot, consumed) changed server-side; reload.
+        appState.invStale[cast(int) InvSection.items] = true;
+        if (appState.invSection == InvSection.items)
+            appState.invRefreshRequested = true;
+        break;
+
+    default:
+        break;
     }
 }
 
@@ -2053,6 +2510,82 @@ private void doSaveSettings()
 
     saved = s; // Update module-level copy used by notification dispatch.
     saveSettings(s);
+}
+
+/// Read the first dropped file, validate it for the current inventory
+/// section, and send it to the server for upload.
+private void doInventoryUpload()
+{
+    import std.base64 : Base64;
+    import std.file : read;
+
+    if (conn is null || appState.connected == false || appState.invUploadInFlight)
+        return;
+    if (appState.invSection == InvSection.items)
+        return; // nothing uploadable there
+    if (appState.droppedFiles.length == 0)
+    {
+        appState.invUploadStatus = "Drop a PNG onto the window first";
+        return;
+    }
+
+    string path = appState.droppedFiles[0];
+    ubyte[] data;
+    try
+        data = cast(ubyte[]) read(path);
+    catch (Exception e)
+    {
+        appState.invUploadStatus = "Cannot read file: " ~ e.msg;
+        return;
+    }
+
+    string err = validateUploadPNG(data, appState.invSection);
+    if (err)
+    {
+        appState.invUploadStatus = err;
+        return;
+    }
+
+    string b64 = cast(string) Base64.encode(data);
+    if (appState.invSection == InvSection.prints)
+    {
+        string note = cast(string) fromStringz(appState.invUploadNote.ptr).idup;
+        // Attach the current world when known (log watcher location).
+        string worldId;
+        ptrdiff_t colon = indexOf(appState.currentLocation, ':');
+        if (colon > 0)
+            worldId = appState.currentLocation[0 .. colon];
+        conn.sendUploadPrint(b64, note, worldId, "");
+    }
+    else
+    {
+        conn.sendUploadImage(invSectionTag(appState.invSection), b64);
+    }
+    appState.invUploadInFlight = true;
+    appState.invUploadStatus = "Uploading...";
+}
+
+/// Validate an image for VRChat upload: PNG only, 10MB and 2000x2000 max,
+/// square for stickers and emoji. Returns an error message, or null when
+/// acceptable. Mirrors the server-side check so most rejections happen
+/// before base64-encoding megabytes onto the wire.
+private string validateUploadPNG(const(ubyte)[] data, InvSection section)
+{
+    static immutable ubyte[8] pngSignature =
+        [0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A];
+
+    if (data.length > 10 * 1024 * 1024)
+        return "File too large (max 10MB)";
+    if (data.length < 24 || data[0 .. 8] != pngSignature)
+        return "Not a PNG file (VRChat only accepts PNG)";
+    // IHDR is always the first chunk: width/height at offsets 16/20.
+    uint width  = (data[16] << 24) | (data[17] << 16) | (data[18] << 8) | data[19];
+    uint height = (data[20] << 24) | (data[21] << 16) | (data[22] << 8) | data[23];
+    if (width == 0 || height == 0 || width > 2000 || height > 2000)
+        return format("Image is %dx%d (max 2000x2000)", width, height);
+    if ((section == InvSection.stickers || section == InvSection.emoji) && width != height)
+        return "Stickers and emoji must be square";
+    return null;
 }
 
 /// Copy a D string into a fixed-size null-terminated char buffer.

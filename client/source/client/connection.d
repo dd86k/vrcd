@@ -4,6 +4,7 @@
 /// License: BSD-3-Clause-Clear
 module client.connection;
 
+import core.sync.mutex;
 import std.json;
 import std.conv : to;
 import std.socket;
@@ -37,6 +38,10 @@ class ServerConnection
     private string lastConnectError;
     private EventCallback onEvent;
     private void delegate(string) onError;
+    private Mutex sendMutex;
+
+    /// Protocol version reported by the server in auth_ok. Zero when unknown.
+    long serverVersion;
 
     this(string host, ushort port, string secret,
         bool useTls = false, bool tlsSkipVerify = false,
@@ -49,6 +54,7 @@ class ServerConnection
         this.tlsSkipVerify = tlsSkipVerify;
         this.tlsClientCert = tlsClientCert;
         this.tlsClientKey = tlsClientKey;
+        this.sendMutex = new Mutex();
     }
 
     /// Set callback for incoming events.
@@ -133,7 +139,6 @@ class ServerConnection
         if (msgType == "auth_ok")
         {
             authenticated = true;
-            long serverVersion = 0;
             if ("server_version" in resp && resp["server_version"].type == JSONType.integer)
                 serverVersion = resp["server_version"].get!long;
             logInfo("Authenticated (server v%d)", serverVersion);
@@ -263,6 +268,128 @@ class ServerConnection
         sendMessage(JSONValue([
             "type": JSONValue("dap_pair_cancel"),
         ]));
+    }
+
+    /// Request a page of the user's files (tag: gallery/icon/sticker/emoji).
+    /// Server replies with `files`.
+    void requestFiles(string tag, long n, long offset)
+    {
+        logDebugging("requestFiles: tag=%s n=%d offset=%d", tag, n, offset);
+        sendMessage(JSONValue([
+            "type": JSONValue("get_files"),
+            "tag": JSONValue(tag),
+            "n": JSONValue(n),
+            "offset": JSONValue(offset),
+        ]));
+    }
+
+    /// Request the user's prints. Server replies with `prints`.
+    void requestPrints()
+    {
+        logDebugging("requestPrints");
+        sendMessage(JSONValue([
+            "type": JSONValue("get_prints"),
+        ]));
+    }
+
+    /// Request the user's inventory items. Server replies with `inventory`.
+    void requestInventory(bool archived = false)
+    {
+        logDebugging("requestInventory: archived=%s", archived);
+        sendMessage(JSONValue([
+            "type": JSONValue("get_inventory"),
+            "archived": JSONValue(archived),
+        ]));
+    }
+
+    /// Request image bytes through the server proxy. size 0 downloads the
+    /// original file, other sizes a thumbnail. Server replies with `image`
+    /// (base64 payload).
+    void requestImage(string fileId, long fileVersion, int size)
+    {
+        logDebugging("requestImage: %s v%d size=%d", fileId, fileVersion, size);
+        sendMessage(JSONValue([
+            "type": JSONValue("get_image"),
+            "file_id": JSONValue(fileId),
+            "version": JSONValue(fileVersion),
+            "size": JSONValue(size),
+        ]));
+    }
+
+    /// Delete a file (gallery/icon/sticker/emoji). Server replies with
+    /// `delete_file_result`.
+    void sendDeleteFile(string fileId)
+    {
+        logDebugging("sendDeleteFile: %s", fileId);
+        sendMessage(JSONValue([
+            "type": JSONValue("delete_file"),
+            "file_id": JSONValue(fileId),
+        ]));
+    }
+
+    /// Delete a print. Server replies with `delete_print_result`.
+    void sendDeletePrint(string printId)
+    {
+        logDebugging("sendDeletePrint: %s", printId);
+        sendMessage(JSONValue([
+            "type": JSONValue("delete_print"),
+            "print_id": JSONValue(printId),
+        ]));
+    }
+
+    /// Set (or clear, with an empty fileId) the profile icon. Requires
+    /// VRC+. Server replies with `set_user_icon_result`.
+    void sendSetUserIcon(string fileId)
+    {
+        logDebugging("sendSetUserIcon: %s", fileId.length ? fileId : "(clear)");
+        sendMessage(JSONValue([
+            "type": JSONValue("set_user_icon"),
+            "file_id": JSONValue(fileId),
+        ]));
+    }
+
+    /// Equip/unequip/consume an inventory item. `slot` is required for
+    /// equip and unequip. Server replies with `inventory_action_result`.
+    void sendInventoryAction(string action, string inventoryId, string slot)
+    {
+        logDebugging("sendInventoryAction: %s %s slot=%s", action, inventoryId, slot);
+        JSONValue msg = JSONValue([
+            "type": JSONValue("inventory_action"),
+            "action": JSONValue(action),
+            "inventory_id": JSONValue(inventoryId),
+        ]);
+        if (slot.length)
+            msg["slot"] = JSONValue(slot);
+        sendMessage(msg);
+    }
+
+    /// Upload a PNG to the files API (tag: gallery/icon/sticker/emoji).
+    /// Server replies with `upload_image_result`.
+    void sendUploadImage(string tag, string dataBase64)
+    {
+        logDebugging("sendUploadImage: tag=%s bytes=%d", tag, dataBase64.length);
+        sendMessage(JSONValue([
+            "type": JSONValue("upload_image"),
+            "tag": JSONValue(tag),
+            "data_base64": JSONValue(dataBase64),
+        ]));
+    }
+
+    /// Upload a print. Server replies with `upload_print_result`.
+    void sendUploadPrint(string dataBase64, string note, string worldId, string worldName)
+    {
+        logDebugging("sendUploadPrint: bytes=%d note=%s", dataBase64.length, note);
+        JSONValue msg = JSONValue([
+            "type": JSONValue("upload_print"),
+            "data_base64": JSONValue(dataBase64),
+        ]);
+        if (note.length)
+            msg["note"] = JSONValue(note);
+        if (worldId.length)
+            msg["world_id"] = JSONValue(worldId);
+        if (worldName.length)
+            msg["world_name"] = JSONValue(worldName);
+        sendMessage(msg);
     }
 
     /// Read and dispatch messages until the connection closes.
@@ -456,7 +583,21 @@ private:
     {
         string line = msg.toString() ~ "\n";
         logTrace("sendMessage: len=%d", line.length);
-        stream.send(cast(const(void)[]) line);
+
+        // Serialized between the main thread (requests) and the network
+        // thread (pongs); large lines may need several send() calls and
+        // interleaving them would corrupt the JSON-L framing.
+        sendMutex.lock();
+        scope(exit) sendMutex.unlock();
+
+        const(void)[] remaining = cast(const(void)[]) line;
+        while (remaining.length > 0)
+        {
+            ptrdiff_t sent = stream.send(remaining);
+            if (sent <= 0)
+                break; // Disconnected; receive loop will notice.
+            remaining = remaining[sent .. $];
+        }
     }
 
     /// Block until one complete JSON-L message is received.

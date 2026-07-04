@@ -244,6 +244,71 @@ void r_draw_icon(int id, mu_Rect rect, mu_Color color)
     SDL_UnlockSurface(surface);
 }
 
+//
+// Image drawing (thumbnails, photos). Registered SDL surfaces are drawn
+// through the microui icon command stream: ids at or above R_IMAGE_ID_BASE
+// are image handles, anything below is a built-in glyph icon. The two
+// ranges cannot collide since MU_ICON_MAX is a single-digit enum.
+//
+
+enum int R_IMAGE_ID_BASE = 0x1000;
+private __gshared SDL_Surface*[int] registeredImages;
+private __gshared int nextImageId = R_IMAGE_ID_BASE;
+
+/// Register a surface for r_draw_image. The caller keeps ownership and
+/// must r_unregister_image before freeing the surface.
+int r_register_image(SDL_Surface* img)
+{
+    int id = nextImageId++;
+    registeredImages[id] = img;
+    return id;
+}
+
+/// Remove a previously registered surface. Draw calls against a removed
+/// id are no-ops, so eviction never races the command stream.
+void r_unregister_image(int id)
+{
+    registeredImages.remove(id);
+}
+
+/// Whether this icon-command id addresses a registered image.
+bool r_is_image_id(int id)
+{
+    return id >= R_IMAGE_ID_BASE;
+}
+
+/// Draw a registered image aspect-fit into rect (centered, letterboxed).
+void r_draw_image(int id, mu_Rect rect)
+{
+    SDL_Surface** entry = id in registeredImages;
+    if (entry is null)
+        return;
+
+    SDL_Surface* img = *entry;
+    if (img is null || img.w < 1 || img.h < 1 || rect.w < 1 || rect.h < 1)
+        return;
+
+    // Aspect-fit: scale to the limiting axis, center along the other.
+    int dw = rect.w;
+    int dh = cast(int)(cast(long)img.h * rect.w / img.w);
+    if (dh > rect.h)
+    {
+        dh = rect.h;
+        dw = cast(int)(cast(long)img.w * rect.h / img.h);
+    }
+    if (dw < 1 || dh < 1)
+        return;
+    SDL_Rect dst = SDL_Rect(
+        rect.x + (rect.w - dw) / 2,
+        rect.y + (rect.h - dh) / 2,
+        dw, dh);
+
+    SDL_Rect clipRect = SDL_Rect(clip.x, clip.y, clip.w, clip.h);
+    SDL_SetClipRect(surface, &clipRect);
+    SDL_BlitScaled(img, null, surface, &dst);
+    SDL_SetClipRect(surface, null);
+}
+
 int r_get_text_width(const(char) *text, int len)
 {
     if (text is null || fonts.length == 0) return 0;

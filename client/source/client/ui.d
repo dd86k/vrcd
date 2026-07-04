@@ -16,6 +16,7 @@ import ddui;
 
 import client.notifications : notifyEventLabels, feedEventLabels, feedFilterSections,
     feedEventIndex, prettyEventType;
+import client.imagecache : imageKey, getIconId;
 import client.renderer : window_width, window_height;
 import client.gui : wasClick, requestRepaint;
 import client.state;
@@ -23,7 +24,7 @@ import client.stream : tlsAvailable;
 import client.utils : openFolder, openBrowser;
 
 /// Active tab selection.
-enum Tab { feed, online, notifications, tools, settings }
+enum Tab { feed, online, notifications, inventory, tools, settings }
 private Tab activeTab = Tab.feed;
 
 // Feed filter state
@@ -89,6 +90,7 @@ void drawFullWindow(mu_Context* ctx, AppState* state, int scrollDelta)
                 case Tab.feed:          break; // handled above
                 case Tab.online:        drawOnlineTab(ctx, state, tabScroll);        break;
                 case Tab.notifications: drawNotificationsTab(ctx, state, tabScroll); break;
+                case Tab.inventory:     drawInventoryTab(ctx, state, tabScroll);     break;
                 case Tab.tools:         drawToolsTab(ctx, state, tabScroll);         break;
                 case Tab.settings:      drawSettingsTab(ctx, state, tabScroll);      break;
             }
@@ -116,16 +118,17 @@ private void drawTabBar(mu_Context* ctx)
 {
     // NOTE: Take padding into the calculation to make settings button slightly more equal
     //       With my testing, this makes 187px for first four and 186px wide for SETTINGS
-    enum BUTTONS = 5;
+    enum BUTTONS = 6;
     enum PADDING = 4; // default style has margin=4
     int tabWidth = (window_width - (PADDING * (BUTTONS+1))) / BUTTONS;
-    int[BUTTONS] tabCols = [tabWidth, tabWidth, tabWidth, tabWidth, -1];
+    int[BUTTONS] tabCols = [tabWidth, tabWidth, tabWidth, tabWidth, tabWidth, -1];
     mu_layout_row(ctx, BUTTONS, tabCols.ptr, 60);
 
     // Highlight active tab by drawing a colored background.
     drawTabButton(ctx, "FEED",          Tab.feed);
     drawTabButton(ctx, "ONLINE",        Tab.online);
     drawTabButton(ctx, "INBOX",         Tab.notifications);
+    drawTabButton(ctx, "STUFF",         Tab.inventory);
     drawTabButton(ctx, "TOOLS",         Tab.tools);
     drawTabButton(ctx, "SETTINGS",      Tab.settings);
 }
@@ -1648,6 +1651,482 @@ string prettyNotifType(string notifType)
 }
 
 /// Tools tab: utility buttons.
+//
+// Inventory ("STUFF") tab: gallery, icons, stickers, emoji, prints, items.
+//
+
+/// Section labels, indexed by InvSection.
+private static immutable string[INV_SECTIONS] invSectionLabels =
+    ["Gallery", "Icons", "Stickers", "Emoji", "Prints", "Items"];
+
+/// Thumbnail edge size requested for grid cells.
+private enum int INV_THUMBNAIL_SIZE = 256;
+
+/// Files-API page size; a full reply page means more may follow.
+private enum int INV_PAGE_SIZE = 60;
+
+private void drawInventoryTab(mu_Context* ctx, AppState* state, int scrollDelta)
+{
+    if (state.invDetailOpen)
+    {
+        drawInventoryDetailPage(ctx, state, scrollDelta);
+        return;
+    }
+
+    static immutable int[1] fullCol = [-1];
+    int sec = cast(int) state.invSection;
+
+    mu_begin_panel(ctx, "InventoryPanel");
+    applyScroll(ctx, scrollDelta);
+    mu_Container* panel = mu_get_current_container(ctx);
+    int bodyW = panel.body_.w;
+
+    // Auto-load the visible section (initial view, reconnect, or a
+    // content-refresh event marking it stale).
+    if (state.connected && state.invLoading[sec] == false
+        && (state.invLoaded[sec] == false || state.invStale[sec]))
+        state.invRefreshRequested = true;
+
+    // Section selector row.
+    enum PADDING = 4;
+    int secWidth = (bodyW - (PADDING * (INV_SECTIONS + 1))) / INV_SECTIONS;
+    int[INV_SECTIONS] secCols = [secWidth, secWidth, secWidth, secWidth, secWidth, -1];
+    mu_layout_row(ctx, INV_SECTIONS, secCols.ptr, 50);
+    foreach (int i; 0 .. INV_SECTIONS)
+    {
+        InvSection section = cast(InvSection) i;
+        if (state.invSection == section)
+        {
+            mu_Rect r = mu_layout_next(ctx);
+            mu_draw_rect(ctx, r, mu_Color(60, 80, 120, 255));
+            mu_draw_control_text(ctx, invSectionLabels[i], r, MU_COLOR_TEXT, MU_OPT_ALIGNCENTER);
+        }
+        else if (mu_button(ctx, invSectionLabels[i]))
+        {
+            state.invSection = section;
+            state.invDeleteArmed = false;
+        }
+    }
+    // The selector row may have just switched sections; everything below
+    // must index state arrays with the fresh value.
+    sec = cast(int) state.invSection;
+
+    // Status row: count/loading state + Refresh.
+    char[96] statusBuf = void;
+    const(char)[] status;
+    if (state.connected == false)
+        status = "Not connected";
+    else if (state.invLoading[sec])
+        status = "Loading...";
+    else if (state.invError[sec].length > 0)
+        status = state.invError[sec];
+    else
+    {
+        final switch (state.invSection) with (InvSection)
+        {
+        case gallery, icons, stickers, emoji:
+            status = sformat(statusBuf, "%d file(s)", state.invFiles[sec].length);
+            break;
+        case prints:
+            status = sformat(statusBuf, "%d print(s)", state.invPrints.length);
+            break;
+        case items:
+            status = sformat(statusBuf, "%d item(s) of %d", state.invItems.length,
+                state.invItemsTotal);
+            break;
+        }
+    }
+    int[2] statusCols = [-130, -1];
+    mu_layout_row(ctx, 2, statusCols.ptr, 40);
+    // Safe cast: mu_draw_text copies the text into the command queue.
+    mu_label(ctx, cast(string) status);
+    if (clickButton(ctx, "Refresh") && state.invLoading[sec] == false)
+        state.invRefreshRequested = true;
+
+    // Upload row for uploadable sections.
+    if (state.invSection != InvSection.items)
+        drawInventoryUploadRow(ctx, state);
+
+    // Thumbnail grid.
+    final switch (state.invSection) with (InvSection)
+    {
+    case gallery, icons, stickers, emoji:
+        drawFilesGrid(ctx, state, panel);
+        break;
+    case prints:
+        drawPrintsGrid(ctx, state, panel);
+        break;
+    case items:
+        drawItemsGrid(ctx, state, panel);
+        break;
+    }
+
+    mu_end_panel(ctx);
+}
+
+/// Upload row: first dropped file + note textbox (prints) + Upload button.
+private void drawInventoryUploadRow(mu_Context* ctx, AppState* state)
+{
+    import std.path : baseName;
+
+    static immutable int[1] fullCol = [-1];
+
+    if (state.invSection == InvSection.prints)
+    {
+        // File label | note textbox | button.
+        int[3] cols = [-400, -130, -1];
+        mu_layout_row(ctx, 3, cols.ptr, 40);
+        mu_label(ctx, state.droppedFiles.length > 0
+            ? baseName(state.droppedFiles[0])
+            : "Drop a PNG onto the window to upload");
+        mu_textbox(ctx, state.invUploadNote.ptr, cast(int) state.invUploadNote.length);
+        if (clickButton(ctx, state.invUploadInFlight ? "Uploading..." : "Upload")
+            && state.invUploadInFlight == false)
+            state.invUploadRequested = true;
+    }
+    else
+    {
+        int[2] cols = [-130, -1];
+        mu_layout_row(ctx, 2, cols.ptr, 40);
+        mu_label(ctx, state.droppedFiles.length > 0
+            ? baseName(state.droppedFiles[0])
+            : "Drop a PNG onto the window to upload");
+        if (clickButton(ctx, state.invUploadInFlight ? "Uploading..." : "Upload")
+            && state.invUploadInFlight == false)
+            state.invUploadRequested = true;
+    }
+
+    if (state.invUploadStatus.length > 0)
+    {
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        mu_label(ctx, state.invUploadStatus);
+    }
+}
+
+/// Lay out the next grid row when `index` starts one. Returns cells/row.
+private int gridRow(mu_Context* ctx, size_t index, int bodyW)
+{
+    int columns = bodyW / 170;
+    if (columns < 2)
+        columns = 2;
+    if (columns > 8)
+        columns = 8;
+    if (index % columns == 0)
+    {
+        int[8] cols;
+        int cellW = bodyW / columns - ctx.style.spacing;
+        foreach (int c; 0 .. columns)
+            cols[c] = cellW;
+        cols[columns - 1] = -1;
+        mu_layout_row(ctx, columns, cols.ptr, 150);
+    }
+    return columns;
+}
+
+/// Whether a cell rect is (vertically) inside the panel body; used to
+/// avoid requesting thumbnails for cells scrolled out of view.
+private bool cellVisible(mu_Rect r, mu_Container* panel)
+{
+    return r.y + r.h >= panel.body_.y && r.y <= panel.body_.y + panel.body_.h;
+}
+
+/// A clickable thumbnail cell: image (or placeholder) + caption strip.
+/// Enqueues the thumbnail request when visible and not yet resident.
+private bool imageCell(mu_Context* ctx, AppState* state, mu_Container* panel,
+    string fileId, long fileVersion, const(char)[] caption)
+{
+    mu_Rect r = mu_layout_next(ctx);
+    bool mouseOver = mu_mouse_over(ctx, r) != 0;
+    mu_draw_frame(ctx, r, MU_COLOR_BUTTON + (mouseOver && !ctx.mouse_down ? 1 : 0));
+
+    if (fileId.length > 0 && fileVersion > 0)
+    {
+        string key = imageKey(fileId, fileVersion, INV_THUMBNAIL_SIZE);
+        int iconId = getIconId(key);
+        if (iconId > 0)
+        {
+            mu_draw_icon(ctx, iconId, r, mu_Color(255, 255, 255, 255));
+        }
+        else if (key in state.failedImages)
+        {
+            mu_draw_control_text(ctx, "unavailable", r, MU_COLOR_TEXT, MU_OPT_ALIGNCENTER);
+        }
+        else
+        {
+            mu_draw_control_text(ctx, "...", r, MU_COLOR_TEXT, MU_OPT_ALIGNCENTER);
+            if (cellVisible(r, panel))
+                state.pendingImageRequests ~= ImageRequest(fileId, fileVersion, INV_THUMBNAIL_SIZE);
+        }
+    }
+    else
+    {
+        mu_draw_control_text(ctx, "no image", r, MU_COLOR_TEXT, MU_OPT_ALIGNCENTER);
+    }
+
+    if (caption.length > 0)
+    {
+        mu_Rect cap = mu_Rect(r.x, r.y + r.h - 24, r.w, 24);
+        mu_draw_rect(ctx, cap, mu_Color(0, 0, 0, 170));
+        // Safe cast: mu_draw_text copies the text into the command queue.
+        mu_draw_control_text(ctx, cast(string) caption, cap, MU_COLOR_TEXT, MU_OPT_ALIGNCENTER);
+    }
+
+    if (wasClick && mouseOver)
+    {
+        wasClick = false;
+        return true;
+    }
+    return false;
+}
+
+private void drawFilesGrid(mu_Context* ctx, AppState* state, mu_Container* panel)
+{
+    static immutable int[1] fullCol = [-1];
+    int sec = cast(int) state.invSection;
+
+    foreach (size_t i, ref ContentFile f; state.invFiles[sec])
+    {
+        gridRow(ctx, i, panel.body_.w);
+        if (imageCell(ctx, state, panel, f.fileId, f.fileVersion, f.name))
+        {
+            state.selectedInvFile = f;
+            state.invDetailOpen = true;
+            state.invDeleteArmed = false;
+            requestRepaint();
+        }
+    }
+
+    if (state.invMoreAvailable[sec])
+    {
+        mu_layout_row(ctx, 1, fullCol.ptr, 50);
+        if (clickButton(ctx, state.invLoading[sec] ? "Loading..." : "Load more"))
+            state.invLoadMoreRequested = true;
+    }
+}
+
+private void drawPrintsGrid(mu_Context* ctx, AppState* state, mu_Container* panel)
+{
+    foreach (size_t i, ref PrintEntry p; state.invPrints)
+    {
+        gridRow(ctx, i, panel.body_.w);
+        const(char)[] caption = p.note.length > 0 ? p.note : p.worldName;
+        if (imageCell(ctx, state, panel, p.fileId, p.fileVersion, caption))
+        {
+            state.selectedInvPrint = p;
+            state.invDetailOpen = true;
+            state.invDeleteArmed = false;
+            requestRepaint();
+        }
+    }
+}
+
+private void drawItemsGrid(mu_Context* ctx, AppState* state, mu_Container* panel)
+{
+    foreach (size_t i, ref InventoryEntry it; state.invItems)
+    {
+        gridRow(ctx, i, panel.body_.w);
+        if (imageCell(ctx, state, panel, it.imageFileId, it.imageVersion, it.name))
+        {
+            state.selectedInvItem = it;
+            state.invDetailOpen = true;
+            state.invDeleteArmed = false;
+            requestRepaint();
+        }
+    }
+}
+
+/// Detail page: full-size image, metadata, and management actions for the
+/// selected entry of the current section.
+private void drawInventoryDetailPage(mu_Context* ctx, AppState* state, int scrollDelta)
+{
+    static immutable int[1] fullCol = [-1];
+
+    mu_begin_panel(ctx, "InventoryDetailPanel");
+    applyScroll(ctx, scrollDelta);
+    mu_Container* panel = mu_get_current_container(ctx);
+
+    mu_layout_row(ctx, 1, fullCol.ptr, 40);
+    if (clickButton(ctx, "< Back"))
+    {
+        state.invDetailOpen = false;
+        state.invDeleteArmed = false;
+        requestRepaint();
+        mu_end_panel(ctx);
+        return;
+    }
+
+    // Resolve the selected entry's image reference per section.
+    string fileId;
+    long fileVersion;
+    final switch (state.invSection) with (InvSection)
+    {
+    case gallery, icons, stickers, emoji:
+        fileId = state.selectedInvFile.fileId;
+        fileVersion = state.selectedInvFile.fileVersion;
+        break;
+    case prints:
+        fileId = state.selectedInvPrint.fileId;
+        fileVersion = state.selectedInvPrint.fileVersion;
+        break;
+    case items:
+        fileId = state.selectedInvItem.imageFileId;
+        fileVersion = state.selectedInvItem.imageVersion;
+        break;
+    }
+
+    // Full image (size 0 = original file), letterboxed into a tall row.
+    int imageH = window_height / 2;
+    if (imageH < 200)
+        imageH = 200;
+    mu_layout_row(ctx, 1, fullCol.ptr, imageH);
+    mu_Rect imgRect = mu_layout_next(ctx);
+    if (fileId.length > 0 && fileVersion > 0)
+    {
+        string key = imageKey(fileId, fileVersion, 0);
+        int iconId = getIconId(key);
+        if (iconId > 0)
+            mu_draw_icon(ctx, iconId, imgRect, mu_Color(255, 255, 255, 255));
+        else if (key in state.failedImages)
+            mu_draw_control_text(ctx, "Image unavailable", imgRect, MU_COLOR_TEXT, MU_OPT_ALIGNCENTER);
+        else
+        {
+            mu_draw_control_text(ctx, "Loading image...", imgRect, MU_COLOR_TEXT, MU_OPT_ALIGNCENTER);
+            state.pendingImageRequests ~= ImageRequest(fileId, fileVersion, 0);
+        }
+    }
+    else
+        mu_draw_control_text(ctx, "No image", imgRect, MU_COLOR_TEXT, MU_OPT_ALIGNCENTER);
+
+    // Metadata + actions per section.
+    final switch (state.invSection) with (InvSection)
+    {
+    case gallery, icons, stickers, emoji:
+        if (state.selectedInvFile.name.length > 0)
+        {
+            mu_layout_row(ctx, 1, fullCol.ptr, 0);
+            mu_label(ctx, state.selectedInvFile.name);
+        }
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        clickableValue(ctx, state, state.selectedInvFile.fileId);
+
+        spacer(ctx);
+        if (state.invSection == icons)
+        {
+            mu_layout_row(ctx, 1, fullCol.ptr, 60);
+            if (clickButton(ctx, "Set as Profile Icon") && state.invActionInFlight == false)
+                state.pendingContentActions ~= ContentAction("set_icon", state.selectedInvFile.fileId);
+            mu_layout_row(ctx, 1, fullCol.ptr, 60);
+            if (clickButton(ctx, "Clear Profile Icon") && state.invActionInFlight == false)
+                state.pendingContentActions ~= ContentAction("set_icon", "");
+        }
+        drawDeleteButton(ctx, state, "delete_file", state.selectedInvFile.fileId);
+        break;
+
+    case prints:
+        if (state.selectedInvPrint.note.length > 0)
+        {
+            mu_layout_row(ctx, 1, fullCol.ptr, 0);
+            mu_label(ctx, state.selectedInvPrint.note);
+        }
+        if (state.selectedInvPrint.worldName.length > 0)
+        {
+            mu_layout_row(ctx, 1, fullCol.ptr, 0);
+            mu_label(ctx, state.selectedInvPrint.worldName);
+        }
+        if (state.selectedInvPrint.timestamp.length > 0)
+        {
+            mu_layout_row(ctx, 1, fullCol.ptr, 0);
+            mu_label(ctx, state.selectedInvPrint.timestamp);
+        }
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        clickableValue(ctx, state, state.selectedInvPrint.printId);
+
+        spacer(ctx);
+        drawDeleteButton(ctx, state, "delete_print", state.selectedInvPrint.printId);
+        break;
+
+    case items:
+        if (state.selectedInvItem.name.length > 0)
+        {
+            mu_layout_row(ctx, 1, fullCol.ptr, 0);
+            mu_label(ctx, state.selectedInvItem.name);
+        }
+        if (state.selectedInvItem.itemTypeLabel.length > 0)
+        {
+            mu_layout_row(ctx, 1, fullCol.ptr, 0);
+            mu_label(ctx, state.selectedInvItem.itemTypeLabel);
+        }
+        if (state.selectedInvItem.description.length > 0)
+        {
+            mu_layout_row(ctx, 1, fullCol.ptr, 0);
+            mu_label(ctx, state.selectedInvItem.description);
+        }
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        clickableValue(ctx, state, state.selectedInvItem.id);
+
+        spacer(ctx);
+        bool equippable;
+        bool consumable;
+        foreach (string flag; state.selectedInvItem.flags)
+        {
+            if (flag == "equippable") equippable = true;
+            if (flag == "consumable") consumable = true;
+        }
+        if (equippable && state.selectedInvItem.equipSlot.length > 0)
+        {
+            mu_layout_row(ctx, 1, fullCol.ptr, 60);
+            if (clickButton(ctx, "Equip") && state.invActionInFlight == false)
+                state.pendingContentActions ~= ContentAction("equip",
+                    state.selectedInvItem.id, state.selectedInvItem.equipSlot);
+            mu_layout_row(ctx, 1, fullCol.ptr, 60);
+            if (clickButton(ctx, "Unequip") && state.invActionInFlight == false)
+                state.pendingContentActions ~= ContentAction("unequip",
+                    state.selectedInvItem.id, state.selectedInvItem.equipSlot);
+        }
+        if (consumable)
+        {
+            mu_layout_row(ctx, 1, fullCol.ptr, 60);
+            if (clickButton(ctx, "Consume") && state.invActionInFlight == false)
+                state.pendingContentActions ~= ContentAction("consume",
+                    state.selectedInvItem.id);
+        }
+        break;
+    }
+
+    if (state.invActionInFlight)
+    {
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        mu_label(ctx, "Working...");
+    }
+
+    mu_end_panel(ctx);
+}
+
+/// Two-tap delete button: first tap arms, second tap sends the action.
+private void drawDeleteButton(mu_Context* ctx, AppState* state, string kind, string id)
+{
+    static immutable int[1] fullCol = [-1];
+
+    mu_layout_row(ctx, 1, fullCol.ptr, 60);
+    if (state.invDeleteArmed)
+    {
+        if (clickButton(ctx, "Really delete? (tap to confirm)"))
+        {
+            state.invDeleteArmed = false;
+            if (state.invActionInFlight == false && id.length > 0)
+                state.pendingContentActions ~= ContentAction(kind, id);
+        }
+        mu_layout_row(ctx, 1, fullCol.ptr, 40);
+        if (clickButton(ctx, "Cancel"))
+            state.invDeleteArmed = false;
+    }
+    else
+    {
+        if (clickButton(ctx, "Delete"))
+            state.invDeleteArmed = true;
+    }
+}
+
 private void drawToolsTab(mu_Context* ctx, AppState* state, int scrollDelta)
 {
     if (state.stripMetadataPage)

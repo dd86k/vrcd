@@ -149,6 +149,77 @@ struct NotificationEntry
     bool actionPending;      // true while waiting for server response
 }
 
+/// A file entry from the VRChat files API (gallery, icon, sticker, emoji).
+struct ContentFile
+{
+    string fileId;      // file_...
+    string name;
+    long fileVersion;   // latest usable version
+    string mimeType;
+}
+
+/// A print entry from the VRChat prints API.
+struct PrintEntry
+{
+    string printId;     // prnt_...
+    string fileId;      // extracted from files.image URL
+    long fileVersion;
+    string note;
+    string worldName;
+    string timestamp;
+}
+
+/// An inventory item (props: drone skins, emoji drops, etc.).
+struct InventoryEntry
+{
+    string id;          // inv_...
+    string name;
+    string description;
+    string itemType;
+    string itemTypeLabel;
+    string equipSlot;   // non-empty when currently equipped
+    string[] flags;     // "equippable", "consumable", "archivable", ...
+    string imageFileId;
+    long imageVersion;
+    bool archived;
+}
+
+/// Sections of the inventory ("STUFF") tab. The first four map to files
+/// API tags and index AppState.invFiles.
+enum InvSection { gallery, icons, stickers, emoji, prints, items }
+
+/// Number of InvSection members.
+enum INV_SECTIONS = 6;
+
+/// Files-API tag for a section, or null for prints/items.
+string invSectionTag(InvSection section)
+{
+    final switch (section) with (InvSection)
+    {
+    case gallery:  return "gallery";
+    case icons:    return "icon";
+    case stickers: return "sticker";
+    case emoji:    return "emoji";
+    case prints, items: return null;
+    }
+}
+
+/// An image download to request from the server, drained by gui.d.
+struct ImageRequest
+{
+    string fileId;
+    long fileVersion;
+    int size;   // 0 = original file, else thumbnail edge (256, ...)
+}
+
+/// A queued content management action, drained by gui.d.
+struct ContentAction
+{
+    string kind;    // delete_file, delete_print, set_icon, equip, unequip, consume
+    string id;      // file/print/inventory id (empty for set_icon clear)
+    string extra;   // equip/unequip: slot name
+}
+
 /// Application state read by the UI, written only by the main thread.
 struct AppState
 {
@@ -282,6 +353,43 @@ struct AppState
     bool stripMetadataPage;
     string[] droppedFiles;
     string stripStatus;
+
+    // Inventory ("STUFF") tab
+    InvSection invSection;
+    ContentFile[][4] invFiles;   // per files-API section (gallery..emoji)
+    PrintEntry[] invPrints;
+    InventoryEntry[] invItems;
+    long invItemsTotal;
+    bool[INV_SECTIONS] invLoading;
+    bool[INV_SECTIONS] invLoaded;
+    bool[INV_SECTIONS] invStale;    // content-refresh received, reload on view
+    bool[4] invMoreAvailable;       // files sections: last page was full
+    string[INV_SECTIONS] invError;
+    bool invRefreshRequested;       // UI asks gui.d to (re)load current section
+    bool invLoadMoreRequested;      // UI asks for the next files page
+
+    // Image pipeline: UI enqueues requests, gui.d dispatches them (disk
+    // cache first, then server), replies land in the image cache.
+    ImageRequest[] pendingImageRequests;
+    bool[string] imageRequestsInFlight; // keyed by image cache key
+    bool[string] failedImages;          // don't re-request known failures
+
+    // Inventory detail page (value copies; lists reallocate on refresh).
+    bool invDetailOpen;
+    ContentFile selectedInvFile;
+    PrintEntry selectedInvPrint;
+    InventoryEntry selectedInvItem;
+    bool invDeleteArmed;    // two-tap delete confirmation
+
+    // Management actions queued by the UI, drained by gui.d.
+    ContentAction[] pendingContentActions;
+    bool invActionInFlight;
+
+    // Upload state (gallery/icon/sticker/emoji + prints).
+    char[256] invUploadNote = '\0'; // prints only
+    bool invUploadRequested;        // upload first droppedFiles entry
+    bool invUploadInFlight;
+    string invUploadStatus;
 
     // Auth delegation dialog
     enum AuthDialogKind { none, credentials, twoFactor }
