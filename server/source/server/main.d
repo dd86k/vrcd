@@ -17,6 +17,7 @@ import ddcurl;
 import server.api;
 import server.authdelegate;
 import server.config;
+import server.content;
 import server.dropaportal;
 import server.events;
 import server.friends;
@@ -186,6 +187,11 @@ void cmdRun(ref Config config)
     InstanceCache instanceCache = new InstanceCache(client, rateLimiter);
     instanceCache.setAPIMutex(vrcApiMutex);
 
+    // User content: gallery, icons, stickers, emoji, prints, inventory.
+    ContentService contentService = new ContentService(client, rateLimiter,
+        vrcApiMutex, config.imageCachePath, config.imageCacheMaxMB * 1024 * 1024);
+    contentService.setSelfUserId(authState.userId);
+
     FriendsTracker tracker = apiServer.getFriendsTracker();
     tracker.setWorldCache(worldCache);
     tracker.setInstanceCache(instanceCache);
@@ -196,6 +202,7 @@ void cmdRun(ref Config config)
     apiServer.setWorldCache(worldCache);
     apiServer.setInstanceCache(instanceCache);
     apiServer.setHTTPClient(client);
+    apiServer.setContentService(contentService);
     apiServer.setRateLimiter(rateLimiter);
     apiServer.setAPIMutex(vrcApiMutex);
 

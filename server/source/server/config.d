@@ -68,6 +68,10 @@ struct Config
     /// When true and TLS is configured, disable the plain TCP listener.
     bool tlsOnly;
     bool verbose;
+    /// Directory for the downloaded-image cache (gallery, icons, prints...).
+    string imageCachePath;
+    /// Image cache size cap in MiB. Oldest entries are evicted past this.
+    long imageCacheMaxMB = 256;
 
     /// Bitmask constants for tracking which fields were set by CLI.
     enum : uint
@@ -102,6 +106,7 @@ struct Config
             c.dbPath        = buildPath(base, "server.db");
             c.credentialsPath = buildPath(base, "credentials.json");
             c.cookieJarPath = buildPath(base, "cookies.txt");
+            c.imageCachePath = buildPath(base, "imagecache");
         }
         else
         {
@@ -112,6 +117,7 @@ struct Config
             string dataHome     = expandTilde("~/.local/share/vrcd");
             c.dbPath            = buildPath(dataHome, "server.db");
             c.cookieJarPath     = buildPath(dataHome, "cookies.txt");
+            c.imageCachePath    = buildPath(dataHome, "imagecache");
         }
         return c;
     }
@@ -123,6 +129,7 @@ struct Config
         dbPath        = buildPath(base, "server.db");
         credentialsPath = buildPath(base, "credentials.json");
         cookieJarPath = buildPath(base, "cookies.txt");
+        imageCachePath = buildPath(base, "imagecache");
     }
 
     /// Load configuration from a key=value file.
@@ -160,6 +167,18 @@ struct Config
                         credentialsPath = buildPath(base, "credentials.json");
                     if ((cliSet & SET_COOKIE_JAR) == 0)
                         cookieJarPath = buildPath(base, "cookies.txt");
+                    imageCachePath = buildPath(base, "imagecache");
+                    break;
+                case "image_cache":
+                    imageCachePath = val;
+                    break;
+                case "image_cache_max_mb":
+                    import std.conv : to;
+                    try imageCacheMaxMB = val.to!long;
+                    catch (Exception ex)
+                    {
+                        throw new Exception("Invalid value for image_cache_max_mb: " ~ ex.msg);
+                    }
                     break;
                 case "db":
                     if ((cliSet & SET_DB) == 0)

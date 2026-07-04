@@ -19,6 +19,7 @@ import ddlogger;
 import ddcurl;
 
 import server.authdelegate;
+import server.content;
 import server.events;
 import server.friends;
 import server.instancecache;
@@ -51,6 +52,7 @@ class APIServer
     private WorldCache worldCache;
     private InstanceCache instanceCache;
     private HTTPClient httpClient;
+    private ContentService contentService;
     private Mutex apiMutex; // Shared VRChat API serializer, injected via setAPIMutex.
     private AuthDelegator authDelegator;
     private DropaPortalDelegator dapDelegator;
@@ -106,6 +108,12 @@ class APIServer
     void setHTTPClient(HTTPClient client)
     {
         httpClient = client;
+    }
+
+    /// Set the content service (gallery/icons/stickers/emoji/prints/inventory).
+    void setContentService(ContentService cs)
+    {
+        contentService = cs;
     }
 
     /// Set the shared VRChat API mutex. All HTTPClient + RateLimitTracker
@@ -509,7 +517,20 @@ private class ClientHandler
         scope(exit) sendMutex.unlock();
 
         logTrace("sendLine: len=%d", line.length);
-        try stream.send(cast(const(void)[]) line);
+        // Plain TCP sockets may accept fewer bytes than requested on large
+        // payloads (e.g. base64 image lines); loop until everything is out
+        // or the connection dies.
+        try
+        {
+            const(void)[] remaining = cast(const(void)[]) line;
+            while (remaining.length > 0)
+            {
+                ptrdiff_t sent = stream.send(remaining);
+                if (sent <= 0)
+                    break; // Client disconnected; will be cleaned up.
+                remaining = remaining[sent .. $];
+            }
+        }
         catch (Exception e)
         {
             logDebugging("sendLine: send failed, client will be cleaned up: %s", e.msg);
@@ -530,6 +551,10 @@ private class ClientHandler
             stream.close();
         }
 
+        // Upload messages carry base64 image data (a 10 MB PNG is ~13.7 MB
+        // in base64, plus JSON envelope); anything past this is abuse.
+        enum size_t MAX_LINE_LENGTH = 32 * 1024 * 1024;
+
         char[8192] buf;
         string buffer;
 
@@ -540,6 +565,12 @@ private class ClientHandler
                 break;
 
             buffer ~= cast(string) buf[0 .. received];
+
+            if (buffer.length > MAX_LINE_LENGTH)
+            {
+                logWarn("Client exceeded maximum line length, disconnecting");
+                break;
+            }
 
             // Process complete lines.
             while (true)
@@ -677,6 +708,94 @@ private class ClientHandler
                     }
                     handleGetStats();
                     break;
+                case "get_files":
+                    if (authenticated == false)
+                    {
+                        sendError("Not authenticated");
+                        return;
+                    }
+                    handleGetFiles(msg);
+                    break;
+                case "get_prints":
+                    if (authenticated == false)
+                    {
+                        sendError("Not authenticated");
+                        return;
+                    }
+                    handleGetPrints();
+                    break;
+                case "get_inventory":
+                    if (authenticated == false)
+                    {
+                        sendError("Not authenticated");
+                        return;
+                    }
+                    handleGetInventory(msg);
+                    break;
+                case "get_inventory_drops":
+                    if (authenticated == false)
+                    {
+                        sendError("Not authenticated");
+                        return;
+                    }
+                    handleGetInventoryDrops();
+                    break;
+                case "get_image":
+                    if (authenticated == false)
+                    {
+                        sendError("Not authenticated");
+                        return;
+                    }
+                    handleGetImage(msg);
+                    break;
+                case "delete_file":
+                    if (authenticated == false)
+                    {
+                        sendError("Not authenticated");
+                        return;
+                    }
+                    handleDeleteFile(msg);
+                    break;
+                case "delete_print":
+                    if (authenticated == false)
+                    {
+                        sendError("Not authenticated");
+                        return;
+                    }
+                    handleDeletePrint(msg);
+                    break;
+                case "set_user_icon":
+                    if (authenticated == false)
+                    {
+                        sendError("Not authenticated");
+                        return;
+                    }
+                    handleSetUserIcon(msg);
+                    break;
+                case "inventory_action":
+                    if (authenticated == false)
+                    {
+                        sendError("Not authenticated");
+                        return;
+                    }
+                    handleInventoryAction(msg);
+                    break;
+                case "upload_image":
+                    if (authenticated == false)
+                    {
+                        sendError("Not authenticated");
+                        return;
+                    }
+                    handleUploadImage(msg);
+                    break;
+                case "upload_print":
+                    if (authenticated == false)
+                    {
+                        sendError("Not authenticated");
+                        return;
+                    }
+                    handleUploadPrint(msg);
+                    break;
                 case "pong":
                     pongMutex.lock();
                     lastPongAt = MonoTime.currTime;
@@ -704,7 +823,7 @@ private class ClientHandler
             authenticated = true;
             JSONValue resp = JSONValue([
                 "type": JSONValue("auth_ok"),
-                "server_version": JSONValue(1),
+                "server_version": JSONValue(2),
             ]);
             sendLine(resp.toString() ~ "\n");
             // Send current status immediately after auth.
@@ -1317,6 +1436,312 @@ private class ClientHandler
         sendLine(resp.toString() ~ "\n");
         logDebugging("handleGetStats: events=%d worlds=%d avatars=%d db_bytes=%d",
             stats.eventCount, stats.worldCacheCount, stats.avatarCacheCount, stats.dbSizeBytes);
+    }
+
+    //
+    // Content: gallery, icons, stickers, emoji, prints, inventory.
+    //
+    // Listing replies carry an "error" field instead of using the generic
+    // error path so the client can clear the right section's loading state.
+    //
+
+    void handleGetFiles(JSONValue msg)
+    {
+        string tag;
+        if (const(JSONValue)* v = "tag" in msg)
+            tag = v.str;
+        int n = 60;
+        if (const(JSONValue)* v = "n" in msg)
+            if (v.type == JSONType.integer)
+                n = cast(int) v.integer;
+        int offset;
+        if (const(JSONValue)* v = "offset" in msg)
+            if (v.type == JSONType.integer)
+                offset = cast(int) v.integer;
+
+        JSONValue resp = JSONValue([
+            "type": JSONValue("files"),
+            "tag": JSONValue(tag),
+            "offset": JSONValue(offset),
+        ]);
+        try
+        {
+            JSONValue files = requireContent().listFiles(tag, n, offset);
+            resp["count"] = JSONValue(cast(long) files.array.length);
+            resp["files"] = files;
+        }
+        catch (Exception e)
+        {
+            resp["count"] = JSONValue(0);
+            resp["files"] = JSONValue.emptyArray;
+            resp["error"] = JSONValue(e.msg);
+        }
+        sendLine(resp.toString() ~ "\n");
+    }
+
+    void handleGetPrints()
+    {
+        JSONValue resp = JSONValue([
+            "type": JSONValue("prints"),
+        ]);
+        try resp["prints"] = requireContent().listPrints();
+        catch (Exception e)
+        {
+            resp["prints"] = JSONValue.emptyArray;
+            resp["error"] = JSONValue(e.msg);
+        }
+        sendLine(resp.toString() ~ "\n");
+    }
+
+    void handleGetInventory(JSONValue msg)
+    {
+        bool archived;
+        if (const(JSONValue)* v = "archived" in msg)
+            archived = v.type == JSONType.true_;
+
+        JSONValue resp = JSONValue([
+            "type": JSONValue("inventory"),
+            "archived": JSONValue(archived),
+        ]);
+        try
+        {
+            long totalCount;
+            resp["items"] = requireContent().listInventory(archived, totalCount);
+            resp["total_count"] = JSONValue(totalCount);
+        }
+        catch (Exception e)
+        {
+            resp["items"] = JSONValue.emptyArray;
+            resp["total_count"] = JSONValue(0);
+            resp["error"] = JSONValue(e.msg);
+        }
+        sendLine(resp.toString() ~ "\n");
+    }
+
+    void handleGetInventoryDrops()
+    {
+        JSONValue resp = JSONValue([
+            "type": JSONValue("inventory_drops"),
+        ]);
+        try resp["items"] = requireContent().listInventoryDrops();
+        catch (Exception e)
+        {
+            resp["items"] = JSONValue.emptyArray;
+            resp["error"] = JSONValue(e.msg);
+        }
+        sendLine(resp.toString() ~ "\n");
+    }
+
+    void handleGetImage(JSONValue msg)
+    {
+        import std.base64 : Base64;
+
+        string fileId;
+        if (const(JSONValue)* v = "file_id" in msg)
+            fileId = v.str;
+        long fileVersion = 1;
+        if (const(JSONValue)* v = "version" in msg)
+            if (v.type == JSONType.integer)
+                fileVersion = v.integer;
+        int size;
+        if (const(JSONValue)* v = "size" in msg)
+            if (v.type == JSONType.integer)
+                size = cast(int) v.integer;
+
+        JSONValue resp = JSONValue([
+            "type": JSONValue("image"),
+            "file_id": JSONValue(fileId),
+            "version": JSONValue(fileVersion),
+            "size": JSONValue(size),
+        ]);
+        try
+        {
+            ImageResult image = requireContent().getImage(fileId, fileVersion, size);
+            resp["success"] = JSONValue(image.success);
+            if (image.success)
+            {
+                resp["mime_type"] = JSONValue(image.mimeType);
+                resp["data_base64"] = JSONValue(cast(string) Base64.encode(image.data));
+            }
+            else
+                resp["error"] = JSONValue(image.error);
+        }
+        catch (Exception e)
+        {
+            resp["success"] = JSONValue(false);
+            resp["error"] = JSONValue(e.msg);
+        }
+        sendLine(resp.toString() ~ "\n");
+    }
+
+    void handleDeleteFile(JSONValue msg)
+    {
+        string fileId;
+        if (const(JSONValue)* v = "file_id" in msg)
+            fileId = v.str;
+
+        JSONValue resp = JSONValue([
+            "type": JSONValue("delete_file_result"),
+            "file_id": JSONValue(fileId),
+        ]);
+        sendActionResult(resp, tryAction({
+            return requireContent().deleteFile(fileId);
+        }));
+    }
+
+    void handleDeletePrint(JSONValue msg)
+    {
+        string printId;
+        if (const(JSONValue)* v = "print_id" in msg)
+            printId = v.str;
+
+        JSONValue resp = JSONValue([
+            "type": JSONValue("delete_print_result"),
+            "print_id": JSONValue(printId),
+        ]);
+        sendActionResult(resp, tryAction({
+            return requireContent().deletePrint(printId);
+        }));
+    }
+
+    void handleSetUserIcon(JSONValue msg)
+    {
+        // Empty file_id clears the icon.
+        string fileId;
+        if (const(JSONValue)* v = "file_id" in msg)
+            fileId = v.str;
+
+        JSONValue resp = JSONValue([
+            "type": JSONValue("set_user_icon_result"),
+            "file_id": JSONValue(fileId),
+        ]);
+        sendActionResult(resp, tryAction({
+            return requireContent().setUserIcon(fileId);
+        }));
+    }
+
+    void handleInventoryAction(JSONValue msg)
+    {
+        string action;
+        if (const(JSONValue)* v = "action" in msg)
+            action = v.str;
+        string inventoryId;
+        if (const(JSONValue)* v = "inventory_id" in msg)
+            inventoryId = v.str;
+        string slot;
+        if (const(JSONValue)* v = "slot" in msg)
+            slot = v.str;
+
+        JSONValue resp = JSONValue([
+            "type": JSONValue("inventory_action_result"),
+            "action": JSONValue(action),
+            "inventory_id": JSONValue(inventoryId),
+        ]);
+        sendActionResult(resp, tryAction({
+            return requireContent().inventoryAction(action, inventoryId, slot);
+        }));
+    }
+
+    void handleUploadImage(JSONValue msg)
+    {
+        import std.base64 : Base64;
+
+        string tag;
+        if (const(JSONValue)* v = "tag" in msg)
+            tag = v.str;
+
+        JSONValue resp = JSONValue([
+            "type": JSONValue("upload_image_result"),
+            "tag": JSONValue(tag),
+        ]);
+
+        const(ubyte)[] png;
+        if (const(JSONValue)* v = "data_base64" in msg)
+        {
+            try png = Base64.decode(v.str);
+            catch (Exception)
+            {
+                resp["success"] = JSONValue(false);
+                resp["error"] = JSONValue("Invalid base64 data");
+                sendLine(resp.toString() ~ "\n");
+                return;
+            }
+        }
+
+        ActionResult result = tryAction({
+            return requireContent().uploadImage(tag, png, msg);
+        });
+        if (result.success && result.data.type == JSONType.object)
+            resp["file"] = result.data;
+        sendActionResult(resp, result);
+    }
+
+    void handleUploadPrint(JSONValue msg)
+    {
+        import std.base64 : Base64;
+
+        string note, worldId, worldName, timestamp;
+        if (const(JSONValue)* v = "note" in msg)
+            note = v.str;
+        if (const(JSONValue)* v = "world_id" in msg)
+            worldId = v.str;
+        if (const(JSONValue)* v = "world_name" in msg)
+            worldName = v.str;
+        if (const(JSONValue)* v = "timestamp" in msg)
+            timestamp = v.str;
+
+        JSONValue resp = JSONValue([
+            "type": JSONValue("upload_print_result"),
+        ]);
+
+        const(ubyte)[] png;
+        if (const(JSONValue)* v = "data_base64" in msg)
+        {
+            try png = Base64.decode(v.str);
+            catch (Exception)
+            {
+                resp["success"] = JSONValue(false);
+                resp["error"] = JSONValue("Invalid base64 data");
+                sendLine(resp.toString() ~ "\n");
+                return;
+            }
+        }
+
+        ActionResult result = tryAction({
+            return requireContent().uploadPrint(png, timestamp, note, worldId, worldName);
+        });
+        if (result.success && result.data.type == JSONType.object)
+            resp["print"] = result.data;
+        sendActionResult(resp, result);
+    }
+
+    /// Get the content service or throw (caught by the per-message handler
+    /// or by tryAction and turned into an error reply).
+    ContentService requireContent()
+    {
+        if (server.contentService is null)
+            throw new Exception("Content service not configured");
+        return server.contentService;
+    }
+
+    /// Run an action, converting exceptions into a failed ActionResult.
+    ActionResult tryAction(ActionResult delegate() dg)
+    {
+        try return dg();
+        catch (Exception e)
+            return ActionResult(false, e.msg);
+    }
+
+    /// Fill success/error into a prepared result message and send it.
+    /// Also refreshes the rate-limit status shown by clients, since the
+    /// action consumed VRChat API budget.
+    void sendActionResult(JSONValue resp, ActionResult result)
+    {
+        resp["success"] = JSONValue(result.success);
+        if (result.success == false)
+            resp["error"] = JSONValue(result.error);
+        sendLine(resp.toString() ~ "\n");
+        server.broadcastStatus();
     }
 
     private void pingLoop()
