@@ -295,7 +295,11 @@ class ContentService
                 return result;
             }
 
-            const(ubyte)[] data = resp.bytes();
+            // resp.bytes() aliases the HTTPClient's internal buffer, which
+            // the next request on this shared client reallocates and
+            // overwrites. This result outlives apiMutex (the caller
+            // base64-encodes it after we return), so it must own its memory.
+            const(ubyte)[] data = resp.bytes().dup;
             if (data.length == 0)
             {
                 result.error = "Empty response";
