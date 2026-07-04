@@ -6,7 +6,8 @@ vrcd uses a **JSON-L** (newline-delimited JSON) protocol over TCP for server-cli
 - **Default bind:** 127.0.0.1
 - **Encoding:** UTF-8
 - **Line terminator:** `\n`
-- **Buffer size:** 8192 bytes (both sides)
+- **Receive buffer:** 8192 bytes per read; lines are accumulated until a `\n` arrives
+- **Max line length:** 32 MiB (server-side inbound cap; exceeding it disconnects the client). Large payloads (image uploads/downloads) are base64-encoded inside a single line, so this bounds them to ~24 MiB of binary
 
 ## Transport
 
@@ -25,7 +26,7 @@ The client has two receive modes:
 - **Blocking (`run`)**: A single-threaded receive loop that processes messages inline via callbacks. Used for CLI mode.
 - **Threaded (`runThreaded`)**: A dedicated network thread pushes received JSON lines into a thread-safe `MessageQueue`. The main SDL thread is woken via `SDL_PushEvent` to drain the queue. Ping/pong is handled directly in the network thread to avoid queuing delay.
 
-In both modes the client sends requests (`auth`, `catch_up`, `get_friends`, etc.) by writing to the same socket. Sends are not mutex-protected on the client because only one thread writes (the main thread sends requests; the network thread only sends `pong`).
+In both modes the client sends requests (`auth`, `catch_up`, `get_friends`, etc.) by writing to the same socket. Client sends are serialized by a `sendMutex` and loop on partial sends: the main thread sends requests while the network thread sends `pong`, and large lines (base64 image uploads) can exceed what a single `send()` accepts.
 
 ## Authentication
 
@@ -40,8 +41,10 @@ Authentication uses a shared secret token. If the server's secret is empty, auth
 
 **Success:**
 ```json
-{"type": "auth_ok", "server_version": 1}
+{"type": "auth_ok", "server_version": 2}
 ```
+
+Protocol versions: `1` = base protocol, `2` = adds the content API (files, prints, inventory, images, uploads).
 
 **Failure:**
 ```json
@@ -117,6 +120,118 @@ Either field may be omitted to leave it unchanged; at least one must be present.
 | `status`             | string | Optional. One of `"active"`, `"join me"`, `"ask me"`, `"busy"` |
 | `status_description` | string | Optional. Custom status message text                        |
 
+### `get_files`
+
+Request a page of the logged-in user's files for one content tag. The server proxies `GET /files` on VRChat and replies with `files`.
+
+| Field    | Type   | Description                                             |
+|----------|--------|---------------------------------------------------------|
+| `type`   | string | `"get_files"`                                           |
+| `tag`    | string | One of `"gallery"`, `"icon"`, `"sticker"`, `"emoji"`    |
+| `n`      | int    | Optional. Page size (default 60)                        |
+| `offset` | int    | Optional. Page offset (default 0)                       |
+
+### `get_prints`
+
+Request the logged-in user's prints. Server replies with `prints` (single page, up to 100 entries; VRChat caps prints at 64 per user).
+
+```json
+{"type": "get_prints"}
+```
+
+### `get_inventory`
+
+Request the logged-in user's inventory items (props: drone skins, consumable emoji drops, etc.). The server pages through VRChat's inventory API (up to 500 items) and replies with `inventory`.
+
+| Field      | Type   | Description                              |
+|------------|--------|------------------------------------------|
+| `type`     | string | `"get_inventory"`                        |
+| `archived` | bool   | Optional. Return archived items instead  |
+
+### `get_inventory_drops`
+
+Request the currently active inventory drop campaigns. Server replies with `inventory_drops`.
+
+```json
+{"type": "get_inventory_drops"}
+```
+
+### `get_image`
+
+Request image bytes through the server proxy. The server serves from its disk cache when possible, otherwise downloads from VRChat (rate-limit aware, 250 ms minimum spacing) and caches the result. Replies with `image`.
+
+| Field     | Type   | Description                                                    |
+|-----------|--------|----------------------------------------------------------------|
+| `type`    | string | `"get_image"`                                                  |
+| `file_id` | string | File ID (`file_...`)                                           |
+| `version` | int    | Optional. File version (default 1)                             |
+| `size`    | int    | Optional. `0` = original file (default); `128`, `256`, `512`, or `1024` = thumbnail edge |
+
+### `delete_file`
+
+Delete a file (gallery image, icon, sticker, or emoji). Server replies with `delete_file_result`.
+
+| Field     | Type   | Description          |
+|-----------|--------|----------------------|
+| `type`    | string | `"delete_file"`      |
+| `file_id` | string | File ID (`file_...`) |
+
+### `delete_print`
+
+Delete a print. Server replies with `delete_print_result`.
+
+| Field      | Type   | Description           |
+|------------|--------|-----------------------|
+| `type`     | string | `"delete_print"`      |
+| `print_id` | string | Print ID (`prnt_...`) |
+
+### `set_user_icon`
+
+Set or clear the logged-in user's profile icon. Requires VRC+ (VRChat returns 403 otherwise). Server replies with `set_user_icon_result`.
+
+| Field     | Type   | Description                                  |
+|-----------|--------|----------------------------------------------|
+| `type`    | string | `"set_user_icon"`                            |
+| `file_id` | string | Icon file ID; empty string clears the icon   |
+
+### `inventory_action`
+
+Equip, unequip, or consume an inventory item. Server replies with `inventory_action_result`.
+
+| Field          | Type   | Description                                            |
+|----------------|--------|--------------------------------------------------------|
+| `type`         | string | `"inventory_action"`                                   |
+| `action`       | string | `"equip"`, `"unequip"`, or `"consume"`                 |
+| `inventory_id` | string | Inventory item ID (`inv_...`); not used for `unequip`  |
+| `slot`         | string | Equip slot name; required for `equip` and `unequip`    |
+
+### `upload_image`
+
+Upload a PNG to the files API under a content tag. The server validates the payload (PNG only, max 10 MB, max 2000x2000, square for stickers/emoji) before forwarding it as a multipart POST. Replies with `upload_image_result`.
+
+| Field            | Type   | Description                                          |
+|------------------|--------|------------------------------------------------------|
+| `type`           | string | `"upload_image"`                                     |
+| `tag`            | string | One of `"gallery"`, `"icon"`, `"sticker"`, `"emoji"` |
+| `data_base64`    | string | PNG bytes, base64-encoded                            |
+| `animationStyle` | string | Optional (animated emoji)                            |
+| `loopStyle`      | string | Optional (animated emoji)                            |
+| `frames`         | int    | Optional (animated emoji)                            |
+| `framesOverTime` | int    | Optional (animated emoji)                            |
+
+### `upload_print`
+
+Upload a PNG as a print. Same size limits as `upload_image`; additionally throttled server-side to one upload per 2.5 seconds. Replies with `upload_print_result`.
+
+| Field         | Type   | Description                                            |
+|---------------|--------|--------------------------------------------------------|
+| `type`        | string | `"upload_print"`                                       |
+| `data_base64` | string | PNG bytes, base64-encoded                              |
+| `note`        | string | Optional. Print caption                                |
+| `world_id`    | string | Optional. World the picture was taken in               |
+| `world_name`  | string | Optional. World name                                   |
+| `timestamp`   | string | Optional. ISO 8601; defaults to the current time (UTC) |
+
 ### `pong`
 
 Keepalive response to server's `ping`.
@@ -134,7 +249,7 @@ Authentication succeeded.
 | Field            | Type   | Description              |
 |------------------|--------|--------------------------|
 | `type`           | string | `"auth_ok"`              |
-| `server_version` | int    | Protocol version (currently 1) |
+| `server_version` | int    | Protocol version (currently 2) |
 
 ### `auth_error`
 
@@ -260,6 +375,126 @@ Response to `get_world`.
 | `world_id`   | string | World ID             |
 | `world_name` | string | Resolved world name  |
 
+### `files`
+
+Reply to `get_files`: one page of trimmed file entries.
+
+| Field    | Type   | Description                                     |
+|----------|--------|--------------------------------------------------|
+| `type`   | string | `"files"`                                        |
+| `tag`    | string | The requested tag                                |
+| `offset` | int    | The requested offset                             |
+| `count`  | long   | Number of entries in this page                   |
+| `files`  | array  | File entries (empty on failure)                  |
+| `error`  | string | Error description (present only on failure)      |
+
+Each file entry:
+
+| Field       | Type   | Description                                            |
+|-------------|--------|--------------------------------------------------------|
+| `id`        | string | File ID (`file_...`)                                   |
+| `name`      | string | File name                                              |
+| `version`   | long   | Highest complete, non-deleted version (`0` = none usable) |
+| `mimeType`  | string | MIME type                                              |
+| `extension` | string | File extension                                         |
+| `tags`      | array  | VRChat tags                                            |
+
+Animated emoji entries may also carry `animationStyle`, `loopStyle`, `frames`, and `framesOverTime`.
+
+### `prints`
+
+Reply to `get_prints`.
+
+| Field    | Type   | Description                                 |
+|----------|--------|---------------------------------------------|
+| `type`   | string | `"prints"`                                  |
+| `prints` | array  | Print entries (empty on failure)            |
+| `error`  | string | Error description (present only on failure) |
+
+Each print entry:
+
+| Field          | Type   | Description                                  |
+|----------------|--------|----------------------------------------------|
+| `id`           | string | Print ID (`prnt_...`)                        |
+| `file_id`      | string | Image file ID, for `get_image`               |
+| `file_version` | long   | Image file version                           |
+| `note`         | string | Caption                                      |
+| `worldId`      | string | World the picture was taken in               |
+| `worldName`    | string | World name                                   |
+| `authorName`   | string | Author display name                          |
+| `timestamp`    | string | Picture timestamp (ISO 8601)                 |
+| `createdAt`    | string | Print creation time (ISO 8601)               |
+
+### `inventory`
+
+Reply to `get_inventory`.
+
+| Field         | Type   | Description                                 |
+|---------------|--------|---------------------------------------------|
+| `type`        | string | `"inventory"`                               |
+| `archived`    | bool   | Whether archived items were requested       |
+| `total_count` | long   | Total items VRChat reports for this filter  |
+| `items`       | array  | Inventory entries (empty on failure)        |
+| `error`       | string | Error description (present only on failure) |
+
+Each inventory entry:
+
+| Field           | Type   | Description                                          |
+|-----------------|--------|------------------------------------------------------|
+| `id`            | string | Inventory item ID (`inv_...`)                        |
+| `name`          | string | Item name                                            |
+| `description`   | string | Item description                                     |
+| `itemType`      | string | VRChat item type (e.g. `"prop"`, `"emoji"`)          |
+| `itemTypeLabel` | string | Human-readable type label                            |
+| `equipSlot`     | string | Equip slot, when applicable                          |
+| `flags`         | array  | Capability flags (`"equippable"`, `"consumable"`, ...) |
+| `collections`   | array  | Collections the item belongs to                      |
+| `isArchived`    | bool   | Whether the item is archived                         |
+| `expiryDate`    | string | Expiry, when applicable                              |
+| `image_file_id` | string | Image file ID, for `get_image` (when resolvable)     |
+| `image_version` | long   | Image file version                                   |
+
+### `inventory_drops`
+
+Reply to `get_inventory_drops`. Same envelope as `inventory` (`items` array + optional `error`), carrying VRChat's drop campaign objects.
+
+### `image`
+
+Reply to `get_image`. Echoes the request identity so the client can key its cache.
+
+| Field         | Type   | Description                                    |
+|---------------|--------|-------------------------------------------------|
+| `type`        | string | `"image"`                                       |
+| `file_id`     | string | Requested file ID                               |
+| `version`     | long   | Requested version                               |
+| `size`        | int    | Requested size                                  |
+| `success`     | bool   | Whether the bytes are included                  |
+| `mime_type`   | string | Sniffed MIME type (success only)                |
+| `data_base64` | string | Image bytes, base64-encoded (success only)      |
+| `error`       | string | Error description (present only on failure)     |
+
+### Action results
+
+`delete_file_result`, `delete_print_result`, `set_user_icon_result`, and `inventory_action_result` share the same envelope: the request's identifying fields echoed back (`file_id`, `print_id`, or `action` + `inventory_id`) plus:
+
+| Field     | Type   | Description                                  |
+|-----------|--------|----------------------------------------------|
+| `success` | bool   | Whether the VRChat call succeeded            |
+| `error`   | string | Error description (present only on failure)  |
+
+`set_user_icon_result` reports `"HTTP 403 (VRC+ required)"` when the account lacks VRC+. Each action result is followed by a `status` broadcast, since the action consumed VRChat API budget.
+
+### `upload_image_result` / `upload_print_result`
+
+Reply to `upload_image` / `upload_print`. Same success/error envelope as action results; on success also carries the created object:
+
+| Field   | Type   | Description                                           |
+|---------|--------|-------------------------------------------------------|
+| `file`  | object | Trimmed file entry (see `files`) - `upload_image_result` only |
+| `print` | object | Trimmed print entry (see `prints`) - `upload_print_result` only |
+
+After a successful upload, VRChat emits a `content-refresh` event on the WebSocket, which the server stores and broadcasts as a normal `event`.
+
 ### `ping`
 
 Server keepalive. Client must respond with `pong`.
@@ -319,7 +554,7 @@ Events forwarded from VRChat's WebSocket, stored and broadcast as `event` messag
 - `instance-closed` - Instance closed
 
 ### Content Events
-- `content-refresh` - Content refresh signal
+- `content-refresh` - The user's content changed (upload, delete, in-game print, inventory drop). `content.contentType` names what changed: `"gallery"`, `"icon"`, `"emoji"`, `"sticker"`, `"print"`, `"prints"`, `"inventory"`, `"avatar"`, `"world"`. Clients use it to mark the matching STUFF section stale and re-list on next view
 
 ### Synthesized Events
 Derived on the server, not produced by VRChat's WebSocket.
@@ -392,3 +627,5 @@ CREATE INDEX idx_ws_events_type ON ws_events (event_type);
 | API secret        | (empty)         | Shared auth token; empty = no auth |
 | Config directory  | `~/.config/vrcd/` (Linux), `%APPDATA%\vrcd\` (Windows) | |
 | Data directory    | `~/.local/share/vrcd/` (Linux), `%APPDATA%\vrcd\` (Windows) | |
+| `image_cache`     | `<data dir>/imagecache/` | Server-side image disk cache directory |
+| `image_cache_max_mb` | `256`        | Image cache size cap (mtime-LRU eviction) |
