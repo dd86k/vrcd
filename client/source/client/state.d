@@ -98,11 +98,11 @@ struct FeedEntry
 {
     long id;
     string eventType;
-    string user;
-    string detail;
-    string receivedAt;
-    string rawContent;   // raw JSON content for detail view
-    bool isSelf;         // event about the logged-in user (for the "hide self" filter)
+    string user;        // VRChat display name (not ID!)
+    string detail;      // World name, or whatever related to event
+    string receivedAt;  // Formatted timestamp (ie, 07-05 11:46:32)
+    string rawContent;  // raw JSON content for detail view
+    bool isSelf;        // event about the logged-in user (for the "hide self" filter)
     EventSource source;
 }
 

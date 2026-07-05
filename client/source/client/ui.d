@@ -22,6 +22,7 @@ import client.gui : wasClick, requestRepaint;
 import client.state;
 import client.stream : tlsAvailable;
 import client.utils : openFolder, openBrowser;
+import core.int128;
 
 /// Active tab selection.
 enum Tab { feed, online, notifications, inventory, tools, settings }
@@ -526,21 +527,35 @@ private void drawFeedDetail(mu_Context* ctx, AppState* state, int scrollDelta)
         clickableValue(ctx, state, e.id.to!string);
     }
 
-    // Open the world in the VRChat website, for entries that carry a world id.
+    // Additional content
     if (haveContent)
     {
+        int half = mu_get_current_container(ctx).body_.w / 2;
+        
+        // Open the world in the VRChat website, for entries that carry a world id.
         string worldId = extractWorldId(content);
-        if (worldId.length > 0)
+        // Open user in VRChat website
+        string userId = extractUserId(content);
+        
+        int rows;
+        if (worldId.length > 0) rows++;
+        if (userId.length > 0) rows++;
+        
+        if (rows)
         {
-            mu_layout_row(ctx, 1, fullCol.ptr, 40);
-            if (clickButton(ctx, "Open in VRChat Website"))
-                openBrowser("https://vrchat.com/home/world/" ~ worldId ~ "/info");
+            int[2] halfrow = [ half, -1 ];
+            mu_layout_row(ctx, rows, rows == 1 ? fullCol.ptr : halfrow.ptr, 40);
+            
+            if (worldId.length > 0)
+                if (clickButton(ctx, "Browse World on VRChat Website"))
+                    openBrowser("https://vrchat.com/home/world/" ~ worldId ~ "/info");
+            
+            if (userId.length > 0)
+                if (clickButton(ctx, "Browse User on VRChat Website"))
+                    openBrowser("https://vrchat.com/home/user/" ~ userId);
         }
-    }
-
-    // Raw content fields (parsed from JSON).
-    if (haveContent)
-    {
+        
+        // Raw content fields (parsed from JSON).
         mu_layout_row(ctx, 1, fullCol.ptr, 1);
         mu_draw_rect(ctx, mu_layout_next(ctx), lineColor);
 
@@ -553,12 +568,7 @@ private void drawFeedDetail(mu_Context* ctx, AppState* state, int scrollDelta)
             if (val.type == JSONType.object || val.type == JSONType.array)
                 continue;
 
-            string valStr;
-            if (val.type == JSONType.string)
-                valStr = val.str;
-            else
-                valStr = val.toString();
-
+            string valStr = val.type == JSONType.string ? val.str : val.toString();
             if (valStr.length == 0)
                 continue;
 
@@ -575,7 +585,7 @@ private void drawFeedDetail(mu_Context* ctx, AppState* state, int scrollDelta)
 /// content, if any. Location/instance fields carry the id with an instance
 /// suffix ("wrld_...:12345~region(us)"); only the world id portion is kept.
 /// Returns null when no world id is present.
-private string extractWorldId(ref JSONValue c)
+private string extractWorldId(ref JSONValue c) // TODO: Needs unittests
 {
     import std.json : JSONValue, JSONType;
     import std.string : indexOf;
@@ -603,6 +613,23 @@ private string extractWorldId(ref JSONValue c)
         return id;
     if (string id = fromValue("instanceId" in c))
         return id;
+
+    return null;
+}
+
+// Extract User ID from content
+private string extractUserId(ref JSONValue c) // TODO: Needs unittests
+{
+    import std.json : JSONValue, JSONType;
+    import std.string : indexOf;
+
+    // .userId
+    if (const(JSONValue) *juserId = "userId" in c)
+        return juserId.str;
+    // .user.id
+    if (const(JSONValue) *juser = "user" in c)
+        if (const(JSONValue) *jid = "id" in c)
+            return jid.str;
 
     return null;
 }
