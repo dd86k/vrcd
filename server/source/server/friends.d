@@ -266,6 +266,33 @@ class FriendsTracker
         }
     }
 
+    /// Remove a friend eagerly after a successful unfriend REST call, so
+    /// the follow-up snapshot doesn't wait on the friend-delete WS event.
+    /// Returns true if the friend was present.
+    bool removeFriend(string userId)
+    {
+        synchronized (friendsMutex)
+        {
+            if (userId in friends)
+            {
+                friends.remove(userId);
+                return true;
+            }
+            return false;
+        }
+    }
+
+    /// Last-seen display name for a tracked user, or empty string.
+    string getDisplayName(string userId)
+    {
+        synchronized (friendsMutex)
+        {
+            if (FriendState* f = userId in friends)
+                return f.displayName;
+            return null;
+        }
+    }
+
     /// Process a VRCEvent and update friend state.
     /// Returns true if the *client-visible* state changed. Per-handler change
     /// flags are too eager (VRChat resends identical frames with slightly

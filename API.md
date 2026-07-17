@@ -44,7 +44,7 @@ Authentication uses a shared secret token. If the server's secret is empty, auth
 {"type": "auth_ok", "server_version": 2}
 ```
 
-Protocol versions: `1` = base protocol, `2` = adds the content API (files, prints, inventory, images, uploads).
+Protocol versions: `1` = base protocol, `2` = adds the content API (files, prints, inventory, images, uploads), `3` = adds the moderation API (moderations, moderate_user, unfriend).
 
 **Failure:**
 ```json
@@ -107,6 +107,33 @@ Request world name resolution.
 |------------|--------|------------------------------|
 | `type`     | string | `"get_world"`                |
 | `world_id` | string | World ID (e.g. `"wrld_..."`) |
+
+### `get_moderations`
+
+Request the mute/block moderations snapshot. Server replies with `moderations`. Always refetches `GET auth/user/playermoderations` from VRChat: there are no WebSocket events for player moderations, so the cache goes stale whenever the user moderates in-game. Clients send this automatically after connect (when `server_version >= 3`) and from the Refresh button on the moderation list pages.
+
+```json
+{"type": "get_moderations"}
+```
+
+### `moderate_user`
+
+Add or remove a player moderation. The server calls `POST auth/user/playermoderations` (mute/block) or `PUT auth/user/unplayermoderate` (unmute/unblock), updates its cache, replies with `moderate_result`, and on success broadcasts a fresh `moderations` snapshot to all authenticated clients.
+
+| Field     | Type   | Description                                             |
+|-----------|--------|---------------------------------------------------------|
+| `type`    | string | `"moderate_user"`                                       |
+| `user_id` | string | Target user ID (`usr_...`)                              |
+| `action`  | string | One of `"mute"`, `"unmute"`, `"block"`, `"unblock"`     |
+
+### `unfriend`
+
+Remove a friend. The server calls `DELETE auth/user/friends/{userId}`, replies with `unfriend_result`, and on success eagerly removes the friend from the tracker and broadcasts a fresh `friends` snapshot (rather than waiting for the `friend-delete` WebSocket event). HTTP 404 is treated as success: the friendship is already gone, which is the desired end state.
+
+| Field     | Type   | Description                 |
+|-----------|--------|-----------------------------|
+| `type`    | string | `"unfriend"`                |
+| `user_id` | string | Target user ID (`usr_...`)  |
 
 ### `set_status`
 
@@ -364,6 +391,34 @@ Reply to a `set_status` request, sent only to the requesting client. On success,
 | `type`    | string | `"set_status_result"`                        |
 | `success` | bool   | Whether the VRChat update succeeded          |
 | `error`   | string | Error description (present only on failure)  |
+
+### `moderations`
+
+Mute/block snapshot. Sent as the reply to `get_moderations` and broadcast to all authenticated clients after any successful `moderate_user`. Moderation types other than mute/block (e.g. `interactOff`) are not included.
+
+| Field     | Type   | Description                                        |
+|-----------|--------|----------------------------------------------------|
+| `type`    | string | `"moderations"`                                    |
+| `muted`   | array  | Muted users: `{user_id, display_name}`             |
+| `blocked` | array  | Blocked users: `{user_id, display_name}`           |
+| `error`   | string | On failure, sent *instead of* the lists (rate limit, VRChat error) |
+
+### `moderate_result`
+
+Reply to a `moderate_user` request, sent only to the requesting client. On success, a `moderations` broadcast for all clients follows.
+
+| Field          | Type   | Description                                  |
+|----------------|--------|----------------------------------------------|
+| `type`         | string | `"moderate_result"`                          |
+| `success`      | bool   | Whether the VRChat call succeeded            |
+| `action`       | string | Echoed action                                |
+| `user_id`      | string | Echoed target user ID                        |
+| `display_name` | string | Target display name (best known; may be empty) |
+| `error`        | string | Error description (present only on failure)  |
+
+### `unfriend_result`
+
+Reply to an `unfriend` request, sent only to the requesting client. On success, a `friends` broadcast for all clients follows. Same fields as `moderate_result`, without `action`.
 
 ### `world`
 

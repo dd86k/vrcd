@@ -23,6 +23,7 @@ import server.content;
 import server.events;
 import server.friends;
 import server.instancecache;
+import server.moderations;
 import server.ratelimit;
 import server.database;
 import server.stream;
@@ -49,6 +50,7 @@ class APIServer
     private bool vrchatConnected;
     private string vrchatLastError;
     private FriendsTracker friendsTracker;
+    private ModerationsTracker moderationsTracker;
     private WorldCache worldCache;
     private InstanceCache instanceCache;
     private HTTPClient httpClient;
@@ -81,6 +83,7 @@ class APIServer
         this.store = store;
         this.clientsMutex = new Mutex();
         this.friendsTracker = new FriendsTracker();
+        this.moderationsTracker = new ModerationsTracker();
         this.reseedSignalMutex = new Mutex();
         this.reseedSignalCond = new Condition(this.reseedSignalMutex);
         this.reseedInterval = reseedInterval;
@@ -90,6 +93,12 @@ class APIServer
     FriendsTracker getFriendsTracker()
     {
         return friendsTracker;
+    }
+
+    /// Access the moderations tracker (mutes/blocks).
+    ModerationsTracker getModerationsTracker()
+    {
+        return moderationsTracker;
     }
 
     /// Set the world cache for resolving world names.
@@ -287,6 +296,28 @@ class APIServer
             }
         }
         logDebugging("broadcastFriendsSnapshot: clients=%d/%d",
+            delivered, clients.length);
+    }
+
+    /// Broadcast the current moderations snapshot to all authenticated
+    /// clients. Called after a successful moderate_user mutation.
+    void broadcastModerationsSnapshot()
+    {
+        string line = moderationsTracker.buildModerationsMessage().toString() ~ "\n";
+
+        clientsMutex.lock();
+        scope(exit) clientsMutex.unlock();
+
+        size_t delivered;
+        foreach (client; clients)
+        {
+            if (client.authenticated)
+            {
+                client.sendLine(line);
+                ++delivered;
+            }
+        }
+        logDebugging("broadcastModerationsSnapshot: clients=%d/%d",
             delivered, clients.length);
     }
 
@@ -648,6 +679,30 @@ private class ClientHandler
                     }
                     handleGetWorld(msg);
                     break;
+                case "get_moderations":
+                    if (authenticated == false)
+                    {
+                        sendError("Not authenticated");
+                        return;
+                    }
+                    handleGetModerations();
+                    break;
+                case "moderate_user":
+                    if (authenticated == false)
+                    {
+                        sendError("Not authenticated");
+                        return;
+                    }
+                    handleModerateUser(msg);
+                    break;
+                case "unfriend":
+                    if (authenticated == false)
+                    {
+                        sendError("Not authenticated");
+                        return;
+                    }
+                    handleUnfriend(msg);
+                    break;
                 case "notification_action":
                     if (authenticated == false)
                     {
@@ -823,7 +878,7 @@ private class ClientHandler
             authenticated = true;
             JSONValue resp = JSONValue([
                 "type": JSONValue("auth_ok"),
-                "server_version": JSONValue(2),
+                "server_version": JSONValue(3),
             ]);
             sendLine(resp.toString() ~ "\n");
             // Send current status immediately after auth.
@@ -1375,6 +1430,266 @@ private class ClientHandler
             ]);
             result["error"] = JSONValue(e.msg);
             sendLine(result.toString() ~ "\n");
+        }
+    }
+
+    /// Reply to `get_moderations`: refetch the mute/block lists from VRChat
+    /// and send a fresh `moderations` snapshot. Always refetches: VRChat has
+    /// no WS events for player moderations, so the cache goes stale whenever
+    /// the user moderates in-game, and the lists are small and rarely asked
+    /// for. Failures are reported inside the `moderations` message (not via
+    /// `error`) so the client's loading state resolves.
+    void handleGetModerations()
+    {
+        void sendModerationsError(string error)
+        {
+            JSONValue result = JSONValue([
+                "type": JSONValue("moderations"),
+                "error": JSONValue(error),
+            ]);
+            sendLine(result.toString() ~ "\n");
+        }
+
+        if (server.httpClient is null || server.apiMutex is null)
+        {
+            sendModerationsError("Server HTTP client not configured");
+            return;
+        }
+
+        server.apiMutex.lock();
+        scope(exit) server.apiMutex.unlock();
+
+        if (server.rateLimiter && server.rateLimiter.isBlocked())
+        {
+            sendModerationsError("Rate limited by VRChat, try again later");
+            return;
+        }
+
+        try
+        {
+            HTTPResponse resp = server.httpClient.get("/auth/user/playermoderations");
+            logDebugging("handleGetModerations: VRC GET /auth/user/playermoderations -> HTTP %d",
+                resp.code);
+            if (server.rateLimiter)
+            {
+                server.rateLimiter.update(resp);
+                server.broadcastStatus();
+            }
+            if (resp.code < 200 || resp.code >= 300)
+            {
+                sendModerationsError("HTTP " ~ resp.code.to!string);
+                return;
+            }
+
+            JSONValue json = parseJSON(resp.text);
+            if (json.type != JSONType.array)
+            {
+                sendModerationsError("Unexpected playermoderations response");
+                return;
+            }
+
+            server.moderationsTracker.replaceFromAPI(json.array);
+            sendLine(server.moderationsTracker.buildModerationsMessage().toString() ~ "\n");
+        }
+        catch (Exception e)
+        {
+            sendModerationsError(e.msg);
+        }
+    }
+
+    /// Add or remove a player moderation (mute/unmute/block/unblock).
+    /// Replies with `moderate_result`; on success also broadcasts a fresh
+    /// `moderations` snapshot to all authenticated clients.
+    void handleModerateUser(JSONValue msg)
+    {
+        string userId;
+        if (const(JSONValue)* v = "user_id" in msg)
+            userId = v.str;
+        string action;
+        if (const(JSONValue)* v = "action" in msg)
+            action = v.str;
+
+        if (userId.length == 0 || action.length == 0)
+        {
+            sendError("Missing user_id or action");
+            return;
+        }
+
+        // VRChat wants the moderation type; the action encodes both the
+        // type and the direction (add/remove).
+        string moderationType;
+        bool adding;
+        switch (action)
+        {
+            case "mute":    moderationType = "mute";  adding = true;  break;
+            case "unmute":  moderationType = "mute";  adding = false; break;
+            case "block":   moderationType = "block"; adding = true;  break;
+            case "unblock": moderationType = "block"; adding = false; break;
+            default:
+                sendError("Unknown moderation action: " ~ action);
+                return;
+        }
+
+        // From here on failures reply with moderate_result so the client's
+        // in-flight state resolves.
+        void sendResult(bool success, string displayName, string error)
+        {
+            JSONValue result = JSONValue([
+                "type": JSONValue("moderate_result"),
+                "success": JSONValue(success),
+                "action": JSONValue(action),
+                "user_id": JSONValue(userId),
+                "display_name": JSONValue(displayName),
+            ]);
+            if (error.length > 0)
+                result["error"] = JSONValue(error);
+            sendLine(result.toString() ~ "\n");
+        }
+
+        // Best-known display name for feedback wording; the POST response
+        // may improve on it below.
+        string displayName = server.friendsTracker.getDisplayName(userId);
+        if (displayName.length == 0)
+            displayName = server.moderationsTracker.getDisplayName(userId);
+
+        if (server.httpClient is null || server.apiMutex is null)
+        {
+            sendResult(false, displayName, "Server HTTP client not configured");
+            return;
+        }
+
+        server.apiMutex.lock();
+        scope(exit) server.apiMutex.unlock();
+
+        if (server.rateLimiter && server.rateLimiter.isBlocked())
+        {
+            sendResult(false, displayName, "Rate limited by VRChat, try again later");
+            return;
+        }
+
+        JSONValue payload = JSONValue([
+            "moderated": JSONValue(userId),
+            "type": JSONValue(moderationType),
+        ]);
+
+        try
+        {
+            HTTPResponse resp;
+            if (adding)
+                resp = server.httpClient.post("/auth/user/playermoderations", payload.toString());
+            else
+                resp = server.httpClient.put("/auth/user/unplayermoderate", payload.toString());
+            logDebugging("handleModerateUser: action=%s user=%s -> HTTP %d",
+                action, userId, resp.code);
+            if (server.rateLimiter)
+            {
+                server.rateLimiter.update(resp);
+                server.broadcastStatus();
+            }
+            bool success = resp.code >= 200 && resp.code < 300;
+            if (success == false)
+            {
+                sendResult(false, displayName, "HTTP " ~ resp.code.to!string);
+                return;
+            }
+
+            // The created PlayerModeration object carries the canonical
+            // display name; useful when moderating a non-friend.
+            if (adding)
+            {
+                try
+                {
+                    JSONValue mod = parseJSON(resp.text);
+                    if (const(JSONValue)* v = "targetDisplayName" in mod)
+                        if (v.type == JSONType.string && v.str.length > 0)
+                            displayName = v.str;
+                }
+                catch (Exception) {}
+            }
+
+            server.moderationsTracker.apply(action, userId, displayName);
+            sendResult(true, displayName, null);
+            server.broadcastModerationsSnapshot();
+        }
+        catch (Exception e)
+        {
+            sendResult(false, displayName, e.msg);
+        }
+    }
+
+    /// Remove a friend. Replies with `unfriend_result`; on success also
+    /// removes the friend from the tracker eagerly and broadcasts a fresh
+    /// `friends` snapshot (the friend-delete WS event arrives later).
+    void handleUnfriend(JSONValue msg)
+    {
+        string userId;
+        if (const(JSONValue)* v = "user_id" in msg)
+            userId = v.str;
+
+        if (userId.length == 0)
+        {
+            sendError("Missing user_id");
+            return;
+        }
+
+        void sendResult(bool success, string displayName, string error)
+        {
+            JSONValue result = JSONValue([
+                "type": JSONValue("unfriend_result"),
+                "success": JSONValue(success),
+                "user_id": JSONValue(userId),
+                "display_name": JSONValue(displayName),
+            ]);
+            if (error.length > 0)
+                result["error"] = JSONValue(error);
+            sendLine(result.toString() ~ "\n");
+        }
+
+        string displayName = server.friendsTracker.getDisplayName(userId);
+
+        if (server.httpClient is null || server.apiMutex is null)
+        {
+            sendResult(false, displayName, "Server HTTP client not configured");
+            return;
+        }
+
+        server.apiMutex.lock();
+        scope(exit) server.apiMutex.unlock();
+
+        if (server.rateLimiter && server.rateLimiter.isBlocked())
+        {
+            sendResult(false, displayName, "Rate limited by VRChat, try again later");
+            return;
+        }
+
+        try
+        {
+            HTTPResponse resp = server.httpClient.del("/auth/user/friends/" ~ userId);
+            logDebugging("handleUnfriend: user=%s -> HTTP %d", userId, resp.code);
+            if (server.rateLimiter)
+            {
+                server.rateLimiter.update(resp);
+                server.broadcastStatus();
+            }
+            bool success = resp.code >= 200 && resp.code < 300;
+            // Already not a friend: the desired end state, treat as success.
+            if (success == false && resp.code == 404)
+                success = true;
+
+            if (success)
+            {
+                server.friendsTracker.removeFriend(userId);
+                sendResult(true, displayName, null);
+                server.broadcastFriendsSnapshot();
+            }
+            else
+            {
+                sendResult(false, displayName, "HTTP " ~ resp.code.to!string);
+            }
+        }
+        catch (Exception e)
+        {
+            sendResult(false, displayName, e.msg);
         }
     }
 
