@@ -2608,8 +2608,8 @@ private void drawFriendListPage(mu_Context* ctx, AppState* state, int scrollDelt
         mu_label(ctx, "No friend data yet.");
     }
 
-    foreach (ref FriendInfo f; state.allFriends)
-        drawFriendManageRow(ctx, state, f, canManage);
+    foreach (size_t i, ref FriendInfo f; state.allFriends)
+        drawFriendManageRow(ctx, state, f, canManage, i);
 
     if (state.moderationActionInFlight)
     {
@@ -2620,17 +2620,43 @@ private void drawFriendListPage(mu_Context* ctx, AppState* state, int scrollDelt
     mu_end_panel(ctx);
 }
 
+/// Background for odd rows in management lists: a full-width band that
+/// binds a name to its buttons so the eye doesn't lose the row.
+private enum mu_Color manageRowBg = mu_Color(40, 44, 54, 255);
+/// Warm-tinted band for a row with an armed destructive confirmation.
+private enum mu_Color manageArmedBg = mu_Color(64, 44, 46, 255);
+
+/// Draw the zebra band behind the current row and return the first cell.
+/// Call right after mu_layout_row; the band spans the panel body width and
+/// widgets drawn afterwards land on top of it.
+private mu_Rect manageRowBand(mu_Context* ctx, size_t index, mu_Color armed = mu_Color.init,
+    int extraH = 0)
+{
+    mu_Rect cell = mu_layout_next(ctx);
+    mu_Rect body_ = mu_get_current_container(ctx).body_;
+    if (armed != mu_Color.init)
+        mu_draw_rect(ctx, mu_Rect(body_.x, cell.y, body_.w, cell.h + extraH), armed);
+    else if (index % 2)
+        mu_draw_rect(ctx, mu_Rect(body_.x, cell.y, body_.w, cell.h + extraH), manageRowBg);
+    return cell;
+}
+
 /// One friend row for the management list: name plus Mute/Block/Unfriend.
 /// When Block or Unfriend is armed for this row, Cancel takes over the
 /// button column (where the finger just was) and Confirm appears on the
 /// opposite side of a second row, so an accidental double tap cancels.
-private void drawFriendManageRow(mu_Context* ctx, AppState* state, ref FriendInfo f, bool canManage)
+private void drawFriendManageRow(mu_Context* ctx, AppState* state, ref FriendInfo f,
+    bool canManage, size_t index)
 {
+    int padX = ctx.style.padding;
+
     if (canManage == false)
     {
         static immutable int[1] fullCol = [-1];
         mu_layout_row(ctx, 1, fullCol.ptr, 40);
-        mu_label(ctx, f.displayName);
+        mu_Rect cell = manageRowBand(ctx, index);
+        mu_draw_control_text(ctx, f.displayName,
+            mu_Rect(cell.x + padX, cell.y, cell.w - padX, cell.h), MU_COLOR_TEXT, 0);
         return;
     }
 
@@ -2640,12 +2666,18 @@ private void drawFriendManageRow(mu_Context* ctx, AppState* state, ref FriendInf
 
     if (armedKind == "block" || armedKind == "unfriend")
     {
-        // Prompt on the left, Cancel over the old button column.
+        // Prompt on the left, Cancel over the old button column. The armed
+        // band covers both rows so the pending action reads as one unit.
         static immutable int[2] armedCols = [-260, -1];
         char[128] buffer = void;
         mu_layout_row(ctx, 2, armedCols.ptr, 56);
-        mu_label(ctx, cast(string) sformat(buffer, "%s %s?",
-            armedKind == "block" ? "Block" : "Unfriend", f.displayName));
+        mu_Rect promptCell = manageRowBand(ctx, index, manageArmedBg,
+            56 + ctx.style.spacing);
+        mu_draw_control_text(ctx,
+            cast(string) sformat(buffer, "%s %s?",
+                armedKind == "block" ? "Block" : "Unfriend", f.displayName),
+            mu_Rect(promptCell.x + padX, promptCell.y, promptCell.w - padX, promptCell.h),
+            MU_COLOR_TEXT, 0);
         if (clickButton(ctx, "Cancel"))
             state.armedConfirm = ArmedConfirm.init;
 
@@ -2667,7 +2699,10 @@ private void drawFriendManageRow(mu_Context* ctx, AppState* state, ref FriendInf
 
     static immutable int[4] cols = [-360, 110, 110, -1];
     mu_layout_row(ctx, 4, cols.ptr, 56);
-    mu_label(ctx, f.displayName);
+    mu_Rect nameCell = manageRowBand(ctx, index);
+    mu_draw_control_text(ctx, f.displayName,
+        mu_Rect(nameCell.x + padX, nameCell.y, nameCell.w - padX, nameCell.h),
+        MU_COLOR_TEXT, 0);
     if (clickButton(ctx, muted ? "Unmute" : "Mute"))
     {
         if (state.moderationActionInFlight == false)
@@ -2739,10 +2774,14 @@ private void drawModerationListPage(mu_Context* ctx, AppState* state, int scroll
     }
 
     static immutable int[2] rowCols = [-160, -1];
-    foreach (ref ModerationEntry m; list)
+    int padX = ctx.style.padding;
+    foreach (size_t i, ref ModerationEntry m; list)
     {
         mu_layout_row(ctx, 2, rowCols.ptr, 56);
-        mu_label(ctx, m.displayName);
+        mu_Rect nameCell = manageRowBand(ctx, i);
+        mu_draw_control_text(ctx, m.displayName,
+            mu_Rect(nameCell.x + padX, nameCell.y, nameCell.w - padX, nameCell.h),
+            MU_COLOR_TEXT, 0);
         if (clickButton(ctx, mutePage ? "Unmute" : "Unblock"))
         {
             if (state.moderationActionInFlight == false)
