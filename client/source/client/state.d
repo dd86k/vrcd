@@ -131,6 +131,34 @@ struct InstanceGroup
     long capacity = -1; // -1 = unknown
 }
 
+/// A muted or blocked user from the server `moderations` snapshot.
+/// Player moderations are not limited to friends, so entries carry their
+/// own display names instead of referencing FriendInfo.
+struct ModerationEntry
+{
+    string userId;
+    string displayName;
+}
+
+/// A pending moderation/friendship action to send to the server.
+struct ModerationAction
+{
+    string userId;
+    string displayName; // for status flash wording
+    string action;      // "mute", "unmute", "block", "unblock", "unfriend"
+}
+
+/// Armed state for two-tap destructive buttons. kind+id identify the
+/// arming button, so only one confirmation can be pending at a time.
+struct ArmedConfirm
+{
+    string kind; // "block", "unfriend", "delete", ...; empty = disarmed
+    string id;   // user/file/print/inventory id
+}
+
+/// Sub-pages of the TOOLS tab.
+enum ToolsPage { main, stripMetadata, friendList, muteList, blockList }
+
 /// A pending notification action to send to the server.
 struct NotificationAction
 {
@@ -281,7 +309,27 @@ struct AppState
     InstanceGroup[] instances;
     FriendInfo[] activeElsewhereFriends; // online but not in a visible/joinable world
     FriendInfo[] offlineFriends;
+    FriendInfo[] allFriends;    // flat roster sorted by name, for the TOOLS friend list
     FriendInfo* selectedFriend; // null = list view, non-null = profile view
+
+    // Moderations (mutes/blocks) from the server `moderations` snapshot.
+    ModerationEntry[] mutedUsers;
+    ModerationEntry[] blockedUsers;
+    bool moderationsLoaded;
+    bool moderationsLoading;
+    string moderationsError;
+    bool refreshModerationsRequested;
+
+    // Moderation/friendship actions queued by the UI, drained by gui.d.
+    ModerationAction[] pendingModerationActions;
+    bool moderationActionInFlight;
+
+    // Server protocol version from auth_ok (0 = unknown). The moderation
+    // API (get_moderations, moderate_user, unfriend) needs version 3.
+    long serverProtocol;
+
+    // Two-tap confirmation state shared by all destructive buttons.
+    ArmedConfirm armedConfirm;
 
     // Notifications tab
     NotificationEntry[] notifications;
@@ -349,9 +397,9 @@ struct AppState
     // Picture metadata insertion toggle (int for mu_checkbox compatibility).
     int insertPictureMetadata = 1;
 
-    // Tools tab,  strip metadata
-    bool stripMetadataPage;
-    string[] droppedFiles;
+    // Tools tab
+    ToolsPage toolsPage;
+    string[] droppedFiles;  // strip metadata queue (also inventory upload source)
     string stripStatus;
 
     // Inventory ("STUFF") tab
@@ -379,7 +427,6 @@ struct AppState
     ContentFile selectedInvFile;
     PrintEntry selectedInvPrint;
     InventoryEntry selectedInvItem;
-    bool invDeleteArmed;    // two-tap delete confirmation
 
     // Management actions queued by the UI, drained by gui.d.
     ContentAction[] pendingContentActions;
@@ -447,6 +494,28 @@ struct AppState
         // Prepend (newest first).
         notifications = NotificationEntry(notificationId, notificationType,
             senderName, message, receivedAtUnix) ~ notifications;
+    }
+
+    /// Whether a user is muted, per the last moderations snapshot.
+    bool isMuted(string userId)
+    {
+        foreach (ref ModerationEntry m; mutedUsers)
+        {
+            if (m.userId == userId)
+                return true;
+        }
+        return false;
+    }
+
+    /// Whether a user is blocked, per the last moderations snapshot.
+    bool isBlocked(string userId)
+    {
+        foreach (ref ModerationEntry m; blockedUsers)
+        {
+            if (m.userId == userId)
+                return true;
+        }
+        return false;
     }
 
     /// Remove a notification by its VRChat ID.

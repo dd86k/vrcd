@@ -545,6 +545,7 @@ private void eventLoop(mu_Context* uictx)
                     {
                         appState.connected = true;
                         appState.serverStatus = "Connected";
+                        appState.serverProtocol = conn ? conn.serverVersion : 0;
                         // Don't reset dapPairState here. The server sends its
                         // dap_status snapshot right after auth_ok, so by the
                         // time we observe this `connected` transition the
@@ -579,6 +580,10 @@ private void eventLoop(mu_Context* uictx)
                         // `older_fetched` reply now; clear the flag so the
                         // "Load older events" button isn't stuck disabled.
                         appState.fetchingOlder = false;
+                        // Same for moderation round-trips.
+                        appState.moderationsLoading = false;
+                        appState.moderationActionInFlight = false;
+                        appState.serverProtocol = 0;
                     }
                     break;
             }
@@ -618,6 +623,20 @@ private void eventLoop(mu_Context* uictx)
             appState.refreshFriendsRequested = false;
             if (conn && appState.connected)
                 conn.requestFriends();
+        }
+
+        // Handle moderations (mute/block lists) refresh request.
+        if (appState.refreshModerationsRequested)
+        {
+            appState.refreshModerationsRequested = false;
+            if (conn && appState.connected &&
+                conn.serverVersion >= PROTOCOL_MODERATION &&
+                appState.moderationsLoading == false)
+            {
+                conn.requestModerations();
+                appState.moderationsLoading = true;
+                appState.moderationsError = null;
+            }
         }
 
         // Handle "Fetch older" request from the Feed tab.
@@ -897,6 +916,23 @@ private void eventLoop(mu_Context* uictx)
                 }
             }
             appState.pendingContentActions.length = 0;
+        }
+
+        // Drain queued moderation/friendship actions.
+        if (appState.pendingModerationActions.length > 0)
+        {
+            if (conn && appState.connected)
+            {
+                foreach (ref ModerationAction act; appState.pendingModerationActions)
+                {
+                    if (act.action == "unfriend")
+                        conn.sendUnfriend(act.userId);
+                    else
+                        conn.sendModerateUser(act.userId, act.action);
+                    appState.moderationActionInFlight = true;
+                }
+            }
+            appState.pendingModerationActions.length = 0;
         }
 
         // Handle upload request from the inventory tab.
@@ -1192,6 +1228,39 @@ private void drainNetworkMessages()
                     appState.statusUpdateError = errMsg.length > 0 ? errMsg : "Unknown error";
                     appState.addFeedEntry(0, "error", "",
                         "Status update failed: " ~ errMsg, timeNow(), "", false, EventSource.system);
+                }
+                break;
+
+            case "moderations":
+                applyModerationsSnapshot(msg);
+                break;
+
+            case "moderate_result", "unfriend_result":
+                appState.moderationActionInFlight = false;
+                bool modOk;
+                if (const(JSONValue) *jsuccess = "success" in msg)
+                    modOk = jsuccess.type == JSONType.true_;
+                string modAction = msgType == "unfriend_result" ? "unfriend" : null;
+                if (modAction is null)
+                    if (const(JSONValue)* v = "action" in msg)
+                        modAction = v.str;
+                string modUser;
+                if (const(JSONValue)* v = "display_name" in msg)
+                    modUser = v.str;
+                if (modOk)
+                {
+                    // Server follows up with a fresh moderations/friends snapshot.
+                    appState.addFeedEntry(0, "system", modUser,
+                        moderationDoneLabel(modAction), timeNow(), "", false, EventSource.system);
+                }
+                else
+                {
+                    string modErr;
+                    if (const(JSONValue)* v = "error" in msg)
+                        modErr = v.str;
+                    appState.addFeedEntry(0, "error", modUser,
+                        moderationVerbLabel(modAction) ~ " failed: " ~ modErr,
+                        timeNow(), "", false, EventSource.system);
                 }
                 break;
 
@@ -1703,7 +1772,7 @@ private void applyImageReply(JSONValue msg)
 private void applyContentActionResult(string msgType, JSONValue msg)
 {
     appState.invActionInFlight = false;
-    appState.invDeleteArmed = false;
+    appState.armedConfirm = ArmedConfirm.init;
 
     const(JSONValue) *jok = "success" in msg;
     bool ok = jok && jok.type == JSONType.true_;
@@ -2041,6 +2110,108 @@ private void applyFriendsSnapshot(JSONValue msg)
     appState.activeElsewhereFriends = activeElsewhere;
     appState.offlineFriends = offlineFriends;
     appState.selectedFriend = null; // Reset selection on refresh.
+
+    // Flat roster for the TOOLS friend list, sorted by name only.
+    FriendInfo[] all;
+    foreach (ref InstanceGroup ig; instances)
+        all ~= ig.friends;
+    all ~= activeElsewhere;
+    all ~= offlineFriends;
+    sort!nameLess(all);
+    appState.allFriends = all;
+    // Rows may have moved under an armed confirmation; disarm.
+    appState.armedConfirm = ArmedConfirm.init;
+}
+
+/// Apply a `moderations` snapshot: mute and block lists.
+private void applyModerationsSnapshot(JSONValue msg)
+{
+    appState.moderationsLoading = false;
+
+    if (const(JSONValue)* v = "error" in msg)
+    {
+        appState.moderationsError = v.str;
+        return;
+    }
+
+    static ModerationEntry parseModerationEntry(JSONValue v)
+    {
+        ModerationEntry e;
+        if (const(JSONValue)* p = "user_id" in v)
+            e.userId = p.str;
+        if (const(JSONValue)* p = "display_name" in v)
+            e.displayName = p.str;
+        return e;
+    }
+
+    ModerationEntry[] muted;
+    ModerationEntry[] blocked;
+
+    if (const(JSONValue) *jmuted = "muted" in msg)
+    if (jmuted.type == JSONType.array)
+    {
+        foreach (v; jmuted.array)
+            muted ~= parseModerationEntry(v);
+    }
+
+    if (const(JSONValue) *jblocked = "blocked" in msg)
+    if (jblocked.type == JSONType.array)
+    {
+        foreach (v; jblocked.array)
+            blocked ~= parseModerationEntry(v);
+    }
+
+    sort!moderationLess(muted);
+    sort!moderationLess(blocked);
+
+    appState.mutedUsers = muted;
+    appState.blockedUsers = blocked;
+    appState.moderationsLoaded = true;
+    appState.moderationsError = null;
+    // Rows may have moved under an armed confirmation; disarm.
+    appState.armedConfirm = ArmedConfirm.init;
+}
+
+/// Feed wording for a completed moderation action.
+private string moderationDoneLabel(string action)
+{
+    switch (action)
+    {
+        case "mute":     return "Muted";
+        case "unmute":   return "Unmuted";
+        case "block":    return "Blocked";
+        case "unblock":  return "Unblocked";
+        case "unfriend": return "Unfriended";
+        default:         return "Moderation done";
+    }
+}
+
+/// Feed wording for a failed moderation action.
+private string moderationVerbLabel(string action)
+{
+    switch (action)
+    {
+        case "mute":     return "Mute";
+        case "unmute":   return "Unmute";
+        case "block":    return "Block";
+        case "unblock":  return "Unblock";
+        case "unfriend": return "Unfriend";
+        default:         return "Moderation";
+    }
+}
+
+/// Case-insensitive display-name ordering for the flat friend roster.
+private bool nameLess(ref const FriendInfo a, ref const FriendInfo b)
+{
+    import std.uni : icmp;
+    return icmp(a.displayName, b.displayName) < 0;
+}
+
+/// ditto, for moderation entries.
+private bool moderationLess(ref const ModerationEntry a, ref const ModerationEntry b)
+{
+    import std.uni : icmp;
+    return icmp(a.displayName, b.displayName) < 0;
 }
 
 // Friend comparison function

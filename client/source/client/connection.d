@@ -19,6 +19,10 @@ import client.stream;
 /// Callback for received events.
 alias EventCallback = void delegate(JSONValue event);
 
+/// Minimum server protocol version for the moderation API
+/// (get_moderations, moderate_user, unfriend).
+enum long PROTOCOL_MODERATION = 3;
+
 /// TCP connection to the vrcd server.
 /// Handles auth, catch-up, and live event streaming via JSON-L.
 /// Supports optional TLS encryption when compiled with the openssl dependency.
@@ -190,6 +194,40 @@ class ServerConnection
         logDebugging("requestFriends");
         sendMessage(JSONValue([
             "type": JSONValue("get_friends"),
+        ]));
+    }
+
+    /// Request the mute/block moderations snapshot. Server replies with
+    /// `moderations`. Requires PROTOCOL_MODERATION.
+    void requestModerations()
+    {
+        logDebugging("requestModerations");
+        sendMessage(JSONValue([
+            "type": JSONValue("get_moderations"),
+        ]));
+    }
+
+    /// Add or remove a player moderation. `action` is one of "mute",
+    /// "unmute", "block", "unblock". Server replies with `moderate_result`
+    /// and follows up with a fresh `moderations` snapshot.
+    void sendModerateUser(string userId, string action)
+    {
+        logDebugging("sendModerateUser: user=%s action=%s", userId, action);
+        sendMessage(JSONValue([
+            "type": JSONValue("moderate_user"),
+            "user_id": JSONValue(userId),
+            "action": JSONValue(action),
+        ]));
+    }
+
+    /// Remove a friend. Server replies with `unfriend_result` and follows
+    /// up with a fresh `friends` snapshot.
+    void sendUnfriend(string userId)
+    {
+        logDebugging("sendUnfriend: user=%s", userId);
+        sendMessage(JSONValue([
+            "type": JSONValue("unfriend"),
+            "user_id": JSONValue(userId),
         ]));
     }
 
@@ -491,6 +529,10 @@ class ServerConnection
         {
             catchUp(sinceId);
             requestFriends();
+            // Older servers reply to unknown message types with an error
+            // that would land in the feed; only ask when supported.
+            if (serverVersion >= PROTOCOL_MODERATION)
+                requestModerations();
             runThreadedImpl(queue, sdlEventType);
         }
         catch (Exception e)

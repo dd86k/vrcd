@@ -18,6 +18,7 @@ import client.notifications : notifyEventLabels, feedEventLabels, feedFilterSect
     feedEventIndex, prettyEventType;
 import client.imagecache : imageKey, getIconId;
 import client.renderer : window_width, window_height;
+import client.connection : PROTOCOL_MODERATION;
 import client.gui : wasClick, requestRepaint;
 import client.state;
 import client.stream : tlsAvailable;
@@ -908,6 +909,40 @@ private bool clickButton(mu_Context* ctx, string label)
     return false;
 }
 
+/// Two-tap destructive button that never places Confirm where the first
+/// tap landed: arming turns the button itself into Cancel, and Confirm
+/// appears below it offset to the right, so an accidental double tap
+/// cancels instead of confirming. Returns true when confirmed.
+/// kind+id key the armed state so only one confirmation is pending at a
+/// time across the whole UI.
+private bool confirmButton(mu_Context* ctx, AppState* state,
+    string kind, string id, string label, string confirmLabel)
+{
+    static immutable int[1] fullCol = [-1];
+
+    mu_layout_row(ctx, 1, fullCol.ptr, 60);
+    if (state.armedConfirm.kind != kind || state.armedConfirm.id != id)
+    {
+        if (clickButton(ctx, label))
+            state.armedConfirm = ArmedConfirm(kind, id);
+        return false;
+    }
+
+    if (clickButton(ctx, "Cancel"))
+        state.armedConfirm = ArmedConfirm.init;
+
+    int half = mu_get_current_container(ctx).body_.w / 2;
+    int[2] confirmCols = [half, -1];
+    mu_layout_row(ctx, 2, confirmCols.ptr, 56);
+    mu_layout_next(ctx); // left spacer keeps Confirm off the original button
+    if (clickButton(ctx, confirmLabel))
+    {
+        state.armedConfirm = ArmedConfirm.init;
+        return true;
+    }
+    return false;
+}
+
 /// Draw a grid cell: text with a right-side vertical separator line.
 private void gridCell(mu_Context* ctx, const(char)[] text, mu_Color lineColor, bool lastCol = false)
 {
@@ -1397,6 +1432,16 @@ private void drawFriendCard(mu_Context* ctx, AppState* state, ref FriendInfo f)
     mu_draw_control_text(ctx, f.displayName,
         mu_Rect(innerX, r.y + 6, innerW, 22), MU_COLOR_TEXT, 0);
 
+    // Moderation badge, right-aligned on the name line.
+    string badge;
+    if (state.isBlocked(f.userId))
+        badge = "BLOCKED";
+    else if (state.isMuted(f.userId))
+        badge = "MUTED";
+    if (badge.length > 0)
+        mu_draw_control_text(ctx, badge,
+            mu_Rect(innerX, r.y + 6, innerW, 22), MU_COLOR_TEXT, MU_OPT_ALIGNRIGHT);
+
     char[128] buffer = void;
     string sub;
     if (f.status && f.platform)
@@ -1410,7 +1455,10 @@ private void drawFriendCard(mu_Context* ctx, AppState* state, ref FriendInfo f)
         mu_draw_control_text(ctx, sub, mu_Rect(innerX, r.y + 30, innerW, 20), MU_COLOR_TEXT, 0);
 
     if (wasClick && mouseOver)
+    {
         state.selectedFriend = &f;
+        state.armedConfirm = ArmedConfirm.init;
+    }
 }
 
 /// Map feed event source to an accent colour for the row strip.
@@ -1457,6 +1505,7 @@ private void drawFriendProfile(mu_Context* ctx, AppState* state, int scrollDelta
     if (mu_button(ctx, "< Back"))
     {
         state.selectedFriend = null;
+        state.armedConfirm = ArmedConfirm.init;
         mu_end_panel(ctx);
         return;
     }
@@ -1526,6 +1575,63 @@ private void drawFriendProfile(mu_Context* ctx, AppState* state, int scrollDelta
         mu_layout_row(ctx, 2, labelValCols.ptr, 0);
         mu_label(ctx, "User ID");
         clickableValue(ctx, state, f.userId);
+    }
+
+    // Management actions. Requires the server-side moderation API.
+    if (f.userId.length > 0 && state.serverProtocol >= PROTOCOL_MODERATION)
+    {
+        spacer(ctx);
+        sectionHeader(ctx, "Manage");
+
+        bool muted = state.isMuted(f.userId);
+        bool blocked = state.isBlocked(f.userId);
+
+        mu_layout_row(ctx, 1, fullCol.ptr, 60);
+        if (clickButton(ctx, muted ? "Unmute" : "Mute"))
+        {
+            if (state.moderationActionInFlight == false)
+            {
+                state.pendingModerationActions ~= ModerationAction(f.userId, f.displayName,
+                    muted ? "unmute" : "mute");
+                setStatusFlash(state, muted ? "  Unmuting..." : "  Muting...");
+            }
+        }
+
+        if (blocked)
+        {
+            mu_layout_row(ctx, 1, fullCol.ptr, 60);
+            if (clickButton(ctx, "Unblock"))
+            {
+                if (state.moderationActionInFlight == false)
+                {
+                    state.pendingModerationActions ~= ModerationAction(f.userId, f.displayName, "unblock");
+                    setStatusFlash(state, "  Unblocking...");
+                }
+            }
+        }
+        else if (confirmButton(ctx, state, "block", f.userId, "Block", "Confirm Block"))
+        {
+            if (state.moderationActionInFlight == false)
+            {
+                state.pendingModerationActions ~= ModerationAction(f.userId, f.displayName, "block");
+                setStatusFlash(state, "  Blocking...");
+            }
+        }
+
+        if (confirmButton(ctx, state, "unfriend", f.userId, "Unfriend", "Confirm Unfriend"))
+        {
+            if (state.moderationActionInFlight == false)
+            {
+                state.pendingModerationActions ~= ModerationAction(f.userId, f.displayName, "unfriend");
+                setStatusFlash(state, "  Unfriending...");
+            }
+        }
+
+        if (state.moderationActionInFlight)
+        {
+            mu_layout_row(ctx, 1, fullCol.ptr, 0);
+            mu_label(ctx, "Working...");
+        }
     }
 
     mu_end_panel(ctx);
@@ -1731,7 +1837,7 @@ private void drawInventoryTab(mu_Context* ctx, AppState* state, int scrollDelta)
         else if (mu_button(ctx, invSectionLabels[i]))
         {
             state.invSection = section;
-            state.invDeleteArmed = false;
+            state.armedConfirm = ArmedConfirm.init;
         }
     }
     // The selector row may have just switched sections; everything below
@@ -1918,7 +2024,7 @@ private void drawFilesGrid(mu_Context* ctx, AppState* state, mu_Container* panel
         {
             state.selectedInvFile = f;
             state.invDetailOpen = true;
-            state.invDeleteArmed = false;
+            state.armedConfirm = ArmedConfirm.init;
             requestRepaint();
         }
     }
@@ -1941,7 +2047,7 @@ private void drawPrintsGrid(mu_Context* ctx, AppState* state, mu_Container* pane
         {
             state.selectedInvPrint = p;
             state.invDetailOpen = true;
-            state.invDeleteArmed = false;
+            state.armedConfirm = ArmedConfirm.init;
             requestRepaint();
         }
     }
@@ -2005,7 +2111,7 @@ private void drawItemsGrid(mu_Context* ctx, AppState* state, mu_Container* panel
             {
                 state.selectedInvItem = it;
                 state.invDetailOpen = true;
-                state.invDeleteArmed = false;
+                state.armedConfirm = ArmedConfirm.init;
                 requestRepaint();
             }
         }
@@ -2026,7 +2132,7 @@ private void drawInventoryDetailPage(mu_Context* ctx, AppState* state, int scrol
     if (clickButton(ctx, "< Back"))
     {
         state.invDetailOpen = false;
-        state.invDeleteArmed = false;
+        state.armedConfirm = ArmedConfirm.init;
         requestRepaint();
         mu_end_panel(ctx);
         return;
@@ -2179,37 +2285,25 @@ private void drawInventoryDetailPage(mu_Context* ctx, AppState* state, int scrol
     mu_end_panel(ctx);
 }
 
-/// Two-tap delete button: first tap arms, second tap sends the action.
+/// Two-tap delete button (non-aligned confirm; see confirmButton).
 private void drawDeleteButton(mu_Context* ctx, AppState* state, string kind, string id)
 {
-    static immutable int[1] fullCol = [-1];
-
-    mu_layout_row(ctx, 1, fullCol.ptr, 60);
-    if (state.invDeleteArmed)
+    if (confirmButton(ctx, state, "delete", id, "Delete", "Confirm Delete"))
     {
-        if (clickButton(ctx, "Really delete? (tap to confirm)"))
-        {
-            state.invDeleteArmed = false;
-            if (state.invActionInFlight == false && id.length > 0)
-                state.pendingContentActions ~= ContentAction(kind, id);
-        }
-        mu_layout_row(ctx, 1, fullCol.ptr, 40);
-        if (clickButton(ctx, "Cancel"))
-            state.invDeleteArmed = false;
-    }
-    else
-    {
-        if (clickButton(ctx, "Delete"))
-            state.invDeleteArmed = true;
+        if (state.invActionInFlight == false && id.length > 0)
+            state.pendingContentActions ~= ContentAction(kind, id);
     }
 }
 
 private void drawToolsTab(mu_Context* ctx, AppState* state, int scrollDelta)
 {
-    if (state.stripMetadataPage)
+    final switch (state.toolsPage)
     {
-        drawStripMetadataPage(ctx, state);
-        return;
+        case ToolsPage.main:          break;
+        case ToolsPage.stripMetadata: drawStripMetadataPage(ctx, state);              return;
+        case ToolsPage.friendList:    drawFriendListPage(ctx, state, scrollDelta);    return;
+        case ToolsPage.muteList:      drawModerationListPage(ctx, state, scrollDelta, true);  return;
+        case ToolsPage.blockList:     drawModerationListPage(ctx, state, scrollDelta, false); return;
     }
 
     static immutable int[1] fullCol  = [-1];
@@ -2218,6 +2312,29 @@ private void drawToolsTab(mu_Context* ctx, AppState* state, int scrollDelta)
 
     applyScroll(ctx, scrollDelta);
 
+    sectionHeader(ctx, "Social");
+
+    mu_layout_row(ctx, COLCOUNT, fullCol.ptr, 60);
+    if (clickButton(ctx, "Friend List"))
+        state.toolsPage = ToolsPage.friendList;
+
+    mu_layout_row(ctx, COLCOUNT, fullCol.ptr, 60);
+    if (clickButton(ctx, "Muted Users"))
+    {
+        state.toolsPage = ToolsPage.muteList;
+        if (state.moderationsLoaded == false)
+            state.refreshModerationsRequested = true;
+    }
+
+    mu_layout_row(ctx, COLCOUNT, fullCol.ptr, 60);
+    if (clickButton(ctx, "Blocked Users"))
+    {
+        state.toolsPage = ToolsPage.blockList;
+        if (state.moderationsLoaded == false)
+            state.refreshModerationsRequested = true;
+    }
+
+    spacer(ctx);
     sectionHeader(ctx, "Pictures");
 
     mu_layout_row(ctx, COLCOUNT, fullCol.ptr, 60);
@@ -2237,7 +2354,7 @@ private void drawToolsTab(mu_Context* ctx, AppState* state, int scrollDelta)
     mu_layout_row(ctx, COLCOUNT, fullCol.ptr, 60);
     if (clickButton(ctx, "Strip Metadata"))
     {
-        state.stripMetadataPage = true;
+        state.toolsPage = ToolsPage.stripMetadata;
     }
 
     spacer(ctx);
@@ -2316,7 +2433,7 @@ private void drawStripMetadataPage(mu_Context* ctx, AppState* state)
     mu_layout_row(ctx, 1, fullCol.ptr, 40);
     if (clickButton(ctx, "< Back"))
     {
-        state.stripMetadataPage = false;
+        state.toolsPage = ToolsPage.main;
         requestRepaint();
         mu_end_panel(ctx);
         return;
@@ -2454,6 +2571,193 @@ private void openDroppedFileFolder(AppState* state)
         return;
 
     openFolder( dirName(state.droppedFiles[0]) );
+}
+
+/// TOOLS > Friend List: flat roster with mute/block/unfriend management.
+private void drawFriendListPage(mu_Context* ctx, AppState* state, int scrollDelta)
+{
+    static immutable int[1] fullCol = [-1];
+
+    mu_begin_panel(ctx, "FriendListPanel");
+    applyScroll(ctx, scrollDelta);
+
+    mu_layout_row(ctx, 1, fullCol.ptr, 40);
+    if (clickButton(ctx, "< Back"))
+    {
+        state.toolsPage = ToolsPage.main;
+        state.armedConfirm = ArmedConfirm.init;
+        requestRepaint();
+        mu_end_panel(ctx);
+        return;
+    }
+
+    char[64] countBuffer = void;
+    mu_layout_row(ctx, 1, fullCol.ptr, 0);
+    mu_label(ctx, cast(string) sformat(countBuffer, "Friends: %d", state.allFriends.length));
+
+    bool canManage = state.connected && state.serverProtocol >= PROTOCOL_MODERATION;
+    if (state.connected && canManage == false)
+    {
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        mu_label(ctx, "Server too old for management actions (needs protocol 3).");
+    }
+
+    if (state.allFriends.length == 0)
+    {
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        mu_label(ctx, "No friend data yet.");
+    }
+
+    foreach (ref FriendInfo f; state.allFriends)
+        drawFriendManageRow(ctx, state, f, canManage);
+
+    if (state.moderationActionInFlight)
+    {
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        mu_label(ctx, "Working...");
+    }
+
+    mu_end_panel(ctx);
+}
+
+/// One friend row for the management list: name plus Mute/Block/Unfriend.
+/// When Block or Unfriend is armed for this row, Cancel takes over the
+/// button column (where the finger just was) and Confirm appears on the
+/// opposite side of a second row, so an accidental double tap cancels.
+private void drawFriendManageRow(mu_Context* ctx, AppState* state, ref FriendInfo f, bool canManage)
+{
+    if (canManage == false)
+    {
+        static immutable int[1] fullCol = [-1];
+        mu_layout_row(ctx, 1, fullCol.ptr, 40);
+        mu_label(ctx, f.displayName);
+        return;
+    }
+
+    string armedKind;
+    if (state.armedConfirm.id == f.userId)
+        armedKind = state.armedConfirm.kind;
+
+    if (armedKind == "block" || armedKind == "unfriend")
+    {
+        // Prompt on the left, Cancel over the old button column.
+        static immutable int[2] armedCols = [-260, -1];
+        char[128] buffer = void;
+        mu_layout_row(ctx, 2, armedCols.ptr, 56);
+        mu_label(ctx, cast(string) sformat(buffer, "%s %s?",
+            armedKind == "block" ? "Block" : "Unfriend", f.displayName));
+        if (clickButton(ctx, "Cancel"))
+            state.armedConfirm = ArmedConfirm.init;
+
+        // Confirm goes bottom-left, away from the button column above.
+        static immutable int[2] confirmCols = [220, -1];
+        mu_layout_row(ctx, 2, confirmCols.ptr, 56);
+        if (clickButton(ctx, armedKind == "block" ? "Confirm Block" : "Confirm Unfriend"))
+        {
+            state.armedConfirm = ArmedConfirm.init;
+            if (state.moderationActionInFlight == false)
+                state.pendingModerationActions ~= ModerationAction(f.userId, f.displayName, armedKind);
+        }
+        mu_layout_next(ctx); // right spacer
+        return;
+    }
+
+    bool muted = state.isMuted(f.userId);
+    bool blocked = state.isBlocked(f.userId);
+
+    static immutable int[4] cols = [-360, 110, 110, -1];
+    mu_layout_row(ctx, 4, cols.ptr, 56);
+    mu_label(ctx, f.displayName);
+    if (clickButton(ctx, muted ? "Unmute" : "Mute"))
+    {
+        if (state.moderationActionInFlight == false)
+            state.pendingModerationActions ~= ModerationAction(f.userId, f.displayName,
+                muted ? "unmute" : "mute");
+    }
+    if (blocked)
+    {
+        if (clickButton(ctx, "Unblock"))
+        {
+            if (state.moderationActionInFlight == false)
+                state.pendingModerationActions ~= ModerationAction(f.userId, f.displayName, "unblock");
+        }
+    }
+    else
+    {
+        if (clickButton(ctx, "Block"))
+            state.armedConfirm = ArmedConfirm("block", f.userId);
+    }
+    if (clickButton(ctx, "Unfriend"))
+        state.armedConfirm = ArmedConfirm("unfriend", f.userId);
+}
+
+/// TOOLS > Muted/Blocked Users: moderation lists with undo buttons.
+/// Unmute/unblock are restorative, so they fire without confirmation.
+private void drawModerationListPage(mu_Context* ctx, AppState* state, int scrollDelta, bool mutePage)
+{
+    static immutable int[1] fullCol = [-1];
+
+    mu_begin_panel(ctx, mutePage ? "MuteListPanel" : "BlockListPanel");
+    applyScroll(ctx, scrollDelta);
+
+    mu_layout_row(ctx, 1, fullCol.ptr, 40);
+    if (clickButton(ctx, "< Back"))
+    {
+        state.toolsPage = ToolsPage.main;
+        requestRepaint();
+        mu_end_panel(ctx);
+        return;
+    }
+
+    mu_layout_row(ctx, 1, fullCol.ptr, 60);
+    if (clickButton(ctx, state.moderationsLoading ? "Refreshing..." : "Refresh"))
+        state.refreshModerationsRequested = true;
+
+    if (state.connected == false)
+    {
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        mu_label(ctx, "Not connected.");
+    }
+    else if (state.serverProtocol < PROTOCOL_MODERATION)
+    {
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        mu_label(ctx, "Server too old for the moderation API (needs protocol 3).");
+    }
+
+    if (state.moderationsError.length > 0)
+    {
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        mu_label(ctx, state.moderationsError);
+    }
+
+    ModerationEntry[] list = mutePage ? state.mutedUsers : state.blockedUsers;
+
+    if (state.moderationsLoaded && list.length == 0)
+    {
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        mu_label(ctx, mutePage ? "No muted users." : "No blocked users.");
+    }
+
+    static immutable int[2] rowCols = [-160, -1];
+    foreach (ref ModerationEntry m; list)
+    {
+        mu_layout_row(ctx, 2, rowCols.ptr, 56);
+        mu_label(ctx, m.displayName);
+        if (clickButton(ctx, mutePage ? "Unmute" : "Unblock"))
+        {
+            if (state.moderationActionInFlight == false)
+                state.pendingModerationActions ~= ModerationAction(m.userId, m.displayName,
+                    mutePage ? "unmute" : "unblock");
+        }
+    }
+
+    if (state.moderationActionInFlight)
+    {
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        mu_label(ctx, "Working...");
+    }
+
+    mu_end_panel(ctx);
 }
 
 /// Settings tab: application configuration.
