@@ -46,6 +46,59 @@ private void setStatusFlash(AppState* state, string msg, int ms = 1500)
     state.statusFlashEnd = MonoTime.currTime + dur!"msecs"(ms);
 }
 
+/// Whether the given tab is currently showing a subpage (a detail or nested
+/// view) rather than its root list. Drives the sticky Back button in the
+/// header so navigation is reachable no matter how far a list is scrolled.
+private bool tabInSubpage(AppState* state, Tab tab)
+{
+    final switch (tab) with (Tab)
+    {
+        case feed:          return state.feedDetailOpen;
+        case online:        return state.selectedFriend !is null;
+        case inventory:     return state.invDetailOpen;
+        case tools:         return state.toolsPage != ToolsPage.main;
+        case notifications:
+        case settings:      return false;
+    }
+}
+
+/// Return the active tab's subpage to its root list. Shared by the sticky
+/// header Back button and by re-tapping an already-active tab.
+private void resetTabSubpage(AppState* state, Tab tab)
+{
+    final switch (tab) with (Tab)
+    {
+        case feed:          state.feedDetailOpen = false;    break;
+        case online:        state.selectedFriend = null;     break;
+        case inventory:     state.invDetailOpen = false;     break;
+        case tools:         state.toolsPage = ToolsPage.main; break;
+        case notifications:
+        case settings:      break;
+    }
+    state.armedConfirm = ArmedConfirm.init;
+    requestRepaint();
+}
+
+/// Scroll a tab's root list panel back to the top. Used when re-tapping the
+/// active tab. The container id matches the panel name because both are hashed
+/// at the same id-stack depth (inside the "Main" window, outside any panel).
+private void scrollTabToTop(mu_Context* ctx, Tab tab)
+{
+    string name;
+    final switch (tab) with (Tab)
+    {
+        case feed:          name = "FeedPanel";          break;
+        case online:        name = "FriendsPanel";       break;
+        case notifications: name = "NotificationsPanel"; break;
+        case inventory:     name = "InventoryPanel";     break;
+        case tools:         name = "ToolsPanel";         break;
+        case settings:      name = "SettingsPanel";      break;
+    }
+    mu_Container* cnt = mu_get_container(ctx, name.ptr, cast(int) name.length);
+    if (cnt)
+        cnt.scroll.y = 0;
+}
+
 /// Draw the full-window UI layout.
 void drawFullWindow(mu_Context* ctx, AppState* state, int scrollDelta)
 {
@@ -60,19 +113,33 @@ void drawFullWindow(mu_Context* ctx, AppState* state, int scrollDelta)
         win.rect = mu_Rect(0, 0, window_width, window_height);
 
         // Tab bar
-        drawTabBar(ctx);
+        drawTabBar(ctx, state);
 
         // Content area (fills remaining space minus status bar)
         static immutable int[1] fullCol = [-1];
 
-        if (activeTab == Tab.feed)
+        // Sticky Back: while a tab shows a subpage, keep a full-width Back
+        // button in the always-visible header. Deep scrolling in a list can
+        // never bury navigation, and re-tapping the tab also pops the subpage.
+        if (tabInSubpage(state, activeTab))
+        {
+            mu_layout_row(ctx, 1, fullCol.ptr, 40);
+            if (clickButton(ctx, "< Back"))
+                resetTabSubpage(state, activeTab);
+        }
+
+        if (activeTab == Tab.feed && state.feedDetailOpen)
+        {
+            // Feed detail: just the sticky Back plus the detail panel, no
+            // search bar or pagination chrome.
+            mu_layout_row(ctx, 1, fullCol.ptr, -25);
+            drawFeedTab(ctx, state, tabScroll);
+        }
+        else if (activeTab == Tab.feed)
         {
             // Search bar + filter button get their own row.
             drawFeedSearchBar(ctx);
-        }
 
-        if (activeTab == Tab.feed)
-        {
             // Feed: panel fills remaining space minus pagination row, status bar,
             // and the inter-row spacing inserted between pagination and status
             // (otherwise the status bar lands one spacing lower than on other tabs).
@@ -116,7 +183,7 @@ void drawFullWindow(mu_Context* ctx, AppState* state, int scrollDelta)
 }
 
 /// Draw the tab bar with large VR-friendly buttons.
-private void drawTabBar(mu_Context* ctx)
+private void drawTabBar(mu_Context* ctx, AppState* state)
 {
     // NOTE: Take padding into the calculation to make settings button slightly more equal
     //       With my testing, this makes 187px for first four and 186px wide for SETTINGS
@@ -127,16 +194,16 @@ private void drawTabBar(mu_Context* ctx)
     mu_layout_row(ctx, BUTTONS, tabCols.ptr, 60);
 
     // Highlight active tab by drawing a colored background.
-    drawTabButton(ctx, "FEED",          Tab.feed);
-    drawTabButton(ctx, "ONLINE",        Tab.online);
-    drawTabButton(ctx, "INBOX",         Tab.notifications);
-    drawTabButton(ctx, "STUFF",         Tab.inventory);
-    drawTabButton(ctx, "TOOLS",         Tab.tools);
-    drawTabButton(ctx, "SETTINGS",      Tab.settings);
+    drawTabButton(ctx, state, "FEED",          Tab.feed);
+    drawTabButton(ctx, state, "ONLINE",        Tab.online);
+    drawTabButton(ctx, state, "INBOX",         Tab.notifications);
+    drawTabButton(ctx, state, "STUFF",         Tab.inventory);
+    drawTabButton(ctx, state, "TOOLS",         Tab.tools);
+    drawTabButton(ctx, state, "SETTINGS",      Tab.settings);
 }
 
 /// Draw a single tab button, highlighted if active.
-private void drawTabButton(mu_Context* ctx, string label, Tab tab)
+private void drawTabButton(mu_Context* ctx, AppState* state, string label, Tab tab)
 {
     if (activeTab == tab)
     {
@@ -149,7 +216,12 @@ private void drawTabButton(mu_Context* ctx, string label, Tab tab)
         mu_Id id = mu_get_id(ctx, &tab, tab.sizeof);
         mu_update_control(ctx, id, r, 0);
         if (ctx.mouse_pressed == MU_MOUSE_LEFT && ctx.focus == id)
-            activeTab = tab;
+        {
+            // Re-tapping the active tab pops any subpage and scrolls its list
+            // back to the top (the familiar tab-bar convention).
+            resetTabSubpage(state, tab);
+            scrollTabToTop(ctx, tab);
+        }
     }
     else
     {
@@ -479,15 +551,7 @@ private void drawFeedDetail(mu_Context* ctx, AppState* state, int scrollDelta)
 
     applyScroll(ctx, scrollDelta);
 
-    // Back button (uses clickButton to avoid re-selecting a row on the same click).
-    mu_layout_row(ctx, 1, fullCol.ptr, 40);
-    if (clickButton(ctx, "< Back"))
-    {
-        state.feedDetailOpen = false;
-        requestRepaint();
-        mu_end_panel(ctx);
-        return;
-    }
+    // Navigation back to the list is the sticky header Back button.
 
     // Event type as header.
     mu_layout_row(ctx, 1, fullCol.ptr, 0);
@@ -1500,15 +1564,7 @@ private void drawFriendProfile(mu_Context* ctx, AppState* state, int scrollDelta
 
     applyScroll(ctx, scrollDelta);
 
-    // Back button.
-    mu_layout_row(ctx, 1, fullCol.ptr, 40);
-    if (mu_button(ctx, "< Back"))
-    {
-        state.selectedFriend = null;
-        state.armedConfirm = ArmedConfirm.init;
-        mu_end_panel(ctx);
-        return;
-    }
+    // Navigation back to the list is the sticky header Back button.
 
     // Name as header.
     mu_layout_row(ctx, 1, fullCol.ptr, 0);
@@ -2128,15 +2184,7 @@ private void drawInventoryDetailPage(mu_Context* ctx, AppState* state, int scrol
     applyScroll(ctx, scrollDelta);
     mu_Container* panel = mu_get_current_container(ctx);
 
-    mu_layout_row(ctx, 1, fullCol.ptr, 40);
-    if (clickButton(ctx, "< Back"))
-    {
-        state.invDetailOpen = false;
-        state.armedConfirm = ArmedConfirm.init;
-        requestRepaint();
-        mu_end_panel(ctx);
-        return;
-    }
+    // Navigation back to the list is the sticky header Back button.
 
     // Resolve the selected entry's image reference per section.
     string fileId;
@@ -2429,15 +2477,7 @@ private void drawStripMetadataPage(mu_Context* ctx, AppState* state)
 
     mu_begin_panel(ctx, "StripMetadataPanel");
 
-    // Back button.
-    mu_layout_row(ctx, 1, fullCol.ptr, 40);
-    if (clickButton(ctx, "< Back"))
-    {
-        state.toolsPage = ToolsPage.main;
-        requestRepaint();
-        mu_end_panel(ctx);
-        return;
-    }
+    // Navigation back to TOOLS is the sticky header Back button.
 
     // Header line.
     char[64] buffer = void;
@@ -2581,15 +2621,7 @@ private void drawFriendListPage(mu_Context* ctx, AppState* state, int scrollDelt
     mu_begin_panel(ctx, "FriendListPanel");
     applyScroll(ctx, scrollDelta);
 
-    mu_layout_row(ctx, 1, fullCol.ptr, 40);
-    if (clickButton(ctx, "< Back"))
-    {
-        state.toolsPage = ToolsPage.main;
-        state.armedConfirm = ArmedConfirm.init;
-        requestRepaint();
-        mu_end_panel(ctx);
-        return;
-    }
+    // Navigation back to TOOLS is the sticky header Back button.
 
     char[64] countBuffer = void;
     mu_layout_row(ctx, 1, fullCol.ptr, 0);
@@ -2735,14 +2767,7 @@ private void drawModerationListPage(mu_Context* ctx, AppState* state, int scroll
     mu_begin_panel(ctx, mutePage ? "MuteListPanel" : "BlockListPanel");
     applyScroll(ctx, scrollDelta);
 
-    mu_layout_row(ctx, 1, fullCol.ptr, 40);
-    if (clickButton(ctx, "< Back"))
-    {
-        state.toolsPage = ToolsPage.main;
-        requestRepaint();
-        mu_end_panel(ctx);
-        return;
-    }
+    // Navigation back to TOOLS is the sticky header Back button.
 
     mu_layout_row(ctx, 1, fullCol.ptr, 60);
     if (clickButton(ctx, state.moderationsLoading ? "Refreshing..." : "Refresh"))
