@@ -213,15 +213,17 @@ void cmdRun(ref Config config)
     apiServer.setDropaPortalDelegator(dapDelegator, &dropaPortal.triggerPair);
     dropaPortal.start();
 
+    // Shared re-authentication routine, assigned once `vrcws` exists (below).
+    // The WebSocket calls it when the pipeline rejects the token; the re-seed
+    // path calls it when a REST call comes back 401. Captured by reference
+    // here so the callback sees the real delegate once it's assigned.
+    void delegate() reauth;
+
     // Install the re-seed callback the worker thread will call on its
     // periodic tick or when requested via requestReseed().
     apiServer.setReseedCallback({
-        doReseed(client, rateLimiter, vrcApiMutex, worldCache, instanceCache, tracker);
+        doReseed(client, rateLimiter, vrcApiMutex, worldCache, instanceCache, tracker, reauth);
     });
-
-    // Initial seed reuses the same helper so startup state quality
-    // matches what the worker produces on subsequent passes.
-    doReseed(client, rateLimiter, vrcApiMutex, worldCache, instanceCache, tracker);
 
     // Flag used to ignore the very first WebSocket connect event, since
     // we already seeded above. Subsequent (reconnect) events trigger a
@@ -371,8 +373,11 @@ void cmdRun(ref Config config)
             apiServer.requestReseed();
         }
     });
-    // Callback for re-auth
-    vrcws.setReAuthCallback({
+    // Shared re-auth. authenticate() runs unguarded (as before) so a headless
+    // 2FA prompt can't stall other API work; only the cookie flush is taken
+    // under the mutex. When the re-seed path invokes this it already holds
+    // vrcApiMutex, but the mutex is recursive so the flush re-lock is safe.
+    reauth = {
         logInfo("Re-authenticating with VRChat...");
         AuthState newState = authenticate(config, client, delegator);
         vrcws.setToken(newState.authToken);
@@ -381,7 +386,15 @@ void cmdRun(ref Config config)
         synchronized (vrcApiMutex)
             client.flushCookies();
         logInfo("Re-authenticated as %s", newState.displayName);
-    });
+    };
+    vrcws.setReAuthCallback(reauth);
+
+    // Initial seed reuses the same helper so startup state quality matches
+    // what the worker produces on subsequent passes. Runs after reauth is
+    // wired (so a stale startup cookie can recover) and before the WS starts
+    // (so tracker state is ready for the first live events).
+    doReseed(client, rateLimiter, vrcApiMutex, worldCache, instanceCache, tracker, reauth);
+
     vrcws.start();
 
     installSignalHandlers();
@@ -472,7 +485,7 @@ private enum int REPAIR_HEADROOM = 50;
 /// REST work.
 void doReseed(HTTPClient client, RateLimitTracker rateLimiter,
     Mutex vrcApiMutex, WorldCache worldCache, InstanceCache instanceCache,
-    FriendsTracker tracker)
+    FriendsTracker tracker, void delegate() reauth)
 {
     logInfo("Re-seed: starting pass");
 
@@ -484,7 +497,7 @@ void doReseed(HTTPClient client, RateLimitTracker rateLimiter,
 
     synchronized (vrcApiMutex)
     {
-        allFriends = fetchAllFriendsLocked(client, rateLimiter);
+        allFriends = fetchAllFriendsLocked(client, rateLimiter, reauth);
         if (allFriends.length == 0)
         {
             logWarn("Re-seed: bulk fetch returned no friends, aborting pass");
@@ -511,12 +524,19 @@ void doReseed(HTTPClient client, RateLimitTracker rateLimiter,
 
 /// Paginate /auth/user/friends (both online and offline pages).
 /// Caller must hold vrcApiMutex.
-private JSONValue[] fetchAllFriendsLocked(HTTPClient client, RateLimitTracker rateLimiter)
+private JSONValue[] fetchAllFriendsLocked(HTTPClient client, RateLimitTracker rateLimiter,
+    void delegate() reauth)
 {
     import std.format : format;
 
     enum int PAGE_SIZE = 100;
     JSONValue[] allFriends;
+
+    // A 401 means VRChat rejected the session cookie (expired or revoked).
+    // Re-authenticate once and retry, then give up so a persistently bad
+    // session can't spin. The guard spans both the online and offline pages:
+    // one refresh restores the cookie for every remaining request.
+    bool reauthed = false;
 
     logInfo("Fetching friends list from VRChat API...");
 
@@ -533,6 +553,14 @@ private JSONValue[] fetchAllFriendsLocked(HTTPClient client, RateLimitTracker ra
             HTTPResponse resp = client.get(path);
             if (rateLimiter)
                 rateLimiter.update(resp);
+
+            if (resp.code == 401 && reauth && reauthed == false)
+            {
+                reauthed = true;
+                logWarn("Friends fetch got HTTP 401; re-authenticating and retrying");
+                reauth();
+                continue; // Retry the same page with the refreshed session.
+            }
 
             if (resp.code != 200)
             {
