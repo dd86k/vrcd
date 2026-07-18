@@ -355,7 +355,14 @@ void cmdRun(ref Config config)
     // This is the callback when the WS connection status changes
     vrcws.setStatusCallback((bool connected, string lastError)
     {
-        logInfo("VRChat WebSocket %s", connected ? "connected" : "disconnected");
+        // Surface the disconnect reason: the WS layer records why it dropped
+        // (close code, HTTP status, curl error) but it's only useful if we
+        // print it. "no reason given" means a clean/unexplained drop.
+        if (connected)
+            logInfo("VRChat WebSocket connected");
+        else
+            logInfo("VRChat WebSocket disconnected: %s",
+                lastError.length ? lastError : "no reason given");
         apiServer.setVRChatStatus(connected, lastError);
         store.logConnection(connected ? "connected" : "disconnected");
 

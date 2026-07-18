@@ -166,6 +166,11 @@ private:
                             VRCEvent event = parseNewVrcEvent(message);
                             // event.content.toString().length is wasteful, by the way
                             logDebugging("WS parsed event: type=%s length=%s", event.typeRaw, message.length);
+                            // A frame that parses to an empty type is not a
+                            // normal event; surface the raw payload so we can
+                            // tell an auth/error frame from a genuine event.
+                            if (event.typeRaw.length == 0)
+                                logWarn("WS event with empty type, raw: %s", message);
                             onEvent(event);
                         }
                         catch (Exception e)
@@ -211,7 +216,9 @@ private:
             }
             catch (CurlException e)
             {
-                logError("WebSocket CurlException: %s", e.msg);
+                // statusCode is the HTTP code from the handshake (0 if none);
+                // log it explicitly since the re-auth decision below keys on it.
+                logError("WebSocket CurlException: %s (HTTP status %d)", e.msg, e.statusCode);
                 connected = false;
 
                 if (e.statusCode == 401 || e.statusCode == 403)
