@@ -29,6 +29,7 @@ import server.database;
 import server.stream;
 import server.worldcache;
 import server.config : DEFAULT_RESEED_INTERVAL;
+import server.vrchat.auth : postJSON, putJSON;
 
 /// Callback invoked by the re-seed worker to actually perform a full
 /// re-seed pass. The callback owns HTTPClient/RateLimitTracker access and
@@ -1175,7 +1176,7 @@ private class ClientHandler
 
         try
         {
-            HTTPResponse resp = server.httpClient.put(path);
+            HTTPResponse resp = server.httpClient.putJSON(path);
             logDebugging("handleNotificationAction: VRC PUT %s -> HTTP %d", path, resp.code);
             if (server.rateLimiter)
             {
@@ -1269,7 +1270,7 @@ private class ClientHandler
             if (shortName.length > 0)
                 body_ = JSONValue(["shortName": JSONValue(shortName)]).toString();
 
-            HTTPResponse resp = server.httpClient.post(
+            HTTPResponse resp = server.httpClient.postJSON(
                 "/invite/myself/to/" ~ location, body_);
             logDebugging("handleJoinInstance: POST /invite/myself/to/%s -> HTTP %d",
                 location, resp.code);
@@ -1378,7 +1379,7 @@ private class ClientHandler
 
         try
         {
-            HTTPResponse resp = server.httpClient.put(path, payload.toString());
+            HTTPResponse resp = server.httpClient.putJSON(path, payload.toString());
             logDebugging("handleSetStatus: VRC PUT %s -> HTTP %d", path, resp.code);
             if (server.rateLimiter)
             {
@@ -1576,9 +1577,9 @@ private class ClientHandler
         {
             HTTPResponse resp;
             if (adding)
-                resp = server.httpClient.post("/auth/user/playermoderations", payload.toString());
+                resp = server.httpClient.postJSON("/auth/user/playermoderations", payload.toString());
             else
-                resp = server.httpClient.put("/auth/user/unplayermoderate", payload.toString());
+                resp = server.httpClient.putJSON("/auth/user/unplayermoderate", payload.toString());
             logDebugging("handleModerateUser: action=%s user=%s -> HTTP %d",
                 action, userId, resp.code);
             if (server.rateLimiter)

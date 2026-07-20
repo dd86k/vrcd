@@ -78,6 +78,28 @@ AuthState interactiveLogin(ref Config config, HTTPClient client)
     return fullLogin(config, client, null);
 }
 
+/// POST a JSON body to the VRChat API.
+///
+/// Sets `Content-Type: application/json` for this request only, so the shared
+/// client holds no body content type at rest. A multipart upload on the same
+/// client is then not tainted by a lingering JSON header (VRChat would reject
+/// the body with "JSON failed to parse."). Call under the API mutex, since it
+/// mutates the client's header set.
+HTTPResponse postJSON(HTTPClient client, string path, string payload)
+{
+    client.addHeader("Content-Type", "application/json");
+    scope(exit) client.removeHeader("Content-Type");
+    return client.post(path, payload);
+}
+
+/// PUT a JSON body to the VRChat API. See postJSON.
+HTTPResponse putJSON(HTTPClient client, string path, string payload = null)
+{
+    client.addHeader("Content-Type", "application/json");
+    scope(exit) client.removeHeader("Content-Type");
+    return client.put(path, payload);
+}
+
 /// Returns true if stdin is not a terminal (server running as a service).
 bool isHeadless()
 {
@@ -105,7 +127,6 @@ void setupClient(HTTPClient client, ref Config config)
 {
     client.setBaseUrl("https://api.vrchat.cloud/api/1");
     client.setUserAgent(USER_AGENT);
-    client.addHeader("Content-Type", "application/json");
 
     // Ensure cookie jar directory exists.
     string cookiePath = config.cookieJarPath;
@@ -270,7 +291,7 @@ void handle2FA(ref Config config, HTTPClient client, AuthDelegator delegator, co
         }
 
         JSONValue payload = JSONValue(["code": JSONValue(code)]);
-        HTTPResponse resp = client.post(endpoint, payload.toString());
+        HTTPResponse resp = client.postJSON(endpoint, payload.toString());
         logDebugging("POST %s -> HTTP %d", endpoint, resp.code);
 
         if (resp.code == 200)

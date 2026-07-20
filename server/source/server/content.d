@@ -25,6 +25,7 @@ import ddlogger;
 import ddcurl;
 
 import server.ratelimit;
+import server.vrchat.auth : putJSON;
 
 /// Result of an image fetch. Failure is an expected outcome here (403 on
 /// other users' content, 404 on stale references), not an exception.
@@ -530,7 +531,7 @@ private:
             switch (method)
             {
                 case "PUT":
-                    resp = client.put(path, payload);
+                    resp = client.putJSON(path, payload);
                     break;
                 case "DELETE":
                     resp = client.del(path);
@@ -571,6 +572,10 @@ private:
         client.setTimeout(TRANSFER_TIMEOUT_MS);
         scope(exit) client.setTimeout(DEFAULT_TIMEOUT_MS);
 
+        // libcurl's mime code sets its own "multipart/form-data" Content-Type.
+        // JSON calls now set "Content-Type: application/json" per request (see
+        // postJSON/putJSON), so the client holds no content type at rest and
+        // nothing here overrides the multipart header.
         try
         {
             HTTPResponse resp = client.postMultipart(path, form);
