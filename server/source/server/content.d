@@ -425,6 +425,7 @@ class ContentService
 
         MultipartForm form = new MultipartForm();
         form.addField("tag", tag);
+        string maskTag;
         if (extra.type == JSONType.object)
         {
             if (const(JSONValue)* v = "animation_style" in extra)
@@ -436,8 +437,14 @@ class ContentService
             if (const(JSONValue)* v = "loop_style" in extra)
                 form.addField("loopStyle", v.str);
             if (const(JSONValue)* v = "mask_tag" in extra)
-                form.addField("maskTag", v.str);
+                maskTag = v.str;
         }
+        // Stickers require a maskTag; VRChat returns HTTP 400 without one.
+        // Default to "square" (what VRCX sends) when the client omits it.
+        if (maskTag.length == 0 && tag == "sticker")
+            maskTag = "square";
+        if (maskTag.length)
+            form.addField("maskTag", maskTag);
         form.addFile("file", "blob", "image/png", png);
 
         ActionResult result = multipartCall("/file/image", form);
@@ -579,7 +586,10 @@ private:
                 catch (Exception) {}
             }
             else
+            {
                 result.error = "HTTP " ~ resp.code.to!string;
+                logDebugging("multipartCall: POST %s failed body: %s", path, resp.text);
+            }
             return result;
         }
         catch (Exception e)
