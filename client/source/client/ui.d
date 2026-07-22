@@ -2926,35 +2926,36 @@ private void drawSettingsTab(mu_Context* ctx, AppState* state, int scrollDelta)
     mu_label(ctx, "Secret");
     mu_textbox_ex(ctx, state.settingsSecret.ptr, cast(int) state.settingsSecret.length, MU_OPT_PASSWORD);
 
-    mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
-    mu_label(ctx, "TLS");
+    // Section: TLS. The header carries the context, so the field labels stay short.
+    spacer(ctx);
+    sectionHeader(ctx, "TLS");
+
     if (tlsAvailable())
+    {
+        mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
+        mu_label(ctx, "Enable");
         mu_checkbox(ctx, "", &state.settingsTls);
-    else
-        mu_label(ctx, "(unavailable)");
 
-    mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
-    mu_label(ctx, "Skip certificate verify");
-    if (tlsAvailable())
+        mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
+        mu_label(ctx, "Skip verify");
         mu_checkbox(ctx, "", &state.settingsTlsSkipVerify);
-    else
-        mu_label(ctx, "(unavailable)");
 
-    mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
-    mu_label(ctx, "Client certificate");
-    if (tlsAvailable())
+        mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
+        mu_label(ctx, "Certificate");
         mu_textbox(ctx, state.settingsTlsClientCert.ptr, cast(int) state.settingsTlsClientCert.length);
-    else
-        mu_label(ctx, "(unavailable)");
 
-    mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
-    mu_label(ctx, "Client key");
-    if (tlsAvailable())
+        mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
+        mu_label(ctx, "Key");
         mu_textbox(ctx, state.settingsTlsClientKey.ptr, cast(int) state.settingsTlsClientKey.length);
+    }
     else
+    {
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
         mu_label(ctx, "(unavailable)");
+    }
 
-    // Connect / Reconnect button.
+    // Connect / Reconnect button. Commits all connection settings above.
+    spacer(ctx);
     mu_layout_row(ctx, 1, fullCol.ptr, 60);
     string btnLabel = state.connected ? "Reconnect" : "Connect";
     if (mu_button(ctx, btnLabel))
