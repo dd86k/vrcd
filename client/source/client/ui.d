@@ -2924,7 +2924,7 @@ private void drawSettingsTab(mu_Context* ctx, AppState* state, int scrollDelta)
 
     mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
     mu_label(ctx, "Secret");
-    mu_textbox(ctx, state.settingsSecret.ptr, cast(int) state.settingsSecret.length);
+    mu_textbox_ex(ctx, state.settingsSecret.ptr, cast(int) state.settingsSecret.length, MU_OPT_PASSWORD);
 
     mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
     mu_label(ctx, "TLS");
@@ -3242,7 +3242,7 @@ private void drawAuthDialog(mu_Context* ctx, AppState* state)
             mu_layout_row(ctx, 1, fullCol.ptr, 0);
             mu_label(ctx, "Password:");
             mu_layout_row(ctx, 1, fullCol.ptr, 30);
-            mu_textbox(ctx, state.authPassword.ptr, cast(int) state.authPassword.length);
+            mu_textbox_ex(ctx, state.authPassword.ptr, cast(int) state.authPassword.length, MU_OPT_PASSWORD);
         }
         else if (state.authDialogKind == AppState.AuthDialogKind.twoFactor)
         {
