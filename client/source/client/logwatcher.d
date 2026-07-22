@@ -61,6 +61,16 @@ class LogWatcher
     // events to the UI.
     private bool silent;
 
+    // Set by parseLine when a line looks like a torn read of the live log
+    // (VRChat is mid-write). The live poll loop rewinds to the start of such a
+    // line so the next poll re-reads it once VRChat has flushed the rest.
+    private bool lineNeedsRetry;
+    // Bounds the rewind above so a genuinely corrupt line can't stall the
+    // watcher forever: how many times we have re-read the same offset.
+    private long retryOffset = -1;
+    private int retryCount;
+    private enum int maxLineRetries = 5;
+
     this(MessageQueue queue, uint sdlEventType)
     {
         this.queue = queue;
@@ -159,13 +169,45 @@ class LogWatcher
             File f = File(latest.name, "r");
             f.seek(pos);
             char[] buf;
+            long lineStart = f.tell();
             while (f.readln(buf))
             {
                 // buf is reused by readln across iterations, so any slice
                 // of `line` that outlives this call must be idup'd by the
                 // consumer (see addPlayer, Joining/Entering Room handlers).
                 string line = cast(string) buf;
+                lineNeedsRetry = false;
                 parseLine(line);
+
+                // A torn read: hold the position at the start of this line so
+                // the next poll re-reads it, unless we have already retried it
+                // too many times (then treat it as genuinely corrupt and skip).
+                if (lineNeedsRetry)
+                {
+                    if (lineStart == retryOffset && retryCount >= maxLineRetries)
+                    {
+                        logDebugging("LogWatcher: giving up on torn line at offset %d after %d retries",
+                            lineStart, retryCount);
+                        retryOffset = -1;
+                        retryCount = 0;
+                        lineStart = f.tell(); // advance past it
+                        continue;
+                    }
+                    if (lineStart == retryOffset)
+                        retryCount++;
+                    else
+                    {
+                        retryOffset = lineStart;
+                        retryCount = 1;
+                    }
+                    filePositions[latest.name] = lineStart;
+                    f.close();
+                    logTrace("LogWatcher: torn line at offset %d, retry %d",
+                        lineStart, retryCount);
+                    return;
+                }
+
+                lineStart = f.tell();
             }
             long newPos = f.tell();
             filePositions[latest.name] = newPos;
@@ -479,6 +521,16 @@ class LogWatcher
             if (logPath.length == 0)
                 return;
 
+            // Guard against torn reads of the live log: a valid screenshot path
+            // is always an absolute path ending in ".png". If it isn't, VRChat
+            // was most likely mid-write; ask the poll loop to re-read this line
+            // next second rather than dropping the screenshot's metadata.
+            if (isScreenshotLogPath(logPath) == false)
+            {
+                lineNeedsRetry = true;
+                return;
+            }
+
             string localPath = translateVRChatPath(logPath);
             logDebugging("LogWatcher: photo-taken logPath=%s localPath=%s writeMetadata=%s",
                 logPath, localPath, writeMetadata);
@@ -568,7 +620,16 @@ class LogWatcher
     {
         Thread t = new Thread({
             logDebugging("startMetadataWrite: spawning writer for %s", path);
-            
+
+            // Never touch the filesystem with a relative path: it would resolve
+            // against the process CWD and drop stray files next to the client.
+            import std.path : isAbsolute;
+            if (isAbsolute(path) == false)
+            {
+                logError("Refusing metadata write for non-absolute path '%s'", path);
+                return;
+            }
+
             // Retry 10 times with 2 second sleeps
             string emsg;
             foreach (int i; 0 .. 10)
@@ -620,6 +681,45 @@ class LogWatcher
             }
         }
         displayName = s;
+    }
+
+    /// Validate a screenshot path as logged by VRChat before handing it to the
+    /// filesystem. VRChat always logs an absolute Windows-style path ending in
+    /// ".png", even under Proton on Linux. Anything else is rejected: tailing
+    /// the live log can return a torn/interleaved read that splices fragments
+    /// of unrelated log lines into what looks like a path (embedded newlines,
+    /// leftover text from other events), and such a string must never reach a
+    /// file write, where it would either fail loudly or land somewhere unwanted
+    /// as a relative path.
+    private static bool isScreenshotLogPath(string path)
+    {
+        import std.ascii : isAlpha;
+        import std.path : extension;
+        import std.uni : icmp;
+
+        // Control characters never appear in a real path; their presence is the
+        // tell-tale sign of a spliced read.
+        foreach (char c; path)
+        {
+            if (c < 0x20)
+                return false;
+        }
+
+        if (icmp(extension(path), ".png") != 0)
+            return false;
+
+        // Drive-letter absolute ("X:\..." or "X:/...").
+        if (path.length >= 3 && isAlpha(path[0]) && path[1] == ':' &&
+            (path[2] == '\\' || path[2] == '/'))
+            return true;
+
+        // UNC absolute ("\\host\..." or "//host/...").
+        if (path.length >= 2 &&
+            (path[0] == '\\' || path[0] == '/') &&
+            (path[1] == '\\' || path[1] == '/'))
+            return true;
+
+        return false;
     }
 
     /// Push a player join/leave event into the shared queue.
@@ -701,5 +801,30 @@ class LogWatcher
         ev.type = sdlEventType;
         SDL_PushEvent(&ev);
     }
+}
+
+unittest
+{
+    // Valid VRChat-logged paths (always Windows-style, both platforms).
+    assert(LogWatcher.isScreenshotLogPath(
+        `I:\Users\Arc\Pictures\VRChat\2026-07\VRChat_2026-07-22_17-08-27.842_2560x1440.png`));
+    assert(LogWatcher.isScreenshotLogPath(
+        `C:\users\steamuser\Pictures\VRChat\x.png`));
+    assert(LogWatcher.isScreenshotLogPath(`C:/users/steamuser/x.PNG`)); // case + fwd slash
+    assert(LogWatcher.isScreenshotLogPath(`\\nas\share\shot.png`));     // UNC
+
+    // The exact torn read observed in the field: spliced fragments of a
+    // "Drop object" line plus a screenshot filename tail, with embedded
+    // newlines. Must be rejected outright.
+    assert(LogWatcher.isScreenshotLogPath(
+        " was equipped = False' ForceDrop, last input method = SteamVR2\nVR2\n_2560x1440.png") == false);
+
+    // Other rejects: relative, missing drive, wrong extension, empty.
+    assert(LogWatcher.isScreenshotLogPath(`shot.png`) == false);
+    assert(LogWatcher.isScreenshotLogPath(`\shot.png`) == false);
+    assert(LogWatcher.isScreenshotLogPath(`C:\shot.jpg`) == false);
+    assert(LogWatcher.isScreenshotLogPath(`C:\shot`) == false);
+    assert(LogWatcher.isScreenshotLogPath("") == false);
+    assert(LogWatcher.isScreenshotLogPath("C:\\a\tb.png") == false); // embedded tab
 }
 
