@@ -79,6 +79,21 @@ private void resetTabSubpage(AppState* state, Tab tab)
     requestRepaint();
 }
 
+/// Handle a "go back" gesture (Escape key, mouse back button) by popping the
+/// active tab's subpage to its root list, mirroring the sticky header Back
+/// button. Returns true if navigation occurred. A no-op while a modal auth
+/// dialog is up so the gesture doesn't reach through it, and when the active
+/// tab is already at its root.
+bool navigateBack(AppState* state)
+{
+    if (state.authDialogKind != AppState.AuthDialogKind.none)
+        return false;
+    if (tabInSubpage(state, activeTab) == false)
+        return false;
+    resetTabSubpage(state, activeTab);
+    return true;
+}
+
 /// Scroll a tab's root list panel back to the top. Used when re-tapping the
 /// active tab. The container id matches the panel name because both are hashed
 /// at the same id-stack depth (inside the "Main" window, outside any panel).

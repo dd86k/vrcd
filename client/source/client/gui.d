@@ -422,6 +422,12 @@ private void eventLoop(mu_Context* uictx)
                         if (deferredMousedown == false)
                             mu_input_mousedown(uictx, e.button.x, e.button.y, MU_MOUSE_LEFT);
                     }
+                    else if (e.button.button == SDL_BUTTON_X1)
+                    {
+                        // Mouse back button: pop the active tab's subpage,
+                        // same as the sticky header Back button.
+                        navigateBack(&appState);
+                    }
                     else
                     {
                         int b = buttonMap[e.button.button & 0xff];
@@ -464,14 +470,19 @@ private void eventLoop(mu_Context* uictx)
 
                 case SDL_KEYDOWN:
                 case SDL_KEYUP:
-                    // Escape dismisses the filter popup.
+                    // Escape dismisses the filter popup first, otherwise it
+                    // pops the active tab's subpage like the header Back button.
                     if (e.type == SDL_KEYDOWN &&
-                        e.key.keysym.sym == SDLK_ESCAPE &&
-                        filterPopupOpen)
+                        e.key.keysym.sym == SDLK_ESCAPE)
                     {
-                        filterPopupOpen = false;
-                        requestRepaint();
-                        break;
+                        if (filterPopupOpen)
+                        {
+                            filterPopupOpen = false;
+                            requestRepaint();
+                            break;
+                        }
+                        if (navigateBack(&appState))
+                            break;
                     }
                     // Ctrl+V paste
                     if (e.type == SDL_KEYDOWN &&
