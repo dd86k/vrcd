@@ -981,7 +981,7 @@ private void eventLoop(mu_Context* uictx)
         {
             switch (cmd.type)
             {
-                case MU_COMMAND_TEXT: r_draw_text(cmd.text.str.ptr, cmd.text.pos, cmd.text.color); break;
+                case MU_COMMAND_TEXT: r_draw_text(mu_command_text_slice(uictx, &cmd), cmd.text.pos, cmd.text.color); break;
                 case MU_COMMAND_RECT: r_draw_rect(cmd.rect.rect, cmd.rect.color); break;
                 case MU_COMMAND_ICON:
                     if (r_is_image_id(cmd.icon.id))

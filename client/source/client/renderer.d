@@ -127,9 +127,9 @@ void r_draw_rect(mu_Rect rect, mu_Color color)
     SDL_UnlockSurface(surface);
 }
 
-void r_draw_text(const(char) *text, mu_Vec2 pos, mu_Color color)
+void r_draw_text(const(char)[] text, mu_Vec2 pos, mu_Color color)
 {
-    if (text is null || *text == 0 || fonts.length == 0) return;
+    if (text.length == 0 || fonts.length == 0) return;
 
     SDL_Color fg = SDL_Color(color.r, color.g, color.b, color.a);
     SDL_Rect clipRect = SDL_Rect(clip.x, clip.y, clip.w, clip.h);
@@ -139,10 +139,9 @@ void r_draw_text(const(char) *text, mu_Vec2 pos, mu_Color color)
     // Fast path: single font loaded, or pure-ASCII string,  render the
     // whole thing with the primary in one shot. Covers the common case of
     // UI labels and log lines.
-    const(char)[] str = text[0 .. strlen(text)];
-    if (fonts.length == 1 || isAscii(str))
+    if (fonts.length == 1 || isAscii(text))
     {
-        SDL_Surface* s = TTF_RenderUTF8_Blended(fonts[0], text, fg);
+        SDL_Surface* s = TTF_RenderUTF8_Blended(fonts[0], text.ptr, fg);
         if (s is null) return;
         SDL_Rect dst = SDL_Rect(pos.x, pos.y, s.w, s.h);
         SDL_BlitSurface(s, null, surface, &dst);
@@ -159,22 +158,22 @@ void r_draw_text(const(char) *text, mu_Vec2 pos, mu_Color color)
     size_t runStart = 0;
     int runFontIdx = -1;
     size_t i = 0;
-    while (i < str.length)
+    while (i < text.length)
     {
         size_t cpStart = i;
-        dchar cp = decode!(Yes.useReplacementDchar)(str, i);
+        dchar cp = decode!(Yes.useReplacementDchar)(text, i);
         int idx = pickFontIndex(cp);
         if (runFontIdx < 0)
             runFontIdx = idx;
         else if (idx != runFontIdx)
         {
-            penX += blitRun(str[runStart .. cpStart], runFontIdx, penX, baselineY, fg);
+            penX += blitRun(text[runStart .. cpStart], runFontIdx, penX, baselineY, fg);
             runStart = cpStart;
             runFontIdx = idx;
         }
     }
-    if (runFontIdx >= 0 && runStart < str.length)
-        blitRun(str[runStart .. $], runFontIdx, penX, baselineY, fg);
+    if (runFontIdx >= 0 && runStart < text.length)
+        blitRun(text[runStart .. $], runFontIdx, penX, baselineY, fg);
 }
 
 // Returns the advance width (pixels) the run consumed, or 0 on failure.
