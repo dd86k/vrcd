@@ -374,7 +374,6 @@ private void drawFeedTab(mu_Context* ctx, AppState* state, int scrollDelta)
     }
 
     // Column widths: date, type, user, detail (detail fills remaining space).
-    static immutable int[4] feedCols = [150, 120, 150, -1];
     static immutable int[1] fullCol = [-1];
     enum lineColor = mu_Color(50, 50, 60, 255);
     enum hoverColor = mu_Color(60, 60, 80, 255);
@@ -384,12 +383,32 @@ private void drawFeedTab(mu_Context* ctx, AppState* state, int scrollDelta)
     // Apply mouse wheel scroll directly to this panel.
     applyScroll(ctx, scrollDelta);
 
-    // Column header.
-    mu_layout_row(ctx, 4, feedCols.ptr, 0);
-    gridCell(ctx, "Date", lineColor);
-    gridCell(ctx, "Type", lineColor);
-    gridCell(ctx, "User", lineColor);
-    gridCell(ctx, "Detail", lineColor, true);
+    // Column header. Positioned manually (rather than via mu_layout_row's
+    // per-column widths) so it lines up exactly with the row cells below,
+    // which are also drawn manually and packed with no inter-column
+    // spacing. Using mu_layout_row here would insert style.spacing between
+    // columns, drifting further out of alignment with each column.
+    {
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        mu_Rect headerRect = mu_layout_next(ctx);
+        int x = headerRect.x + 8; // leave gap matching the accent strip below
+        int y = headerRect.y;
+        int h = headerRect.h;
+
+        mu_draw_control_text(ctx, "Date", mu_Rect(x, y, 150, h), MU_COLOR_TEXT, 0);
+        mu_draw_rect(ctx, mu_Rect(x + 149, y, 1, h), lineColor);
+        x += 150;
+
+        mu_draw_control_text(ctx, "Type", mu_Rect(x, y, 120, h), MU_COLOR_TEXT, 0);
+        mu_draw_rect(ctx, mu_Rect(x + 119, y, 1, h), lineColor);
+        x += 120;
+
+        mu_draw_control_text(ctx, "User", mu_Rect(x, y, 150, h), MU_COLOR_TEXT, 0);
+        mu_draw_rect(ctx, mu_Rect(x + 149, y, 1, h), lineColor);
+        x += 150;
+
+        mu_draw_control_text(ctx, "Detail", mu_Rect(x, y, headerRect.w - (x - headerRect.x), h), MU_COLOR_TEXT, 0);
+    }
 
     // Horizontal separator under header.
     mu_layout_row(ctx, 1, fullCol.ptr, 1);
