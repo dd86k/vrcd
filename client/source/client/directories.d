@@ -214,7 +214,10 @@ private string steamRootWindows()
         chars--;
     if (chars == 0)
         return null;
-    return to!string(buf[0 .. chars]);
+    // Steam stores SteamPath with forward slashes. Left as-is, buildPath
+    // appends the rest with backslashes, and the mixed-separator path is
+    // rejected by Explorer (it silently opens Documents instead).
+    return to!string(buf[0 .. chars]).replace("/", "\\");
 }
 
 import core.sys.windows.windows : GUID, HRESULT, DWORD;
