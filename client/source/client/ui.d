@@ -2343,6 +2343,45 @@ private void drawDeleteButton(mu_Context* ctx, AppState* state, string kind, str
     }
 }
 
+/// "Video" section of the Tools tab: shows whether VRChat's bundled yt-dlp
+/// is currently enabled and offers a button to toggle it. Disabling it stops
+/// VRChat's in-world video players from resolving URLs (YouTube, Twitch,
+/// etc), which sidesteps yt-dlp hangs/crashes some Linux/Proton setups hit.
+/// VRChat may restore its own copy on the next game update.
+private void drawYtdlpControl(mu_Context* ctx, AppState* state)
+{
+    import client.ytdlp : queryYtdlpState, toggleYtdlp, YtdlpState;
+
+    static immutable int[1] fullCol = [-1];
+
+    YtdlpState ytState = queryYtdlpState();
+    string statusLabel;
+    final switch (ytState) with (YtdlpState)
+    {
+        case enabled:  statusLabel = "yt-dlp: enabled";   break;
+        case disabled: statusLabel = "yt-dlp: disabled"; break;
+        case missing:  statusLabel = "yt-dlp: not found (start VRChat once first)"; break;
+    }
+
+    mu_layout_row(ctx, 1, fullCol.ptr, 0);
+    mu_label(ctx, statusLabel);
+
+    if (ytState == YtdlpState.missing)
+        return;
+
+    string btnLabel = ytState == YtdlpState.enabled ? "Disable yt-dlp" : "Enable yt-dlp";
+    mu_layout_row(ctx, 1, fullCol.ptr, 60);
+    if (clickButton(ctx, btnLabel))
+    {
+        bool wasEnabled = ytState == YtdlpState.enabled;
+        if (toggleYtdlp())
+            setStatusFlash(state, wasEnabled ? "  yt-dlp disabled" : "  yt-dlp re-enabled");
+        else
+            setStatusFlash(state, "  yt-dlp toggle failed, see logs");
+        requestRepaint();
+    }
+}
+
 private void drawToolsTab(mu_Context* ctx, AppState* state, int scrollDelta)
 {
     final switch (state.toolsPage)
@@ -2404,6 +2443,10 @@ private void drawToolsTab(mu_Context* ctx, AppState* state, int scrollDelta)
     {
         state.toolsPage = ToolsPage.stripMetadata;
     }
+
+    spacer(ctx);
+    sectionHeader(ctx, "Video");
+    drawYtdlpControl(ctx, state);
 
     spacer(ctx);
     sectionHeader(ctx, "Drop a Portal");
