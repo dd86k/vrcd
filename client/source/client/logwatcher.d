@@ -12,6 +12,8 @@ import std.algorithm : sort, remove, countUntil;
 import std.json : JSONValue;
 
 import core.thread;
+import core.sync.mutex : Mutex;
+import core.sync.condition : Condition;
 
 import bindbc.sdl;
 import ddlogger;
@@ -531,7 +533,10 @@ class LogWatcher
                 return;
             }
 
-            string localPath = translateVRChatPath(logPath);
+            // idup: the metadata writer thread holds onto this path for as long
+            // as it takes VRChat to write and release the picture, well past
+            // the point where readln has recycled the line buffer underneath it.
+            string localPath = translateVRChatPath(logPath).idup;
             logDebugging("LogWatcher: photo-taken logPath=%s localPath=%s writeMetadata=%s",
                 logPath, localPath, writeMetadata);
 
@@ -540,7 +545,7 @@ class LogWatcher
             if (writeMetadata)
             {
                 string metaJson = buildMetadataJson();
-                startMetadataWrite(localPath, metaJson);
+                queueMetadataWrite(localPath, metaJson);
             }
 
             pushPhotoEvent(localPath);
@@ -612,58 +617,6 @@ class LogWatcher
         msg["players"] = players;
 
         return msg.toString();
-    }
-
-    /// Spawn a short-lived background thread that waits for VRChat to release
-    /// the screenshot file, then writes the Description iTXt chunk.
-    private static void startMetadataWrite(string path, string jsonText)
-    {
-        Thread t = new Thread({
-            logDebugging("startMetadataWrite: spawning writer for %s", path);
-
-            // Never touch the filesystem with a relative path: it would resolve
-            // against the process CWD and drop stray files next to the client.
-            import std.path : isAbsolute;
-            if (isAbsolute(path) == false)
-            {
-                logError("Refusing metadata write for non-absolute path '%s'", path);
-                return;
-            }
-
-            // Retry 10 times with 2 second sleeps
-            string emsg;
-            foreach (int i; 0 .. 10)
-            {
-                try
-                {
-                    writeDescriptionChunk(path, jsonText);
-                    logInfo("Wrote screenshot metadata: %s", path);
-                    return;
-                }
-                catch (Exception ex)
-                {
-                    Thread.sleep(2000.msecs);
-                    emsg = ex.msg; // only last is meaningful
-                }
-            }
-            logError("Failed to write picture metadata to '%s': %s", path, emsg);
-            
-            // At least try writing metadata next to the file
-            import std.file : write;
-            string jsonpath = path~".json";
-            try
-            {
-                write(jsonpath, jsonText);
-                logInfo("Wrote metadata fallback to '%s'", jsonpath);
-            }
-            catch (Exception ex)
-            {
-                // At this point, we can only scream
-                logError("Failed to write metadata fallback to '%s': %s", jsonpath, ex.msg);
-            }
-        });
-        t.isDaemon = true;
-        t.start();
     }
 
     /// Split "DisplayName (usr_...)" into display name and user id.
@@ -800,6 +753,161 @@ class LogWatcher
         SDL_Event ev = void;
         ev.type = sdlEventType;
         SDL_PushEvent(&ev);
+    }
+}
+
+/// A screenshot waiting for VRChat to finish with it.
+private struct PendingPicture
+{
+    string path;
+    string jsonText;
+    MonoTime queued;    /// When the log line was seen.
+    MonoTime deadline;  /// When to stop waiting for the file to appear.
+    int attempts;       /// Write attempts made since the file appeared.
+}
+
+/// How long to wait for a screenshot to show up on disk. VRChat logs the path
+/// as it hands the capture off, so the file can trail the log line by a long
+/// while on a slow, network-backed or sync-backed pictures folder.
+private enum Duration pictureAppearTimeout = 2.minutes;
+
+/// How many write attempts to make once the file exists. Covers VRChat still
+/// holding the lock, or the file being half-written; one attempt per tick.
+private enum int pictureWriteAttempts = 20;
+
+/// How long the writer sleeps between passes over the pending list.
+private enum Duration writerTick = 1.seconds;
+
+private __gshared Mutex writerMutex;
+private __gshared Condition writerCond;
+private __gshared Thread writerThread;
+private __gshared PendingPicture[] writerInbox;
+
+shared static this()
+{
+    writerMutex = new Mutex();
+    writerCond = new Condition(writerMutex);
+}
+
+/// Hand a screenshot to the metadata writer thread.
+///
+/// A picture can sit in the queue for minutes waiting on VRChat, so this is a
+/// single long-lived worker rather than a thread per picture: a photo spree in
+/// VR would otherwise leave dozens of threads asleep at once, each holding a
+/// stack for a job that is idle 99% of the time.
+private void queueMetadataWrite(string path, string jsonText)
+{
+    // Never touch the filesystem with a relative path: it would resolve
+    // against the process CWD and drop stray files next to the client.
+    import std.path : isAbsolute;
+    if (isAbsolute(path) == false)
+    {
+        logError("Refusing metadata write for non-absolute path '%s'", path);
+        return;
+    }
+
+    MonoTime now = MonoTime.currTime;
+    synchronized (writerMutex)
+    {
+        writerInbox ~= PendingPicture(path, jsonText, now, now + pictureAppearTimeout);
+        if (writerThread is null)
+        {
+            writerThread = new Thread(&metadataWriterLoop);
+            writerThread.isDaemon = true;
+            writerThread.start();
+        }
+        writerCond.notify();
+    }
+}
+
+/// Writer thread: one pass per tick over every picture we are waiting on.
+private void metadataWriterLoop()
+{
+    PendingPicture[] pending;
+
+    while (true)
+    {
+        synchronized (writerMutex)
+        {
+            // Nothing to do: sleep until a picture is queued. Otherwise pace
+            // the retries, but wake early if one comes in meanwhile.
+            if (pending.length == 0)
+            {
+                while (writerInbox.length == 0)
+                    writerCond.wait();
+            }
+            else
+                writerCond.wait(writerTick);
+
+            if (writerInbox.length)
+            {
+                pending ~= writerInbox;
+                writerInbox.length = 0;
+            }
+        }
+
+        for (size_t i; i < pending.length; )
+        {
+            if (processPending(pending[i]))
+                pending = pending.remove(i);
+            else
+                i++;
+        }
+    }
+}
+
+/// Attempt one pass on a pending picture. Returns true once it is settled
+/// (written, or given up on), meaning it can leave the pending list.
+private bool processPending(ref PendingPicture p)
+{
+    // Not on disk yet. Missing file and locked file are tracked separately:
+    // a missing file means VRChat has not finished writing it, and letting
+    // that share a budget with the write retries let a slow write eat every
+    // attempt before the picture even existed.
+    if (exists(p.path) == false)
+    {
+        if (MonoTime.currTime < p.deadline)
+            return false;
+
+        logError("Picture '%s' never appeared on disk after %s",
+            p.path, pictureAppearTimeout);
+        writeMetadataFallback(p.path, p.jsonText);
+        return true;
+    }
+
+    try
+    {
+        writeDescriptionChunk(p.path, p.jsonText);
+        logInfo("Wrote screenshot metadata: %s (waited %s)",
+            p.path, MonoTime.currTime - p.queued);
+        return true;
+    }
+    catch (Exception ex)
+    {
+        if (++p.attempts < pictureWriteAttempts)
+            return false;
+
+        logError("Failed to write picture metadata to '%s': %s", p.path, ex.msg);
+        writeMetadataFallback(p.path, p.jsonText);
+        return true;
+    }
+}
+
+/// Last resort when the picture itself could not be touched: drop the
+/// metadata in a sidecar JSON file next to where the picture should be.
+private void writeMetadataFallback(string path, string jsonText)
+{
+    import std.file : write;
+    string jsonpath = path~".json";
+    try
+    {
+        write(jsonpath, jsonText);
+        logInfo("Wrote metadata fallback to '%s'", jsonpath);
+    }
+    catch (Exception ex)
+    {
+        // At this point, we can only scream
+        logError("Failed to write metadata fallback to '%s': %s", jsonpath, ex.msg);
     }
 }
 
