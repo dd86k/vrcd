@@ -12,7 +12,7 @@ import std.string : fromStringz, indexOf;
 
 import core.thread;
 
-import core.stdc.string : strlen;
+import core.stdc.string : memcpy, strlen;
 
 import bindbc.sdl;
 import sdl_ttf;
@@ -283,6 +283,8 @@ int runGui(string host, ushort port, string secret, long sinceId,
     mu_init(uictx);
     uictx.text_width  = &text_width;
     uictx.text_height = &text_height;
+    uictx.get_clipboard = &get_clipboard;
+    uictx.set_clipboard = &set_clipboard;
 
     // Register custom SDL event for network wake-ups.
     networkEventType = SDL_RegisterEvents(1);
@@ -484,19 +486,9 @@ private void eventLoop(mu_Context* uictx)
                         if (navigateBack(&appState))
                             break;
                     }
-                    // Ctrl+V paste
-                    if (e.type == SDL_KEYDOWN &&
-                        (e.key.keysym.mod & KMOD_CTRL) &&
-                        e.key.keysym.sym == SDLK_v)
-                    {
-                        char* clip = SDL_GetClipboardText();
-                        if (clip)
-                        {
-                            mu_input_text(uictx, clip);
-                            SDL_free(clip);
-                        }
-                        break;
-                    }
+                    // Clipboard shortcuts (Ctrl+C/X/V/A) are plain key flags in
+                    // the map below: ddui only acts on them while Ctrl is held,
+                    // and does the editing itself through the clipboard hooks.
                     int k = keyMap[e.key.keysym.sym & 0xff];
                     if (k)
                     {
@@ -2573,6 +2565,30 @@ extern(C) int text_height(mu_Font font)
     return r_get_text_height();
 }
 
+/// Clipboard callbacks for ddui (must be extern(C)).
+///
+/// ddui only reads the returned pointer during the call, but SDL hands us an
+/// allocation we have to free, so the text is copied into a static buffer.
+extern(C) const(char)* get_clipboard(mu_Context* ctx)
+{
+    static char[4096] clip;
+    char* text = SDL_GetClipboardText();
+    if (text is null)
+        return null;
+    size_t n = strlen(text);
+    if (n >= clip.sizeof)
+        n = mu_utf8_trim(text, clip.sizeof - 1);
+    memcpy(clip.ptr, text, n);
+    clip[n] = '\0';
+    SDL_free(text);
+    return clip.ptr;
+}
+
+extern(C) void set_clipboard(mu_Context* ctx, const(char)* text)
+{
+    SDL_SetClipboardText(text);
+}
+
 /// Tear down the current connection and establish a new one using
 /// the host/port/secret from the Settings tab.
 private void doReconnect()
@@ -2790,8 +2806,12 @@ private immutable ubyte[256] buttonMap = () {
 }();
 
 /// SDL-DDUI keyboard key mapping.
-private immutable ubyte[256] keyMap = () {
-    ubyte[256] m;
+///
+/// Keypad and non-printable SDL keycodes have bit 30 set (e.g. SDLK_LEFT is
+/// 0x4000004f), so masking to a byte lands them in the upper-ASCII range where
+/// SDL has no printable keys, and they cannot collide with the letter keys.
+private immutable ushort[256] keyMap = () {
+    ushort[256] m;
     m[SDLK_LSHIFT    & 0xff] = MU_KEY_SHIFT;
     m[SDLK_RSHIFT    & 0xff] = MU_KEY_SHIFT;
     m[SDLK_LCTRL     & 0xff] = MU_KEY_CTRL;
@@ -2802,5 +2822,17 @@ private immutable ubyte[256] keyMap = () {
     m[SDLK_KP_ENTER  & 0xff] = MU_KEY_RETURN;
     m[SDLK_BACKSPACE & 0xff] = MU_KEY_BACKSPACE;
     m[SDLK_TAB       & 0xff] = MU_KEY_TAB;
+    // Caret movement and forward deletion.
+    m[SDLK_LEFT      & 0xff] = MU_KEY_LEFT;
+    m[SDLK_RIGHT     & 0xff] = MU_KEY_RIGHT;
+    m[SDLK_HOME      & 0xff] = MU_KEY_HOME;
+    m[SDLK_END       & 0xff] = MU_KEY_END;
+    m[SDLK_DELETE    & 0xff] = MU_KEY_DELETE;
+    // Clipboard shortcuts: ddui only acts on these while Ctrl is held, so
+    // mapping the bare letters is safe (typing them still inserts text).
+    m[SDLK_c         & 0xff] = MU_KEY_COPY;
+    m[SDLK_x         & 0xff] = MU_KEY_CUT;
+    m[SDLK_v         & 0xff] = MU_KEY_PASTE;
+    m[SDLK_a         & 0xff] = MU_KEY_SELECTALL;
     return m;
 }();
