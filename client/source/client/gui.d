@@ -19,6 +19,8 @@ import sdl_ttf;
 import sdl_image;
 import ddlogger;
 import ddui;
+import vrcd.friends : FriendRoster, parseFriendsMessage;
+import vrcd.events : extractEventFields;
 
 import client.connection;
 import client.stream : loadTLS;
@@ -1854,274 +1856,20 @@ private void applyContentActionResult(string msgType, JSONValue msg)
     }
 }
 
-/// Extract user and detail fields from a feed event.
-/// Detail shows what's affected (world, status, group, etc.).
-private void extractEventFields(string eventType, JSONValue msg, out string user, out string detail)
-{
-    if ("content" !in msg)
-        return;
-
-    try
-    {
-        JSONValue c = msg["content"];
-        if (c.type == JSONType.string)
-            c = parseJSON(c.str);
-
-        if (const(JSONValue)* v = "displayName" in c)
-            user = v.str;
-
-        // Most events nest the user info inside a "user" sub-object.
-        if (user.length == 0)
-            if (const(JSONValue)* v = "user" in c)
-                if (v.type == JSONType.object)
-                    if (const(JSONValue)* dn = "displayName" in *v)
-                        user = dn.str;
-        
-        switch (eventType)
-        {
-            case "friend-online":
-                if (const(JSONValue)* v = "platform" in c)
-                    if (v.str.length > 0)
-                        detail = prettyPlatform(v.str);
-                return;
-
-            case "friend-active":
-                if (const(JSONValue)* v = "platform" in c)
-                    if (v.str.length > 0)
-                        detail = prettyPlatform(v.str);
-                return;
-
-            case "friend-offline":
-                if (const(JSONValue)* v = "platform" in c)
-                    if (v.str.length > 0)
-                        detail = prettyPlatform(v.str);
-                return;
-
-            case "friend-add":
-            case "friend-delete":
-                return;
-
-            case "friend-update":
-                // Status fields are nested inside the "user" sub-object.
-                if (const(JSONValue)* userObj = "user" in c)
-                if (userObj.type == JSONType.object)
-                {
-                    if (const(JSONValue)* v = "status" in *userObj)
-                        if (v.str.length > 0)
-                            detail = v.str;
-                }
-                return;
-
-            case "friend-location":
-            case "user-location":
-                string worldName;
-                if (const(JSONValue)* v = "worldName" in c)
-                    worldName = v.str;
-                if (worldName.length == 0)
-                    if (const(JSONValue)* v = "world" in c)
-                        if (v.type == JSONType.object)
-                            if (const(JSONValue)* wn = "name" in *v)
-                                worldName = wn.str;
-                if (worldName.length > 0)
-                    detail = worldName;
-                else
-                {
-                    string loc;
-                    if (const(JSONValue)* v = "location" in c)
-                        loc = v.str;
-                    if (loc == "private")
-                        detail = "Private World";
-                    else if (loc == "offline" || loc.length == 0)
-                        detail = "Offline";
-                    else
-                        detail = loc;
-                }
-                return;
-
-            case "user-update":
-                if (const(JSONValue)* v = "statusDescription" in c)
-                    if (v.str.length > 0)
-                        detail = v.str;
-                return;
-
-            case "notification":
-            case "notification-v2":
-                if (const(JSONValue)* v = "senderUsername" in c)
-                    if (v.str.length > 0)
-                        user = v.str;
-                if (const(JSONValue)* v = "type" in c)
-                    if (v.str.length > 0)
-                        detail = prettyNotifType(v.str);
-                return;
-
-            case "notification-v2-delete":
-            case "notification-v2-update":
-            case "see-notification":
-            case "hide-notification":
-            case "response-notification":
-                if (const(JSONValue)* v = "type" in c)
-                    if (v.str.length > 0)
-                        detail = prettyNotifType(v.str);
-                return;
-
-            case "group-joined":
-            case "group-left":
-            case "group-role-updated":
-            case "group-member-updated":
-                if (const(JSONValue)* v = "groupName" in c)
-                    if (v.str.length > 0)
-                        detail = v.str;
-                return;
-
-            case "instance-queue-position":
-                if (const(JSONValue)* v = "position" in c)
-                    if (v.str.length > 0)
-                        detail = "Position " ~ v.str;
-                return;
-
-            case "instance-queue-joined":
-            case "instance-queue-ready":
-            case "instance-queue-left":
-            case "instance-closed":
-                if (const(JSONValue)* v = "instanceId" in c)
-                    if (v.str.length > 0)
-                        detail = v.str;
-                return;
-
-            case "avatar-change":
-                // For self events this is an avtr_<uuid>; for friends VRChat
-                // only exposes the image URL, so extract the file_<uuid>
-                // segment as the most compact stable handle.
-                if (const(JSONValue)* v = "currentAvatar" in c)
-                    if (v.str.length > 0)
-                        detail = shortAvatarId(v.str);
-                return;
-
-            case "profile-change":
-                // Synthetic carries previous*/current* pairs for whichever
-                // subfields changed. Surface the field names in display order
-                // so the feed reads "bio" / "bio, pronouns" / etc.
-                string[] fields;
-                if ("currentBio" in c)       fields ~= "bio";
-                if ("currentPronouns" in c)  fields ~= "pronouns";
-                if ("currentBioLinks" in c)  fields ~= "bioLinks";
-                if (fields.length > 0)
-                {
-                    import std.array : join;
-                    detail = fields.join(", ");
-                }
-                return;
-
-            case "content-refresh":
-                if (const(JSONValue)* v = "contentType" in c)
-                    if (v.str.length > 0)
-                        detail = v.str;
-                return;
-
-            default:
-                break;
-        }
-    }
-    catch (Exception) {}
-}
-
 /// Apply a friends snapshot from the server to the app state.
 private void applyFriendsSnapshot(JSONValue msg)
 {
-    InstanceGroup[] instances;
-    FriendInfo[] privateGroup; // in VRChat but private/traveling
-    FriendInfo[] activeElsewhere; // online on web (or other platform), not in VRChat
-    FriendInfo[] offlineFriends;
+    // Bucketing and ordering live in vrcd.friends, shared with the web
+    // front-end so the two rosters cannot disagree on what counts as
+    // "Private" versus "Active elsewhere".
+    FriendRoster roster = parseFriendsMessage(msg);
 
-    // Parse instances.
-    if (const(JSONValue) *jinstances = "instances" in msg)
-    if (jinstances.type == JSONType.array)
-    {
-        foreach (grp; jinstances.array)
-        {
-            InstanceGroup ig;
-            if (const(JSONValue)* v = "instance_id" in grp)
-                ig.instanceId = v.str;
-            if (const(JSONValue)* v = "location" in grp)
-                ig.location = v.str;
-            if (const(JSONValue)* v = "world_name" in grp)
-                ig.worldName = v.str;
-            if (const(JSONValue)* v = "n_users" in grp)
-                if (v.type == JSONType.integer || v.type == JSONType.uinteger)
-                    ig.nUsers = v.integer;
-            if (const(JSONValue)* v = "capacity" in grp)
-                if (v.type == JSONType.integer || v.type == JSONType.uinteger)
-                    ig.capacity = v.integer;
-
-            if (const(JSONValue) *jfriends = "friends" in grp)
-            if (jfriends.type == JSONType.array)
-            {
-                foreach (fVal; jfriends.array)
-                    ig.friends ~= parseFriendInfo(fVal);
-            }
-            
-            sort!friendLess(ig.friends);
-
-            // "private" and "traveling" are not joinable world instances.
-            // Split by platform: web-only friends go to "Active elsewhere";
-            // game-platform friends go to the "Private" section.
-            if (ig.instanceId == "private" || ig.instanceId == "traveling")
-            {
-                foreach (ref FriendInfo f; ig.friends)
-                {
-                    if (f.platform == "web")
-                        activeElsewhere ~= f;
-                    else
-                        privateGroup ~= f;
-                }
-            }
-            else
-                instances ~= ig;
-        }
-    }
-
-    if (privateGroup.length > 0)
-    {
-        sort!friendLess(privateGroup);
-        InstanceGroup pg;
-        pg.instanceId = "private";
-        pg.friends = privateGroup;
-        instances ~= pg;
-    }
-    sort!friendLess(activeElsewhere);
-
-    // Parse offline friends. Web-platform friends with a non-offline status
-    // are active on the website but may have an empty location in the API
-    // seed, causing the server to bucket them as offline. Re-route them to
-    // "Active elsewhere" so they appear in the correct section.
-    if (const(JSONValue) *joffline = "offline" in msg)
-    if (joffline.type == JSONType.array)
-    {
-        foreach (fVal; joffline.array)
-        {
-            FriendInfo fi = parseFriendInfo(fVal);
-            if (fi.platform == "web" && fi.status != "offline")
-                activeElsewhere ~= fi;
-            else
-                offlineFriends ~= fi;
-        }
-    }
-    sort!friendLess(activeElsewhere);
-    sort!friendLess(offlineFriends);
-
-    appState.instances = instances;
-    appState.activeElsewhereFriends = activeElsewhere;
-    appState.offlineFriends = offlineFriends;
-    appState.selectedFriend = null; // Reset selection on refresh.
-
+    appState.instances = roster.instances;
+    appState.activeElsewhereFriends = roster.activeElsewhere;
+    appState.offlineFriends = roster.offline;
     // Flat roster for the TOOLS friend list, sorted by name only.
-    FriendInfo[] all;
-    foreach (ref InstanceGroup ig; instances)
-        all ~= ig.friends;
-    all ~= activeElsewhere;
-    all ~= offlineFriends;
-    sort!nameLess(all);
-    appState.allFriends = all;
+    appState.allFriends = roster.all;
+    appState.selectedFriend = null; // Reset selection on refresh.
     // Rows may have moved under an armed confirmation; disarm.
     appState.armedConfirm = ArmedConfirm.init;
 }
@@ -2203,78 +1951,12 @@ private string moderationVerbLabel(string action)
     }
 }
 
-/// Case-insensitive display-name ordering for the flat friend roster.
-private bool nameLess(ref const FriendInfo a, ref const FriendInfo b)
-{
-    import std.uni : icmp;
-    return icmp(a.displayName, b.displayName) < 0;
-}
-
-/// ditto, for moderation entries.
+/// Case-insensitive display-name ordering for moderation entries.
 private bool moderationLess(ref const ModerationEntry a, ref const ModerationEntry b)
 {
     import std.uni : icmp;
     return icmp(a.displayName, b.displayName) < 0;
 }
-
-// Friend comparison function
-private bool friendLess(ref const FriendInfo a, ref const FriendInfo b)
-{
-    // First, try ranking by status if those differ
-    int ra = statusRank(a.status);
-    int rb = statusRank(b.status);
-    if (ra != rb)
-        return ra < rb;
-    // Then, rank by name if their status rank is the same
-    import std.uni : icmp;
-    return icmp(a.displayName, b.displayName) < 0;
-}
-
-/// Status rank for sorting: Join Me, Online, Ask Me, Busy, then anything else,
-/// with Offline last. Ties fall back to case-insensitive display name.
-private int statusRank(string status)
-{
-    switch (status)
-    {
-        case "join me": return 0;
-        case "active":  return 1;
-        case "ask me":  return 2;
-        case "busy":    return 3;
-        case "offline": return 5;
-        default:        return 4;
-    }
-}
-
-/// Parse a FriendInfo from a JSON friend object.
-private FriendInfo parseFriendInfo(JSONValue f)
-{
-    FriendInfo fi;
-    if (const(JSONValue)* v = "id" in f)
-        fi.userId = v.str;
-    if (const(JSONValue)* v = "displayName" in f)
-        fi.displayName = v.str;
-    if (const(JSONValue)* v = "status" in f)
-        fi.status = v.str;
-    if (const(JSONValue)* v = "statusDescription" in f)
-        fi.statusDescription = v.str;
-    if (const(JSONValue)* v = "platform" in f)
-        fi.platform = v.str;
-    if (const(JSONValue)* v = "location" in f)
-        fi.location = v.str;
-    if (const(JSONValue)* v = "bio" in f)
-        if (v.type == JSONType.string)
-            fi.bio = v.str;
-    if (const(JSONValue)* v = "pronouns" in f)
-        if (v.type == JSONType.string)
-            fi.pronouns = v.str;
-    if (const(JSONValue)* v = "bioLinks" in f)
-        if (v.type == JSONType.array)
-            foreach (ref const(JSONValue) item; v.array)
-                if (item.type == JSONType.string)
-                    fi.bioLinks ~= item.str;
-    return fi;
-}
-
 
 /// Actionable notification types that get stored in the notifications tab.
 private immutable string[] actionableNotifTypes = [

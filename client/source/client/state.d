@@ -106,30 +106,9 @@ struct FeedEntry
     EventSource source;
 }
 
-/// Friend info as received from server.
-struct FriendInfo
-{
-    string userId;
-    string displayName;
-    string status;
-    string statusDescription;
-    string platform;
-    string location;
-    string bio;
-    string pronouns;
-    string[] bioLinks;
-}
-
-/// Friends grouped by instance for the friends tab.
-struct InstanceGroup
-{
-    string instanceId; // canonical grouping key (wrld_xxx:12345)
-    string location;   // full location with region tags, for launch URIs
-    string worldName;
-    FriendInfo[] friends;
-    long nUsers   = -1; // -1 = unknown
-    long capacity = -1; // -1 = unknown
-}
+/// Friend info and instance grouping are shared with the web front-end so the
+/// two rosters bucket and sort identically.
+public import vrcd.friends : FriendInfo, InstanceGroup;
 
 /// A muted or blocked user from the server `moderations` snapshot.
 /// Player moderations are not limited to friends, so entries carry their

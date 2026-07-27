@@ -427,6 +427,14 @@ private:
             string remote = clientSock.remoteAddress().toString();
             logInfo("Client connected from %s%s", remote, useTls ? " (TLS)" : "");
 
+            // Every broadcast sends to each client while holding clientsMutex,
+            // so a client that stops reading would otherwise block in send()
+            // once its window fills and take the whole server with it: no
+            // events for anyone, and acceptLoop stuck registering the next
+            // connection. A bounded timeout turns that into one dropped client.
+            clientSock.setOption(SocketOptionLevel.SOCKET, SocketOption.SNDTIMEO,
+                SEND_TIMEOUT);
+
             Stream stream;
             if (useTls)
             {
@@ -522,6 +530,8 @@ private:
 private enum Duration PING_INTERVAL = dur!"seconds"(30);
 /// How long to wait for a pong before treating the client as dead.
 private enum Duration PONG_DEADLINE  = dur!"seconds"(15);
+/// How long a single send may make no progress before the client is dropped.
+private enum Duration SEND_TIMEOUT   = dur!"seconds"(10);
 
 /// Handles a single client connection.
 private class ClientHandler
@@ -559,14 +569,23 @@ private class ClientHandler
             {
                 ptrdiff_t sent = stream.send(remaining);
                 if (sent <= 0)
-                    break; // Client disconnected; will be cleaned up.
+                {
+                    // Errored or hit the send timeout part-way through a line.
+                    // Half a JSON object is worse than no connection, so end
+                    // it here and let the client reconnect and re-sync.
+                    logWarn("sendLine: stalled with %d of %d bytes left, dropping client",
+                        remaining.length, line.length);
+                    stream.shutdown();
+                    break;
+                }
                 remaining = remaining[sent .. $];
             }
         }
         catch (Exception e)
         {
             logDebugging("sendLine: send failed, client will be cleaned up: %s", e.msg);
-        } // Client disconnected; will be cleaned up.
+            stream.shutdown();
+        }
     }
 
     void run()
@@ -632,8 +651,11 @@ private class ClientHandler
             if (const(JSONValue)* v = "type" in msg)
                 type = v.str;
 
-            logDebugging("processMessage: type=%s authenticated=%s len=%d",
-                type, authenticated, line.length);
+            // Keepalives arrive twice a minute per client and say nothing;
+            // logging them buries everything else at debugging level.
+            if (type != "pong" && type != "ping")
+                logDebugging("processMessage: type=%s authenticated=%s len=%d",
+                    type, authenticated, line.length);
 
             switch (type)
             {
@@ -856,7 +878,6 @@ private class ClientHandler
                     pongMutex.lock();
                     lastPongAt = MonoTime.currTime;
                     pongMutex.unlock();
-                    logTrace("processMessage: pong received");
                     break;
                 default:
                     sendError("Unknown message type: " ~ type);
@@ -2087,7 +2108,11 @@ private class ClientHandler
             {
                 logWarn("Client pong timeout (%ds deadline), closing stale connection",
                     PONG_DEADLINE.total!"seconds");
-                stream.close();
+                // shutdown(), not close(): run() is parked in a blocking
+                // receive on this stream and close() would neither wake it
+                // nor keep the descriptor number reserved. run() does the
+                // close once its receive returns.
+                stream.shutdown();
                 return;
             }
         }

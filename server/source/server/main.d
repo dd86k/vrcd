@@ -960,9 +960,12 @@ int main(string[] args)
     // Redundant with server.main module logging info
     logSetModuleLevel("server.vrchat.websocket", LogLevel.none);
     // Useless: [server.api:473] sendLine: len=16
-    // Useless: [server.api:534] processMessage: type=pong authenticated=true len=15
-    // Useless: [server.api:610] processMessage: pong received
-    logSetModuleLevel("server.api", LogLevel.none);
+    // The other two offenders (per-message dispatch and "pong received") no
+    // longer fire for ping/pong at all, so only the trace level needs capping.
+    // Do NOT mute this module outright: client connects, drops, pong timeouts
+    // and stalled sends are all reported from here, and losing those warnings
+    // means a client silently stops receiving events with nothing in the log.
+    logSetModuleLevel("server.api", config.verbose ? LogLevel.debugging : LogLevel.info);
     
     // ddhttp.http has some useful and useless entries, don't disable it yet
     

@@ -13,6 +13,7 @@ import std.utf : stride, UTFException;
 import std.json : JSONValue;
 
 import ddui;
+import vrcd.events : prettyPlatform, prettyNotifType, shortAvatarId;
 
 import client.notifications : notifyEventLabels, feedEventLabels, feedFilterSections,
     feedEventIndex, prettyEventType;
@@ -1859,20 +1860,6 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
     mu_end_panel(ctx);
 }
 
-/// Map notification type to display name.
-string prettyNotifType(string notifType)
-{
-    switch (notifType)
-    {
-        case "invite":                    return "Invite";
-        case "requestInvite":             return "Request Invite";
-        case "requestInviteResponse":     return "Invite Response";
-        case "friendRequest":             return "Friend Request";
-        case "votetokick":                return "Vote to Kick";
-        default:                          return notifType;
-    }
-}
-
 /// Tools tab: utility buttons.
 //
 // Inventory ("STUFF") tab: gallery, icons, stickers, emoji, prints, items.
@@ -3172,42 +3159,6 @@ string prettyStatus(string status)
     }
 }
 
-/// Map VRChat platform strings to readable names.
-string prettyPlatform(string platform)
-{
-    switch (platform)
-    {
-        case "standalonewindows": return "PC";
-        case "android":          return "Quest";
-        case "ios":              return "iOS";
-        case "nativemobile":     return "Mobile";
-        case "web":              return "Website";
-        default:                 return platform;
-    }
-}
-
-/// Reduce a `currentAvatar` value to a compact identifier. Self events carry
-/// an `avtr_<uuid>` directly; friend events expose only an image URL like
-/// `https://api.vrchat.cloud/api/1/file/file_<uuid>/<ver>/file`, in which the
-/// `file_<uuid>` segment is the most stable handle we can show.
-string shortAvatarId(string s)
-{
-    import std.string : indexOf;
-
-    ptrdiff_t i = s.indexOf("avtr_");
-    if (i >= 0)
-        return s[i .. $];
-
-    i = s.indexOf("file_");
-    if (i >= 0)
-    {
-        string rest = s[i .. $];
-        ptrdiff_t slash = rest.indexOf('/');
-        return slash >= 0 ? rest[0 .. slash] : rest;
-    }
-
-    return s;
-}
 
 
 /// Draw the auth delegation dialog (modal popup).

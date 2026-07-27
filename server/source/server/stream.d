@@ -9,7 +9,8 @@
 /// License: BSD-3-Clause-Clear
 module server.stream;
 
-import std.socket : Socket;
+import core.atomic : atomicLoad, atomicStore;
+import std.socket : Socket, SocketShutdown;
 import std.string : toStringz, fromStringz;
 
 import ddlogger;
@@ -23,7 +24,19 @@ abstract class Stream
     /// Write data to the stream. Returns bytes sent, or <=0 on error.
     abstract ptrdiff_t send(const(void)[] data);
 
-    /// Close the stream, releasing all resources.
+    /// Break the connection so a thread blocked in receive() returns, without
+    /// releasing the descriptor.
+    ///
+    /// This is the only teardown call that is safe from another thread.
+    /// close() releases the descriptor number, which the next accept() may
+    /// hand straight to a new connection: a thread still parked in receive()
+    /// would then be reading someone else's socket. shutdown() ends the
+    /// connection while the number stays owned, so the reader wakes, returns
+    /// 0, and closes the stream itself.
+    abstract void shutdown();
+
+    /// Close the stream, releasing all resources. Call only from the thread
+    /// that owns the receive loop, and only once.
     abstract void close();
 }
 
@@ -31,6 +44,7 @@ abstract class Stream
 class PlainStream : Stream
 {
     private Socket sock;
+    private shared bool closed;
 
     this(Socket s)
     {
@@ -47,8 +61,20 @@ class PlainStream : Stream
         return sock.send(data);
     }
 
+    override void shutdown()
+    {
+        // Never shut down a descriptor we have already released: the number
+        // may belong to another connection by now.
+        if (atomicLoad(closed))
+            return;
+        sock.shutdown(SocketShutdown.BOTH);
+    }
+
     override void close()
     {
+        if (atomicLoad(closed))
+            return;
+        atomicStore(closed, true);
         sock.close();
     }
 }
@@ -226,6 +252,7 @@ class TLSServerStream : Stream
 {
     private Socket sock;
     private void* ssl;
+    private shared bool closed;
 
     this(Socket s, void* ctx)
     {
@@ -255,8 +282,21 @@ class TLSServerStream : Stream
         return _SSL_write(ssl, data.ptr, cast(int) data.length);
     }
 
+    override void shutdown()
+    {
+        // Straight to the socket: SSL_shutdown() writes a close_notify, which
+        // would race the reader thread still inside SSL_read().
+        if (atomicLoad(closed))
+            return;
+        sock.shutdown(SocketShutdown.BOTH);
+    }
+
     override void close()
     {
+        if (atomicLoad(closed))
+            return;
+        atomicStore(closed, true);
+
         if (ssl)
         {
             _SSL_shutdown(ssl);
