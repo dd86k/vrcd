@@ -13,22 +13,25 @@
      and a sprite request would be one more round trip before it reads right. -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
 <defs>
-<g id="i-feed" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-    <path d="M4 7h16M4 12h11M4 17h14"/></g>
-<g id="i-online" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+<!-- symbol, not g: the viewBox is what maps the 24-unit artwork onto whatever
+     width/height the <use> site asks for. A plain <g> renders 1 unit per pixel
+     and clips the last few units off the right and bottom. -->
+<symbol id="i-feed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+    <path d="M4 7h16M4 12h11M4 17h14"/></symbol>
+<symbol id="i-online" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
     <circle cx="9" cy="9" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0"/>
-    <circle cx="17" cy="9.5" r="2.2"/><path d="M15 19a4 4 0 0 1 5.8-3.2"/></g>
-<g id="i-inbox" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
-    <rect x="3" y="6" width="18" height="12" rx="2"/><path d="M3.5 7.5L12 13l8.5-5.5"/></g>
-<g id="i-stuff" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
+    <circle cx="17" cy="9.5" r="2.2"/><path d="M15 19a4 4 0 0 1 5.8-3.2"/></symbol>
+<symbol id="i-inbox" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
+    <rect x="3" y="6" width="18" height="12" rx="2"/><path d="M3.5 7.5L12 13l8.5-5.5"/></symbol>
+<symbol id="i-stuff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
     <rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/>
-    <rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></g>
-<g id="i-tools" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-    <path d="M4 7h8M18 7h2M4 17h2M12 17h8"/><circle cx="15" cy="7" r="2.2"/><circle cx="9" cy="17" r="2.2"/></g>
-<g id="i-profile" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-    <circle cx="12" cy="8.5" r="3.5"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></g>
-<g id="i-back" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M15 5l-7 7 7 7"/></g>
+    <rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></symbol>
+<symbol id="i-tools" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+    <path d="M4 7h8M18 7h2M4 17h2M12 17h8"/><circle cx="15" cy="7" r="2.2"/><circle cx="9" cy="17" r="2.2"/></symbol>
+<symbol id="i-profile" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+    <circle cx="12" cy="8.5" r="3.5"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></symbol>
+<symbol id="i-back" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M15 5l-7 7 7 7"/></symbol>
 </defs>
 </svg>
 

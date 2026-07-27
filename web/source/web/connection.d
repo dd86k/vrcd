@@ -184,10 +184,24 @@ class ServerLink
     void requestJoin(string location)
     {
         logInfo("Requesting self-invite to %s", location);
-        sendMessage(JSONValue([
+        if (sendMessage(JSONValue([
             "type":     JSONValue("join_instance"),
             "location": JSONValue(location),
-        ]));
+        ])))
+            return;
+
+        // Nothing carried it, so answer here: the page is waiting on a
+        // join_instance_result that no one is going to send.
+        JoinResult result;
+        result.attempted = true;
+        result.location = location;
+        result.error = "Not connected to vrcd-server";
+
+        synchronized (stateMutex)
+            lastJoin = result;
+        notifyChange();
+
+        logWarn("Self-invite for %s dropped: no link to vrcd-server", location);
     }
 
     /// Accept or hide a notification. Safe to call from an HTTP thread; the
@@ -195,11 +209,27 @@ class ServerLink
     void requestNotificationAction(string notificationId, string action)
     {
         logInfo("Notification %s: %s", action, notificationId);
-        sendMessage(JSONValue([
+        if (sendMessage(JSONValue([
             "type":            JSONValue("notification_action"),
             "notification_id": JSONValue(notificationId),
             "action":          JSONValue(action),
-        ]));
+        ])))
+            return;
+
+        // As with a join: the row stays put and says why, rather than the
+        // button going quiet on a press that never left the process.
+        NotifyActionResult result;
+        result.attempted = true;
+        result.notificationId = notificationId;
+        result.action = action;
+        result.error = "Not connected to vrcd-server";
+
+        synchronized (stateMutex)
+            lastNotifyAction = result;
+        notifyChange();
+
+        logWarn("Notification %s for %s dropped: no link to vrcd-server",
+            action, notificationId);
     }
 
 private:
@@ -263,19 +293,21 @@ private:
     {
         logInfo("Connecting to %s:%u", host, port);
 
-        try
-        {
-            socket = new TcpSocket();
-            socket.connect(new InternetAddress(host, port));
-        }
+        // Connect on a local reference and publish it only once it is up, so
+        // a send from an HTTP thread never lands on a half-built socket.
+        Socket sock = new TcpSocket();
+        try sock.connect(new InternetAddress(host, port));
         catch (SocketException ex)
         {
+            sock.close();
             setError(ex.msg);
             logError("Failed to connect to %s:%u: %s", host, port, ex.msg);
             return false;
         }
 
         recvBuffer = null;
+        synchronized (sendMutex)
+            socket = sock;
 
         sendMessage(JSONValue([
             "type":  JSONValue("auth"),
@@ -596,21 +628,34 @@ private:
         return null;
     }
 
-    void sendMessage(JSONValue message)
+    /// Write one JSON-L message. Returns false when nothing went out, which
+    /// callers on an HTTP thread have to answer for themselves.
+    ///
+    /// The socket is read once under sendMutex rather than touched directly:
+    /// HTTP threads call this, the network thread replaces the socket on
+    /// every reconnect, and between the two there is a window where there is
+    /// no socket at all. Reaching for the field each time meant a join
+    /// pressed during a reconnect dereferenced null.
+    bool sendMessage(JSONValue message)
     {
         string line = message.toString() ~ "\n";
 
         sendMutex.lock();
         scope(exit) sendMutex.unlock();
 
+        Socket sock = socket;
+        if (sock is null)
+            return false;
+
         const(void)[] remaining = cast(const(void)[])line;
         while (remaining.length > 0)
         {
-            ptrdiff_t sent = socket.send(remaining);
+            ptrdiff_t sent = sock.send(remaining);
             if (sent <= 0)
-                break; // Disconnected; the receive loop will notice.
+                return false; // Disconnected; the receive loop will notice.
             remaining = remaining[sent .. $];
         }
+        return true;
     }
 
     /// Block until one complete JSON-L message arrives. Returns a null
@@ -646,13 +691,21 @@ private:
 
     void closeSocket()
     {
-        if (socket is null)
+        // Clear the field under sendMutex so a send already in flight on an
+        // HTTP thread finishes on the old socket instead of racing the close.
+        Socket sock;
+        synchronized (sendMutex)
+        {
+            sock = socket;
+            socket = null;
+        }
+
+        if (sock is null)
             return;
 
-        try socket.shutdown(SocketShutdown.BOTH);
+        try sock.shutdown(SocketShutdown.BOTH);
         catch (SocketException) {} // Already down.
-        socket.close();
-        socket = null;
+        sock.close();
     }
 
     void setError(string message)
