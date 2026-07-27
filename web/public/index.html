@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vrcd</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div class="wrap">
+    <div id="link" class="link">connecting...</div>
+
+    <div class="self">
+        <span id="selfDot" class="dot big"></span>
+        <div class="who">
+            <div id="selfName" class="name">&mdash;</div>
+            <div id="selfDesc" class="desc"></div>
+        </div>
+    </div>
+
+    <div class="tabs">
+        <button id="tabOnline" class="on" onclick="showTab('online')">ONLINE</button>
+        <button id="tabFeed" onclick="showTab('feed')">FEED</button>
+    </div>
+
+    <div id="viewOnline">
+        <div id="groups"></div>
+        <div id="empty" class="empty hidden">No friend data yet.</div>
+    </div>
+
+    <div id="viewFeed" class="hidden">
+        <div id="events" class="events"></div>
+        <div id="feedEmpty" class="empty hidden">No events yet.</div>
+    </div>
+</div>
+<div id="toast" class="toast hidden"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

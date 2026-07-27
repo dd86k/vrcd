@@ -1,0 +1,116 @@
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+body {
+    margin: 0; padding: 1rem;
+    background: #16161c; color: #e6e6ea;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 16px;
+}
+.wrap { max-width: 46rem; margin: 0 auto; }
+
+.link { font-size: .85rem; color: #8a8a99; padding: .25rem 0 1rem; }
+.link.down { color: #ff7b7b; }
+
+.self {
+    display: flex; align-items: center; gap: .75rem;
+    background: #1f1f28; border: 1px solid #2c2c38; border-radius: 12px;
+    padding: 1rem; margin-bottom: 1.5rem;
+}
+.self .who { flex: 1; min-width: 0; }
+.self .name { font-size: 1.4rem; font-weight: 600; }
+.self .desc { color: #b9b9c6; font-size: .9rem; }
+
+.dot { width: .8rem; height: .8rem; border-radius: 50%; background: #8a8a99; flex: none; }
+.dot.big { width: 1.1rem; height: 1.1rem; }
+
+h2 {
+    font-size: 1rem; text-transform: uppercase; letter-spacing: .05em;
+    color: #8a8a99; margin: 1.5rem 0 .5rem;
+}
+.group { margin-bottom: 1.5rem; }
+.group-head {
+    display: flex; align-items: center; gap: .75rem;
+    padding: .75rem 1rem;
+    background: #232330; border: 1px solid #2c2c38;
+    border-radius: 12px 12px 0 0;
+}
+.group-head .world { flex: 1; min-width: 0; font-size: 1.15rem; font-weight: 600; }
+.group-head .count { color: #8a8a99; font-size: .9rem; flex: none; }
+.join {
+    flex: none; min-height: 3rem; padding: 0 1.25rem;
+    font: inherit; font-weight: 600; color: #e6e6ea;
+    background: #33507d; border: 1px solid #43639a; border-radius: 8px;
+    cursor: pointer;
+}
+.join:hover { background: #3d5f94; }
+.join:disabled { opacity: .5; cursor: default; }
+
+.friends { border: 1px solid #2c2c38; border-top: 0; border-radius: 0 0 12px 12px; overflow: hidden; }
+.friend {
+    display: flex; align-items: center; gap: .75rem;
+    min-height: 3.25rem; padding: .5rem 1rem;
+    background: #1f1f28; border-top: 1px solid #2c2c38;
+}
+.friend:first-child { border-top: 0; }
+.friend .who { flex: 1; min-width: 0; }
+.friend .name { font-size: 1.05rem; }
+.friend .desc {
+    color: #8a8a99; font-size: .85rem;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.plat {
+    flex: none; font-size: .7rem; letter-spacing: .04em; color: #8a8a99;
+    border: 1px solid #3a3a48; border-radius: 4px; padding: .15rem .4rem;
+}
+
+details > summary {
+    cursor: pointer; list-style: none;
+    font-size: 1rem; text-transform: uppercase; letter-spacing: .05em;
+    color: #8a8a99; padding: .75rem 0;
+}
+details > summary::-webkit-details-marker { display: none; }
+details > summary::before { content: "\25B8 "; }
+details[open] > summary::before { content: "\25BE "; }
+
+.toast {
+    position: fixed; left: 50%; transform: translateX(-50%); bottom: 1.5rem;
+    background: #232330; border: 1px solid #3a3a48; border-radius: 8px;
+    padding: .75rem 1.25rem; max-width: 90vw;
+}
+.toast.bad { border-color: #7d3333; color: #ffb3b3; }
+.empty { color: #6f6f80; padding: 1rem 0; }
+.hidden { display: none; }
+
+.tabs { display: flex; gap: .5rem; margin-bottom: 1rem; }
+.tabs button {
+    flex: 1; min-height: 3.5rem;
+    font: inherit; font-size: 1.05rem; font-weight: 600; letter-spacing: .05em;
+    color: #8a8a99; background: #1f1f28;
+    border: 1px solid #2c2c38; border-radius: 12px; cursor: pointer;
+}
+.tabs button.on { color: #e6e6ea; background: #33507d; border-color: #43639a; }
+
+.event {
+    display: flex; align-items: baseline; gap: .75rem;
+    padding: .6rem 1rem;
+    background: #1f1f28; border-top: 1px solid #2c2c38;
+}
+.event:first-child { border-top: 0; }
+.event .time {
+    flex: none; font-family: ui-monospace, monospace; font-size: .8rem; color: #6f6f80;
+}
+.event .label {
+    flex: none; min-width: 8rem;
+    font-size: .8rem; letter-spacing: .04em; color: #9fb4d8;
+}
+.event .who { flex: none; font-weight: 600; }
+.event .what {
+    flex: 1; min-width: 0; color: #8a8a99;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.events { border: 1px solid #2c2c38; border-radius: 12px; overflow: hidden; }
+@media (max-width: 34rem) {
+    .event { flex-wrap: wrap; gap: .35rem .6rem; }
+    .event .label { min-width: 0; }
+    .event .what { flex-basis: 100%; }
+}

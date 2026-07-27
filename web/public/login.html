@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vrcd - sign in</title>
+<link rel="stylesheet" href="/static/login.css">
+</head>
+<body>
+<form method="POST" action="/login">
+    <h1>vrcd</h1>
+    <div id="bad" class="bad hidden">Wrong secret.</div>
+    <label for="secret">Shared secret</label>
+    <input id="secret" name="secret" type="password" autocomplete="current-password" autofocus>
+    <button type="submit">Sign in</button>
+</form>
+<script src="/static/login.js"></script>
+</body>
+</html>

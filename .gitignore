@@ -7,6 +7,9 @@ docs/
 /server/vrcd-server-test-application
 /client/vrcd_client
 /client/vrcd-client-test-application
+/web/vrcd_web
+/web/web
+/web/vrcd-web-test-application
 /vrcd
 vrcd-test-*
 *.so
