@@ -41,10 +41,10 @@ Authentication uses a shared secret token. If the server's secret is empty, auth
 
 **Success:**
 ```json
-{"type": "auth_ok", "server_version": 2}
+{"type": "auth_ok", "server_version": 4}
 ```
 
-Protocol versions: `1` = base protocol, `2` = adds the content API (files, prints, inventory, images, uploads), `3` = adds the moderation API (moderations, moderate_user, unfriend).
+Protocol versions: `1` = base protocol, `2` = adds the content API (files, prints, inventory, images, uploads), `3` = adds the moderation API (moderations, moderate_user, unfriend), `4` = adds the notification listing (`get_notifications`).
 
 **Failure:**
 ```json
@@ -134,6 +134,28 @@ Remove a friend. The server calls `DELETE auth/user/friends/{userId}`, replies w
 |-----------|--------|-----------------------------|
 | `type`    | string | `"unfriend"`                |
 | `user_id` | string | Target user ID (`usr_...`)  |
+
+### `get_notifications`
+
+Request the pending notification list. Server replies with `notifications`. Requires `server_version >= 4`.
+
+Always refetches `GET auth/user/notifications` from VRChat. The WebSocket only reports *changes*, so anything that arrived while a front-end was down has no event to replay and the inbox cannot be rebuilt from the event log; this is the authoritative list. Front-ends send it once per connect and then keep the list current from the notification events.
+
+Only actionable types (`friendRequest`, `invite`, `requestInvite`) are returned. VRChat no longer includes sender names, so the server fills them in from the friend roster, then falls back to `GET /users/{id}` for the ones the roster cannot answer - a friend request is precisely the case where the sender is not a friend yet. Those lookups are capped per request; past the cap the user ID stands in as the name.
+
+```json
+{"type": "get_notifications"}
+```
+
+### `notification_action`
+
+Accept or hide one notification. The server calls `PUT auth/user/notifications/{id}/accept` or `PUT auth/user/notifications/{id}/hide` and replies with `notification_action_result`. For `hide`, HTTP 404 is treated as success: the notification is already gone, which is the desired end state.
+
+| Field             | Type   | Description                        |
+|-------------------|--------|------------------------------------|
+| `type`            | string | `"notification_action"`            |
+| `notification_id` | string | Notification ID (`not_...`)        |
+| `action`          | string | One of `"accept"`, `"hide"`        |
 
 ### `set_status`
 
@@ -276,7 +298,7 @@ Authentication succeeded.
 | Field            | Type   | Description              |
 |------------------|--------|--------------------------|
 | `type`           | string | `"auth_ok"`              |
-| `server_version` | int    | Protocol version (currently 2) |
+| `server_version` | int    | Protocol version (currently 4) |
 
 ### `auth_error`
 
@@ -419,6 +441,44 @@ Reply to a `moderate_user` request, sent only to the requesting client. On succe
 ### `unfriend_result`
 
 Reply to an `unfriend` request, sent only to the requesting client. On success, a `friends` broadcast for all clients follows. Same fields as `moderate_result`, without `action`.
+
+### `notifications`
+
+Pending notification snapshot. Sent only as the reply to `get_notifications`; there is no broadcast, since the notification events already tell every client what changed.
+
+| Field           | Type   | Description                                                        |
+|-----------------|--------|--------------------------------------------------------------------|
+| `type`          | string | `"notifications"`                                                  |
+| `notifications` | array  | Entries, **oldest first** (see below)                              |
+| `error`         | string | On failure, sent alongside an empty list (rate limit, VRChat error) |
+
+Each entry:
+
+| Field               | Type   | Description                                                     |
+|---------------------|--------|-----------------------------------------------------------------|
+| `id`                | string | Notification ID (`not_...`)                                     |
+| `notification_type` | string | `"friendRequest"`, `"invite"`, or `"requestInvite"`             |
+| `sender_user_id`    | string | Sender's user ID, empty when VRChat gave none                   |
+| `sender_name`       | string | Resolved display name; falls back to the user ID                |
+| `message`           | string | Message body, or the invite's world name when it carries no text |
+| `location`          | string | Instance an invite points at, empty for every other type        |
+| `received_at_unix`  | int    | Creation time, 0 when unknown                                   |
+
+Order is part of the contract, not a detail. Front-ends draw the inbox with accept/dismiss buttons in each row and append new arrivals to the end, so the list never reflows under a thumb that is already reaching for a button - and on a friend request, the button that moves under it is an accept. Entries with no timestamp sort first.
+
+### `notification_action_result`
+
+Reply to a `notification_action` request, sent only to the requesting client.
+
+| Field             | Type   | Description                                 |
+|-------------------|--------|---------------------------------------------|
+| `type`            | string | `"notification_action_result"`              |
+| `notification_id` | string | Echoed notification ID                      |
+| `action`          | string | Echoed action                               |
+| `success`         | bool   | Whether the VRChat call succeeded           |
+| `error`           | string | Error description (present only on failure) |
+
+VRChat also emits a `hide-notification` or `response-notification` event for the same change, but it arrives whenever it arrives; a front-end that drops the row on this result stops offering a button that has already been pressed.
 
 ### `world`
 

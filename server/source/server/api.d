@@ -30,6 +30,20 @@ import server.stream;
 import server.worldcache;
 import server.config : DEFAULT_RESEED_INTERVAL;
 import server.vrchat.auth : postJSON, putJSON;
+import vrcd.notifications;
+
+/// Protocol version reported in `auth_ok`. 1 = base, 2 = content API,
+/// 3 = moderation API, 4 = notification listing (`get_notifications`).
+private enum int PROTOCOL_VERSION = 4;
+
+/// How many notifications to pull for `get_notifications`. The inbox only
+/// holds things still waiting on an answer, so this is a ceiling nobody
+/// realistically reaches rather than a page size.
+private enum int NOTIFICATION_FETCH_LIMIT = 100;
+
+/// How many GET /users/:id calls one `get_notifications` may spend resolving
+/// sender names the friend roster could not answer.
+private enum int NOTIFICATION_SENDER_LOOKUPS = 12;
 
 /// Callback invoked by the re-seed worker to actually perform a full
 /// re-seed pass. The callback owns HTTPClient/RateLimitTracker access and
@@ -726,6 +740,14 @@ private class ClientHandler
                     }
                     handleUnfriend(msg);
                     break;
+                case "get_notifications":
+                    if (authenticated == false)
+                    {
+                        sendError("Not authenticated");
+                        return;
+                    }
+                    handleGetNotifications();
+                    break;
                 case "notification_action":
                     if (authenticated == false)
                     {
@@ -900,7 +922,7 @@ private class ClientHandler
             authenticated = true;
             JSONValue resp = JSONValue([
                 "type": JSONValue("auth_ok"),
-                "server_version": JSONValue(3),
+                "server_version": JSONValue(PROTOCOL_VERSION),
             ]);
             sendLine(resp.toString() ~ "\n");
             // Send current status immediately after auth.
@@ -1143,6 +1165,193 @@ private class ClientHandler
             "world_name": JSONValue(worldName),
         ]);
         sendLine(resp.toString() ~ "\n");
+    }
+
+    /// Reply to `get_notifications`: fetch the pending notification list from
+    /// VRChat and send a normalized `notifications` snapshot.
+    ///
+    /// The WebSocket only ever reports *changes*, so a front-end that starts
+    /// mid-session has no way to learn about a friend request that arrived
+    /// while it was down; reconstructing the inbox from the event log would
+    /// only reach as far back as whatever page of events was fetched. This is
+    /// the authoritative list, and the front-ends keep it current from the
+    /// events afterwards.
+    ///
+    /// Always refetches. Notifications are few, asked for once per connect,
+    /// and a stale inbox shows actions that no longer exist. Failures are
+    /// reported inside the `notifications` message (not via `error`) so the
+    /// client's loading state resolves.
+    void handleGetNotifications()
+    {
+        void sendNotificationsError(string error)
+        {
+            JSONValue result = JSONValue([
+                "type": JSONValue("notifications"),
+                "notifications": JSONValue.emptyArray,
+                "error": JSONValue(error),
+            ]);
+            sendLine(result.toString() ~ "\n");
+        }
+
+        if (server.httpClient is null || server.apiMutex is null)
+        {
+            sendNotificationsError("Server HTTP client not configured");
+            return;
+        }
+
+        server.apiMutex.lock();
+        scope(exit) server.apiMutex.unlock();
+
+        if (server.rateLimiter && server.rateLimiter.isBlocked())
+        {
+            sendNotificationsError("Rate limited by VRChat, try again later");
+            return;
+        }
+
+        try
+        {
+            // v1 covers exactly the actionable types (friend requests and
+            // invites); the v2 endpoint carries badges and announcements the
+            // inbox has no action to draw for.
+            HTTPResponse resp = server.httpClient.get(
+                "/auth/user/notifications?n=" ~ NOTIFICATION_FETCH_LIMIT.to!string());
+            logDebugging("handleGetNotifications: VRC GET /auth/user/notifications -> HTTP %d",
+                resp.code);
+            if (server.rateLimiter)
+            {
+                server.rateLimiter.update(resp);
+                server.broadcastStatus();
+            }
+            if (resp.code < 200 || resp.code >= 300)
+            {
+                sendNotificationsError("HTTP " ~ resp.code.to!string);
+                return;
+            }
+
+            JSONValue json = parseJSON(resp.text);
+            if (json.type != JSONType.array)
+            {
+                sendNotificationsError("Unexpected notifications response");
+                return;
+            }
+
+            NotificationInfo[] parsed;
+            foreach (JSONValue entry; json.array)
+            {
+                // VRChat no longer returns sender names, so try the roster
+                // first: a raw usr_ ID reads as nothing, and an invite is
+                // nearly always from someone already in it.
+                string senderId;
+                if (const(JSONValue)* v = "senderUserId" in entry)
+                    if (v.type == JSONType.string)
+                        senderId = v.str;
+
+                NotificationInfo info = parseNotificationObject(entry,
+                    senderId.length ? server.friendsTracker.getDisplayName(senderId) : null);
+                if (info.id.length == 0) // Not actionable, or unusable.
+                    continue;
+                parsed ~= info;
+            }
+
+            // A friend request is precisely the case the roster cannot
+            // answer: the sender is not a friend yet, which is the whole
+            // point of the request. Look those up, since "accept or decline
+            // usr_c3f2..." is not a question anyone can answer.
+            resolveSenderNamesLocked(parsed);
+
+            JSONValue[] items;
+            items.reserve(parsed.length);
+            foreach (ref NotificationInfo info; parsed)
+                items ~= buildNotificationJSON(info);
+
+            // Oldest first: the front-ends draw the inbox in this order, so a
+            // new notification appends to the end instead of pushing every
+            // Accept button down a row under the user's finger.
+            sortNotificationsOldestFirst(items);
+
+            JSONValue result = JSONValue([
+                "type": JSONValue("notifications"),
+                "notifications": JSONValue(items),
+            ]);
+            sendLine(result.toString() ~ "\n");
+            logDebugging("handleGetNotifications: %d actionable of %d",
+                items.length, json.array.length);
+        }
+        catch (Exception e)
+        {
+            sendNotificationsError(e.msg);
+        }
+    }
+
+    /// Fill in sender names the roster could not, with one GET /users/:id
+    /// each. Caller holds the API mutex.
+    ///
+    /// Capped rather than unbounded: this runs on every front-end connect,
+    /// and an inbox someone let pile up should not turn a reconnect into a
+    /// hundred API calls. Past the cap the ID stands in, which is ugly but
+    /// honest. Senders repeat across notifications, so the cap counts
+    /// lookups, not entries.
+    void resolveSenderNamesLocked(ref NotificationInfo[] list)
+    {
+        string[string] resolved;
+        int lookups;
+
+        foreach (ref NotificationInfo info; list)
+        {
+            if (info.senderName.length > 0 || info.senderUserId.length == 0)
+                continue;
+
+            if (string *cached = info.senderUserId in resolved)
+            {
+                info.senderName = *cached;
+                continue;
+            }
+
+            if (lookups >= NOTIFICATION_SENDER_LOOKUPS)
+            {
+                info.senderName = info.senderUserId;
+                continue;
+            }
+
+            // Checked per lookup, not once up front: the first few calls can
+            // be what tips the budget over.
+            if (server.rateLimiter && server.rateLimiter.isBlocked())
+            {
+                info.senderName = info.senderUserId;
+                continue;
+            }
+
+            ++lookups;
+            string name = info.senderUserId;
+            try
+            {
+                HTTPResponse resp = server.httpClient.get("/users/" ~ info.senderUserId);
+                if (server.rateLimiter)
+                    server.rateLimiter.update(resp);
+                if (resp.code == 200)
+                {
+                    JSONValue user = parseJSON(resp.text);
+                    if (user.type == JSONType.object)
+                        if (const(JSONValue)* v = "displayName" in user)
+                            if (v.type == JSONType.string && v.str.length > 0)
+                                name = v.str;
+                }
+                else
+                    logWarn("Notification sender: GET /users/%s -> HTTP %d",
+                        info.senderUserId, resp.code);
+            }
+            catch (Exception e)
+            {
+                logWarn("Notification sender: GET /users/%s failed: %s",
+                    info.senderUserId, e.msg);
+            }
+
+            resolved[info.senderUserId] = name;
+            info.senderName = name;
+        }
+
+        if (lookups > 0)
+            logDebugging("resolveSenderNamesLocked: %d lookup(s)", lookups);
     }
 
     void handleNotificationAction(JSONValue msg)
@@ -2138,4 +2347,23 @@ JSONValue buildEventMessage(VRCEvent event, long eventId)
         "event_type": JSONValue(event.typeRaw),
         "content": event.content,
     ]);
+}
+
+/// The `received_at_unix` of an encoded notification, 0 when it has none.
+private long notificationStamp(JSONValue item)
+{
+    if (const(JSONValue)* v = "received_at_unix" in item)
+        if (v.type == JSONType.integer)
+            return v.integer;
+    return 0;
+}
+
+/// Order encoded notifications oldest first. Entries VRChat gave no timestamp
+/// for sort as 0, so they lead; that keeps them in one place rather than
+/// scattered through the list.
+private void sortNotificationsOldestFirst(JSONValue[] items)
+{
+    import std.algorithm.sorting : sort;
+
+    sort!((JSONValue a, JSONValue b) => notificationStamp(a) < notificationStamp(b))(items);
 }

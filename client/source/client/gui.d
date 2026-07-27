@@ -21,6 +21,7 @@ import ddlogger;
 import ddui;
 import vrcd.friends : FriendRoster, parseFriendsMessage;
 import vrcd.events : extractEventFields;
+import vrcd.notifications : NotificationInfo, NotificationChange, applyNotificationEvent;
 
 import client.connection;
 import client.stream : loadTLS;
@@ -1958,120 +1959,32 @@ private bool moderationLess(ref const ModerationEntry a, ref const ModerationEnt
     return icmp(a.displayName, b.displayName) < 0;
 }
 
-/// Actionable notification types that get stored in the notifications tab.
-private immutable string[] actionableNotifTypes = [
-    "friendRequest", "invite", "requestInvite",
-];
-
 /// Store an actionable notification or remove on delete/hide events.
+///
+/// The decoding itself is shared with vrcd-server and the web front-end (see
+/// vrcd.notifications): VRChat hands the same notification out in two shapes
+/// and all three have to agree on what comes out of them.
 private void storeNotification(string eventType, JSONValue msg, string user, string rawReceivedAt)
 {
-    import std.datetime : SysTime;
-    long receivedAtUnix;
-    if (rawReceivedAt.length > 0)
-    {
-        try
-            receivedAtUnix = SysTime.fromISOExtString(rawReceivedAt).toUnixTime!long();
-        catch (Exception) {}
-    }
+    NotificationInfo added = void;
+    string[] removedIds;
+    NotificationChange change = applyNotificationEvent(eventType, msg, user,
+        rawReceivedAt, added, removedIds);
 
-    const(JSONValue) *jcontent = "content" in msg;
-    if (jcontent is null) // we depend on 'content' for all of these
+    final switch (change)
+    {
+    case NotificationChange.none:
         return;
-    
-    // NOTE: Except for 'see-notification' and 'hide-notification', 'content' is double-encoded
-    JSONValue content = void;
-    try switch (eventType)
-    {
-        case "notification":
-        case "notification-v2":
-            content = jcontent.type == JSONType.string ? parseJSON(jcontent.str) : *jcontent;
-            
-            string notifId;
-            if (const(JSONValue)* v = "id" in content)
-                notifId = v.str;
-            string notifType;
-            if (const(JSONValue)* v = "type" in content)
-                notifType = v.str;
-            if (notifId.length == 0 || notifType.length == 0)
-                return;
 
-            // Only store actionable types.
-            bool actionable;
-            foreach (string t; actionableNotifTypes)
-            {
-                if (t == notifType)
-                {
-                    actionable = true;
-                    break;
-                }
-            }
-            if (actionable == false)
-                return;
+    case NotificationChange.added:
+        appState.addNotification(added.id, added.notificationType,
+            added.senderName, added.message, added.receivedAtUnix);
+        return;
 
-            string sender;
-            if (const(JSONValue)* v = "senderUsername" in content)
-                sender = v.str;
-            if (sender.length == 0)
-                sender = user;
-
-            // Build a message from available details.
-            string notifMessage;
-            if (const(JSONValue)* v = "message" in content)
-                notifMessage = v.str;
-            if (notifMessage.length == 0)
-            {
-                if (const(JSONValue) *jdetails = "details" in content)
-                if (jdetails.type == JSONType.object)
-                {
-                    string worldName;
-                    if (const(JSONValue)* v = "worldName" in *jdetails)
-                        worldName = v.str;
-                    if (worldName.length > 0)
-                        notifMessage = worldName;
-                }
-            }
-
-            appState.addNotification(notifId, notifType, sender, notifMessage, receivedAtUnix);
-            return;
-
-        case "notification-v2-delete":
-            content = jcontent.type == JSONType.string ? parseJSON(jcontent.str) : *jcontent;
-
-            if (const(JSONValue) *jids = "ids" in content)
-            if (jids.type == JSONType.array)
-            {
-                foreach (JSONValue idVal; jids.array)
-                {
-                    if (idVal.type == JSONType.string)
-                        appState.removeNotification(idVal.str);
-                }
-            }
-            return;
-
-        case "hide-notification":
-        case "see-notification":
-            // Content is a plain string (notification ID).
-            if (jcontent.type == JSONType.string)
-                appState.removeNotification(jcontent.str);
-            return;
-
-        case "response-notification":
-            content = jcontent.type == JSONType.string ? parseJSON(jcontent.str) : *jcontent;
-
-            string respId;
-            if (const(JSONValue)* v = "notificationId" in content)
-                respId = v.str;
-            if (respId.length > 0)
-                appState.removeNotification(respId);
-            return;
-
-        default:
-            return;
-    }
-    catch (Exception e)
-    {
-        logError("Failed to store notification: %s", e.msg);
+    case NotificationChange.removed:
+        foreach (string id; removedIds)
+            appState.removeNotification(id);
+        return;
     }
 }
 

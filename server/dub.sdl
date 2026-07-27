@@ -15,6 +15,11 @@ stringImportPaths "." ".."
 
 subConfiguration "ddcurl" "static"
 
+// The notification shape is decoded identically here and in both front-ends:
+// the server normalizes VRChat's REST listing through this module, the
+// front-ends keep the list current from WebSocket events with the same code.
+sourceFiles "../common/source/vrcd/notifications.d"
+
 buildType "static-release" {
 	buildOptions "releaseMode" "optimize" "inline"
 	dflags "-L=-static" platform="dmd"
