@@ -221,6 +221,26 @@ int main(string[] args)
             req.replyJSON(HTTPStatus.ok, `{"requested":true}`);
             return REQUEST_OK;
         })
+        .post(`/api/notification`, (ref HTTPRequest req)
+        {
+            if (authorized(req, true) == false)
+                return REQUEST_OK;
+
+            string id, action;
+            if (notificationAction(req.payload, id, action) == false)
+            {
+                req.replyJSON(HTTPStatus.badRequest,
+                    `{"error":"missing notification_id or action"}`);
+                return REQUEST_OK;
+            }
+
+            // Fire and forget, like /api/join: the outcome arrives as a
+            // notification_action_result and reaches the page in the next
+            // broadcast, which also drops the row.
+            link.requestNotificationAction(id, action);
+            req.replyJSON(HTTPStatus.ok, `{"requested":true}`);
+            return REQUEST_OK;
+        })
         .websocket(`/ws/:ticket`, (WebSocketConnection conn)
         {
             // The cookie cannot be read after ddhttpd has upgraded the
@@ -272,6 +292,38 @@ private string joinLocation(ubyte[] payload)
         if (v.type == JSONType.string)
             return v.str;
     return null;
+}
+
+/// Pull the notification ID and action out of a /api/notification request
+/// body. Returns false when either is missing or the action is not one the
+/// server takes, so an unknown action is refused here rather than travelling
+/// down to vrcd-server to be refused there.
+private bool notificationAction(ubyte[] payload, out string id, out string action)
+{
+    if (payload.length == 0)
+        return false;
+
+    JSONValue body_;
+    try body_ = parseJSON(cast(const(char)[])payload);
+    catch (JSONException ex)
+    {
+        logWarn("Malformed notification request: %s", ex.msg);
+        return false;
+    }
+
+    if (body_.type != JSONType.object)
+        return false;
+
+    if (const(JSONValue) *v = "notification_id" in body_)
+        if (v.type == JSONType.string)
+            id = v.str;
+    if (const(JSONValue) *v = "action" in body_)
+        if (v.type == JSONType.string)
+            action = v.str;
+
+    if (id.length == 0)
+        return false;
+    return action == "accept" || action == "hide";
 }
 
 /// Split a "host:port" argument. A bare host leaves the port untouched.

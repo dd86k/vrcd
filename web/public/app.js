@@ -30,7 +30,7 @@ var PLATFORMS = {
 var TABS = [
     { id: "feed",     label: "FEED",     icon: "i-feed",    search: true },
     { id: "online",   label: "ONLINE",   icon: "i-online",  search: true },
-    { id: "inbox",    label: "INBOX",    icon: "i-inbox",   soon: true },
+    { id: "inbox",    label: "INBOX",    icon: "i-inbox",   badge: true },
     { id: "stuff",    label: "STUFF",    icon: "i-stuff",   soon: true },
     { id: "tools",    label: "TOOLS",    icon: "i-tools",   soon: true },
     /* The rail opens the profile through the self card at its foot, so only
@@ -39,12 +39,24 @@ var TABS = [
 ];
 
 var SOON_TEXT = {
-    inbox: "Friend requests and invites live in the server's notification " +
-           "events. The web link does not subscribe to them yet.",
     stuff: "Gallery, prints and icons come from get_files and get_prints, " +
            "which need an image proxy in front of them first.",
     tools: "Screenshot and log tools belong to the local client; only the " +
            "ones that go through the server can appear here."
+};
+
+/* What each notification type is called, and what can be done about it.
+   `accept` is VRChat's accept endpoint, which only means anything for a
+   friend request. An invite is answered by joining where it points, and a
+   request for an invite cannot be answered at all from here: sending one back
+   needs an API vrcd-server does not expose yet, so the row says so rather
+   than drawing a button that would lie. */
+var NOTIFY_TYPES = {
+    friendRequest: { label: "Friend request", accept: "ACCEPT", hide: "DECLINE" },
+    invite:        { label: "Invite",         join: true,       hide: "DISMISS" },
+    requestInvite: { label: "Invite request", hide: "DISMISS",
+                     note: "Sending an invite back needs an API the server " +
+                           "does not expose yet." }
 };
 
 var TITLES = {
@@ -66,11 +78,16 @@ var state = {
     vrchat_connected: false,
     server_version: "",
     last_error: "",
-    roster: { instances: [], active_elsewhere: [], offline: [] }
+    roster: { instances: [], active_elsewhere: [], offline: [] },
+    notifications: []
 };
 var feed = [];
 var view = { tab: "online", sel: null, filter: "" };
 var lastJoinKey = "";
+var lastNotifyKey = "";
+/* Notification IDs with a request in flight. A snapshot replaces `state`
+   wholesale, so the in-flight mark cannot live on the entry itself. */
+var pendingNotifications = {};
 
 /* ------------------------------------------------------------- helpers */
 
@@ -235,6 +252,12 @@ function tabButton(tab) {
     }
 
     button.appendChild(el("span", null, tab.label));
+
+    // Only the inbox counts for anything: the number is how many things are
+    // waiting on an answer, so a zero is drawn as nothing at all.
+    if (tab.badge && state.notifications && state.notifications.length)
+        button.appendChild(el("span", "badge", String(state.notifications.length)));
+
     button.onclick = function () { showTab(tab.id); };
     return button;
 }
@@ -380,6 +403,87 @@ function eventRow(event) {
     return row;
 }
 
+/* Oldest first, and never re-sorted. The buttons sit in the rows, so a list
+   that reflowed when something arrived would slide the button under a thumb
+   that was already on its way down to it - and the two buttons on a friend
+   request mean the wrong one is an accept. New notifications append. */
+function renderInbox(body) {
+    var pending = state.notifications || [];
+
+    if (pending.length === 0) {
+        var why = "Nothing waiting on you.";
+        if (state.connected === false)
+            why = "Waiting for vrcd-server.";
+        else if (state.server_version && state.server_version < 4)
+            why = "This vrcd-server is too old to list notifications " +
+                  "(needs protocol v4).";
+        body.appendChild(placeholder(why));
+        return;
+    }
+
+    pending.forEach(function (entry) { body.appendChild(notifyCard(entry)); });
+}
+
+function notifyCard(entry) {
+    var kind = NOTIFY_TYPES[entry.notification_type] ||
+        { label: entry.notification_type, hide: "DISMISS" };
+    var who = entry.sender_name || entry.sender_user_id || "Someone";
+    var busy = pendingNotifications[entry.id] === true;
+
+    var card = el("div", "notify");
+
+    // A button, not a div, so the sender opens in the detail pane the way a
+    // feed row does. The action buttons are siblings of it, never inside it.
+    var friend = entry.sender_user_id ? findFriend(entry.sender_user_id) : null;
+    var head = el(friend ? "button" : "div", "head");
+    head.appendChild(avatar(who));
+    var text = el("div", "who");
+    text.appendChild(el("div", "n", who));
+    text.appendChild(el("div", "d", kind.label));
+    head.appendChild(text);
+    if (entry.received_at_unix)
+        head.appendChild(el("div", "when", whenText(entry.received_at_unix)));
+    if (friend)
+        head.onclick = function () { select({ kind: "friend", id: entry.sender_user_id }); };
+    card.appendChild(head);
+
+    if (entry.message) card.appendChild(el("div", "msg", entry.message));
+    if (kind.note) card.appendChild(el("div", "note", kind.note));
+
+    var actions = el("div", "actions");
+    if (kind.accept)
+        actions.appendChild(notifyButton(entry, "accept", kind.accept, true, busy));
+    // An invite is answered by going there, which is the same self-invite the
+    // roster offers; VRChat's accept endpoint does nothing useful for one.
+    if (kind.join && entry.location) {
+        var go = joinButton(entry.location, "JOIN WORLD");
+        go.disabled = busy;
+        actions.appendChild(go);
+    }
+    if (kind.hide)
+        actions.appendChild(notifyButton(entry, "hide", kind.hide, false, busy));
+    card.appendChild(actions);
+
+    return card;
+}
+
+function notifyButton(entry, action, label, primary, busy) {
+    var button = el("button", "act" + (primary ? " primary" : ""), label);
+    button.disabled = busy;
+    button.onclick = function () { notifyAct(entry.id, action, button); };
+    return button;
+}
+
+/* Coarse on purpose: the exact minute a friend request landed does not
+   matter, only whether it is new or has been sitting there. */
+function whenText(unix) {
+    var mins = Math.floor((Date.now() / 1000 - unix) / 60);
+    if (mins < 1)   return "just now";
+    if (mins < 60)  return mins + "m ago";
+    if (mins < 1440) return Math.floor(mins / 60) + "h ago";
+    return Math.floor(mins / 1440) + "d ago";
+}
+
 /* One profile layout, two callers: your own on the profile tab and a friend in
    the detail pane. Rows appear only when the field is there, which is what
    keeps the two honest - a friend entry is a thinner record than self, not a
@@ -472,6 +576,7 @@ function renderList() {
 
     if (tab.id === "online")       renderOnline(body);
     else if (tab.id === "feed")    renderFeed(body);
+    else if (tab.id === "inbox")   renderInbox(body);
     else if (tab.id === "profile") renderProfileTab(body);
     else body.appendChild(placeholder(SOON_TEXT[tab.id], "Not wired up yet"));
 }
@@ -567,7 +672,9 @@ function renderDetail() {
     title.textContent = "Details";
 
     if (view.sel === null) {
-        body.appendChild(placeholder("Pick a world or a friend."));
+        body.appendChild(placeholder(view.tab === "inbox"
+            ? "Pick a sender you are already friends with."
+            : "Pick a world or a friend."));
         return;
     }
 
@@ -642,15 +749,74 @@ function join(location, button) {
     });
 }
 
+function notifyAct(id, action, button) {
+    var label = button.textContent;
+    // Marked in the map rather than on the button: the next snapshot redraws
+    // the card from scratch and would hand back an enabled button otherwise.
+    pendingNotifications[id] = true;
+    button.disabled = true;
+    button.textContent = "SENDING...";
+
+    fetch("/api/notification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notification_id: id, action: action })
+    }).then(function (r) {
+        if (r.ok) return;
+        delete pendingNotifications[id];
+        showToast("The vrcd web server refused that", true);
+        button.disabled = false;
+        button.textContent = label;
+    }).catch(function () {
+        delete pendingNotifications[id];
+        showToast("Could not reach the vrcd web server", true);
+        button.disabled = false;
+        button.textContent = label;
+    });
+}
+
 /* --------------------------------------------------------------- state */
 
 function applyState(message) {
     state = message;
     if (!state.roster)
         state.roster = { instances: [], active_elsewhere: [], offline: [] };
+    if (!state.notifications)
+        state.notifications = [];
+
+    // A notification that left the snapshot is answered, however it was
+    // answered: by us, by another client, or by VRChat itself. Pruned before
+    // the draw so the row never comes back wearing "SENDING...".
+    Object.keys(pendingNotifications).forEach(function (id) {
+        var stillThere = state.notifications.some(function (e) { return e.id === id; });
+        if (stillThere === false) delete pendingNotifications[id];
+    });
 
     render();
     reportJoin();
+    reportNotifyAction();
+}
+
+function reportNotifyAction() {
+    var result = state.notify_action;
+    if (!result || !result.attempted) return;
+
+    // Like the join result, the snapshot carries this indefinitely, so only
+    // say something when it actually changed.
+    var key = result.notification_id + "|" + result.action + "|" +
+        result.success + "|" + result.error;
+    if (key === lastNotifyKey) return;
+    lastNotifyKey = key;
+
+    if (result.success) {
+        showToast(result.action === "accept" ? "Accepted" : "Dismissed", false);
+        return;
+    }
+
+    // A failure leaves the row where it was, so give its buttons back.
+    delete pendingNotifications[result.notification_id];
+    if (view.tab === "inbox") renderList();
+    showToast("Could not " + result.action + " that: " + result.error, true);
 }
 
 function reportJoin() {

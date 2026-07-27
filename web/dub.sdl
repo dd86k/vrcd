@@ -13,4 +13,4 @@ stringImportPaths ".."
 
 // Friend bucketing and ordering is presentation shared with the SDL client:
 // both front-ends compile the same module so the two rosters cannot drift.
-sourceFiles "../common/source/vrcd/friends.d" "../common/source/vrcd/events.d"
+sourceFiles "../common/source/vrcd/friends.d" "../common/source/vrcd/events.d" "../common/source/vrcd/notifications.d"

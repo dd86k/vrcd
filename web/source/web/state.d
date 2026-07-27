@@ -14,6 +14,7 @@ module web.state;
 import std.json;
 
 import vrcd.friends;
+import vrcd.notifications;
 import web.connection;
 
 /// Build the state snapshot broadcast to browsers and served by /api/state.
@@ -23,6 +24,8 @@ string buildStateJSON(ServerLink link)
     LinkStatus status = link.status();
     FriendRoster roster = link.roster();
     JoinResult join = link.joinResult();
+    NotificationInfo[] inbox = link.notifications();
+    NotifyActionResult notifyAction = link.notifyResult();
 
     JSONValue root = JSONValue([
         "type":             JSONValue("state"),
@@ -71,6 +74,26 @@ string buildStateJSON(ServerLink link)
             "location":  JSONValue(join.location),
             "success":   JSONValue(join.success),
             "error":     JSONValue(join.error),
+        ]);
+    }
+
+    // Always present, empty array included: the inbox tab needs to tell "no
+    // notifications" apart from "the link has not answered yet", and the
+    // count drives a badge on the rail.
+    JSONValue[] pending;
+    pending.reserve(inbox.length);
+    foreach (ref NotificationInfo entry; inbox)
+        pending ~= buildNotificationJSON(entry);
+    root["notifications"] = JSONValue(pending);
+
+    if (notifyAction.attempted)
+    {
+        root["notify_action"] = JSONValue([
+            "attempted":       JSONValue(true),
+            "notification_id": JSONValue(notifyAction.notificationId),
+            "action":          JSONValue(notifyAction.action),
+            "success":         JSONValue(notifyAction.success),
+            "error":           JSONValue(notifyAction.error),
         ]);
     }
 

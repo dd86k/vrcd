@@ -18,6 +18,7 @@ import std.string : indexOf, strip;
 import ddlogger;
 import vrcd.events;
 import vrcd.friends;
+import vrcd.notifications;
 
 /// First reconnect delay; doubles on every consecutive failure.
 private enum Duration RECONNECT_BASE = dur!"seconds"(2);
@@ -27,6 +28,10 @@ private enum Duration RECONNECT_MAX = dur!"seconds"(60);
 /// How many past events to pull on connect. The server caps `fetch_older` at
 /// 500 per request.
 private enum int FEED_BACKLOG = 200;
+
+/// Protocol version that added `get_notifications`. An older server answers
+/// it with an `error`, so the inbox asks only when it will be understood.
+private enum long PROTOCOL_NOTIFICATIONS = 4;
 
 /// Snapshot of the logged-in VRChat user, from the server's `self` message.
 struct SelfInfo
@@ -74,6 +79,17 @@ struct JoinResult
     /// False until a join has been attempted this session.
     bool attempted;
     string location;
+    bool success;
+    string error;
+}
+
+/// Outcome of the most recent accept/hide, for feedback on the page.
+struct NotifyActionResult
+{
+    /// False until a notification action has been taken this session.
+    bool attempted;
+    string notificationId;
+    string action;
     bool success;
     string error;
 }
@@ -147,6 +163,21 @@ class ServerLink
             return lastJoin;
     }
 
+    /// Pending notifications, oldest first. Empty until the server's
+    /// `notifications` snapshot lands.
+    NotificationInfo[] notifications()
+    {
+        synchronized (stateMutex)
+            return inbox;
+    }
+
+    /// Outcome of the most recent accept/hide.
+    NotifyActionResult notifyResult()
+    {
+        synchronized (stateMutex)
+            return lastNotifyAction;
+    }
+
     /// Ask the server to self-invite us to an instance. Safe to call from an
     /// HTTP thread: sends are serialized and the reply arrives asynchronously
     /// as a `join_instance_result`.
@@ -156,6 +187,18 @@ class ServerLink
         sendMessage(JSONValue([
             "type":     JSONValue("join_instance"),
             "location": JSONValue(location),
+        ]));
+    }
+
+    /// Accept or hide a notification. Safe to call from an HTTP thread; the
+    /// reply arrives asynchronously as a `notification_action_result`.
+    void requestNotificationAction(string notificationId, string action)
+    {
+        logInfo("Notification %s: %s", action, notificationId);
+        sendMessage(JSONValue([
+            "type":            JSONValue("notification_action"),
+            "notification_id": JSONValue(notificationId),
+            "action":          JSONValue(action),
         ]));
     }
 
@@ -176,6 +219,12 @@ private:
     LinkStatus linkStatus;
     FriendRoster friendRoster;
     JoinResult lastJoin;
+    /// Pending notifications, oldest first. Order is the server's, and new
+    /// arrivals append: the inbox draws buttons per row, and re-ordering
+    /// under a thumb that is already reaching for one is how the wrong
+    /// friend request gets accepted.
+    NotificationInfo[] inbox;
+    NotifyActionResult lastNotifyAction;
 
     /// Fire the change callback. Never called with the state lock held: the
     /// callback rebuilds a snapshot, which takes that same lock.
@@ -276,6 +325,25 @@ private:
         // asking for once.
         sendMessage(JSONValue([ "type": JSONValue("get_friends") ]));
 
+        // The inbox cannot be rebuilt from the event log: the WebSocket only
+        // reports changes, so anything that arrived while this process was
+        // down has no event to replay. Ask the server for the authoritative
+        // list, then keep it current from the events that follow.
+        // Not cleared first: the reply replaces it a round trip later, and
+        // blanking the inbox in between would blink every browser's list.
+        if (status().serverVersion >= PROTOCOL_NOTIFICATIONS)
+            sendMessage(JSONValue([ "type": JSONValue("get_notifications") ]));
+        else
+        {
+            // Nothing is going to answer, so do not keep showing a list from
+            // a connection that is gone.
+            synchronized (stateMutex)
+                inbox = null;
+            logWarn("Server protocol is too old for the inbox " ~
+                "(needs v%d, server is v%d)",
+                PROTOCOL_NOTIFICATIONS, status().serverVersion);
+        }
+
         // Seed the feed with the newest events. `fetch_older` is the right
         // call rather than `catch_up`: catch-up walks forward from an ID and
         // would hand us the *oldest* page of a long backlog, while this page
@@ -341,6 +409,11 @@ private:
             break;
 
         case "event":
+            // Live events maintain the inbox; the backlog below deliberately
+            // does not. Replaying old events over the server's snapshot would
+            // resurrect notifications that were answered long ago.
+            applyInboxEvent(message);
+
             if (onFeed)
                 onFeed([ toFeedEntry(message) ], false);
             break;
@@ -363,6 +436,49 @@ private:
                 onFeed(backlog, true);
 
             logInfo("Feed seeded with %d event(s)", backlog.length);
+            break;
+
+        case "notifications":
+            string listError = jsonString(message, "error");
+            if (listError.length > 0)
+            {
+                logWarn("Could not fetch notifications: %s", listError);
+                break;
+            }
+
+            NotificationInfo[] parsed = parseNotificationsMessage(message);
+            synchronized (stateMutex)
+                inbox = parsed;
+            notifyChange();
+
+            logInfo("Inbox seeded with %d notification(s)", parsed.length);
+            break;
+
+        case "notification_action_result":
+            NotifyActionResult result;
+            result.attempted = true;
+            result.notificationId = jsonString(message, "notification_id");
+            result.action = jsonString(message, "action");
+            result.error = jsonString(message, "error");
+            if (const(JSONValue) *v = "success" in message)
+                result.success = v.type == JSONType.true_;
+
+            synchronized (stateMutex)
+            {
+                lastNotifyAction = result;
+                // VRChat does send a hide/response event for this, but it
+                // arrives whenever it arrives; dropping the row now means the
+                // button the user just pressed stops offering itself again.
+                if (result.success)
+                    removeFromInbox(result.notificationId);
+            }
+            notifyChange();
+
+            if (result.success)
+                logInfo("Notification %s: %s", result.action, result.notificationId);
+            else
+                logWarn("Notification %s for %s failed: %s",
+                    result.action, result.notificationId, result.error);
             break;
 
         case "join_instance_result":
@@ -409,6 +525,75 @@ private:
             logTrace("Ignoring message type: %s", type);
             break;
         }
+    }
+
+    /// Fold one live event into the inbox. Most events are not notification
+    /// events and fall straight back out.
+    void applyInboxEvent(ref JSONValue message)
+    {
+        string eventType = jsonString(message, "event_type");
+
+        NotificationInfo added = void;
+        string[] removedIds;
+        NotificationChange change = applyNotificationEvent(eventType, message,
+            null, jsonString(message, "received_at"), added, removedIds);
+        if (change == NotificationChange.none)
+            return;
+
+        if (change == NotificationChange.removed)
+        {
+            synchronized (stateMutex)
+                foreach (string id; removedIds)
+                    removeFromInbox(id);
+            notifyChange();
+            return;
+        }
+
+        synchronized (stateMutex)
+        {
+            // VRChat stopped sending sender names, so fall back to the
+            // roster: a friend request is nearly always from someone already
+            // in it, and a bare usr_ ID reads as nothing.
+            if (added.senderName.length == 0 && added.senderUserId.length > 0)
+                added.senderName = displayNameOf(added.senderUserId);
+
+            // Repeats happen (a reconnect on VRChat's side re-emits), and the
+            // same notification twice would draw two rows with the same
+            // buttons.
+            foreach (ref NotificationInfo entry; inbox)
+            {
+                if (entry.id == added.id)
+                    return;
+            }
+            inbox ~= added; // Appends: see the `inbox` field comment.
+        }
+        notifyChange();
+
+        logInfo("Notification: %s from %s", added.notificationType, added.senderName);
+    }
+
+    /// Drop one notification. Caller holds the state lock.
+    void removeFromInbox(string notificationId)
+    {
+        NotificationInfo[] kept;
+        foreach (ref NotificationInfo entry; inbox)
+        {
+            if (entry.id != notificationId)
+                kept ~= entry;
+        }
+        inbox = kept;
+    }
+
+    /// Roster display name for a user ID, empty when they are not a friend.
+    /// Caller holds the state lock.
+    string displayNameOf(string userId)
+    {
+        foreach (ref FriendInfo friend; friendRoster.all)
+        {
+            if (friend.userId == userId)
+                return friend.displayName;
+        }
+        return null;
     }
 
     void sendMessage(JSONValue message)

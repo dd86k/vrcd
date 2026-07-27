@@ -181,6 +181,33 @@ button { font: inherit; color: inherit; }
 .event .what { flex: 1; min-width: 0; color: var(--muted);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* ---- inbox cards -------------------------------------------------------
+   Buttons live in the card rather than the detail pane: answering a friend
+   request should be one tap, and in a headset the detour through a second
+   pane is the expensive part. */
+
+.notify {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: .85rem; margin-bottom: .75rem;
+}
+.notify .head {
+    display: flex; align-items: center; gap: .7rem;
+    width: 100%; text-align: left; background: none; border: 0; padding: 0;
+}
+/* Only when it is a button, which it is only for a sender already in the
+   roster; the div form has nothing to open. */
+button.head { cursor: pointer; }
+.notify .who { flex: 1; min-width: 0; }
+.notify .n { font-weight: 600;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notify .d { color: var(--muted); font-size: .8rem; }
+.notify .when { flex: none; color: var(--dim); font-size: .75rem; }
+.notify .msg { margin-top: .6rem; font-size: .9rem; overflow-wrap: anywhere; }
+.notify .note { margin-top: .6rem; color: var(--dim); font-size: .8rem; }
+/* Side by side while there is room; the media query below stacks them. */
+.notify .actions { flex-direction: row; margin-top: .85rem; }
+.notify .act { flex: 1; }
+
 /* ---- right detail pane ------------------------------------------------- */
 
 .detail { background: #191920; }

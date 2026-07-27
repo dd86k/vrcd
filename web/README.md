@@ -78,6 +78,7 @@ There is no logout route yet; clearing the cookie is the workaround.
 | GET | `/api/state` | cookie | Current snapshot, same JSON as the socket sends |
 | GET | `/api/wsticket` | cookie | Single-use WebSocket ticket |
 | POST | `/api/join` | cookie | `{"location":"wrld_...:1234~..."}`, requests a self-invite |
+| POST | `/api/notification` | cookie | `{"notification_id":"not_...","action":"accept"\|"hide"}` |
 | WS | `/ws/:ticket` | ticket | State snapshots and feed events |
 
 `/static/` is deliberately open: the assets carry no state, and the login page
@@ -86,9 +87,12 @@ a plain file name (no separators, no traversal, nothing hidden, 64 chars max)
 and only known extensions are served.
 
 Browser-to-server actions go over plain HTTP rather than up the socket, which
-keeps the WebSocket unidirectional. `/api/join` is fire and forget: the outcome
-comes back from vrcd-server as a `join_instance_result` and reaches the page in
-the next state broadcast.
+keeps the WebSocket unidirectional. Both are fire and forget: the outcome comes
+back from vrcd-server as a `join_instance_result` or a
+`notification_action_result` and reaches the page in the next state broadcast,
+which is also what drops an answered notification from the inbox. An action
+other than `accept` or `hide` is refused here rather than travelling down to
+vrcd-server to be refused there.
 
 ## Architecture
 
@@ -145,6 +149,31 @@ ping, which is how a browser that vanished without a close frame is noticed.
 Snapshots are broadcast on every change and are small enough that diffing them
 server-side would cost more than it saves.
 
+### Inbox
+
+The inbox cannot be rebuilt from the event log. The VRChat WebSocket only
+reports *changes*, so a friend request that arrived while this process was down
+has no event to replay, and the feed seed only reaches back one page anyway. So
+the link asks vrcd-server for `get_notifications` on connect (protocol v4; on an
+older server the tab says so and stays empty) and then keeps that list current
+from the live events. The backlog deliberately does *not* feed the inbox:
+replaying old events over the snapshot would resurrect notifications answered
+long ago.
+
+Order is oldest first and the list is never re-sorted. The accept and dismiss
+buttons live in the rows, so a list that reflowed when something arrived would
+slide a button under a thumb already on its way down to it, and on a friend
+request the button that moves under it is an accept. New arrivals append.
+
+A successful action drops the row immediately rather than waiting for VRChat's
+matching `hide-notification` or `response-notification` event, which arrives
+whenever it arrives.
+
+One gap: a live `notification` event for a friend request carries no sender
+name, and the sender is by definition not in the roster, so the row shows the
+user ID until the next reconnect refetches the list. The server resolves names
+for the fetched list but the link cannot do a REST lookup of its own.
+
 ### Feed seeding
 
 On connect the link sends `fetch_older` with `before_id: long.max` and a limit
@@ -167,14 +196,17 @@ libmicrohttpd serves.
 TCP client for the vrcd-server JSON-L API, on its own thread.
 
 - Interprets `auth_ok`, `self`, `status`, `friends`, `event`, `event_older`,
-  `older_fetched`, `join_instance_result`, `ping`, `error`. Everything else is
-  logged and dropped.
-- `self()`, `status()`, `roster()`, `joinResult()` -- mutex-guarded snapshots
-  for HTTP threads.
-- `requestJoin(location)` -- safe from any thread; sends are serialized.
+  `older_fetched`, `join_instance_result`, `notifications`,
+  `notification_action_result`, `ping`, `error`. Everything else is logged and
+  dropped.
+- `self()`, `status()`, `roster()`, `joinResult()`, `notifications()`,
+  `notifyResult()` -- mutex-guarded snapshots for HTTP threads.
+- `requestJoin(location)`, `requestNotificationAction(id, action)` -- safe from
+  any thread; sends are serialized.
 - Change and feed callbacks fire on the network thread, outside the state lock
   (the callback rebuilds a snapshot, which takes that same lock).
-- Types: `SelfInfo`, `LinkStatus`, `FeedEntry`, `JoinResult`.
+- Types: `SelfInfo`, `LinkStatus`, `FeedEntry`, `JoinResult`,
+  `NotifyActionResult`.
 
 ### `web/hub.d`
 Fan-out to connected browsers. `publishState()`, `publishFeed()`, and `serve()`
@@ -195,9 +227,11 @@ sweep) plus `sessionFromCookies()`, `formField()`, `constantTimeEquals()` and
 `findWebRoot()` picks the directory. Replies carry `Cache-Control: no-cache` so
 the browser revalidates rather than sitting on an edited stylesheet.
 
-Shared with the SDL client via `sourceFiles`: `common/source/vrcd/friends.d`
-(bucketing and ordering) and `common/source/vrcd/events.d` (labels and field
-extraction), so the two front-ends cannot drift.
+Shared via `sourceFiles`: `common/source/vrcd/friends.d` (bucketing and
+ordering) and `common/source/vrcd/events.d` (labels and field extraction) with
+the SDL client, and `common/source/vrcd/notifications.d` (the notification
+shape, in both the wire forms VRChat uses) with the SDL client *and*
+vrcd-server, so none of the three can drift.
 
 ## Wire format
 
@@ -228,12 +262,26 @@ State snapshot, sent on every change and also returned by `/api/state`:
     }],
     "active_elsewhere": [], "offline": []
   },
-  "join": { "attempted": true, "location": "...", "success": true, "error": "" }
+  "notifications": [{
+    "id": "not_...", "notification_type": "friendRequest",
+    "sender_user_id": "usr_...", "sender_name": "...", "message": "...",
+    "location": "", "received_at_unix": 1753632000
+  }],
+  "join": { "attempted": true, "location": "...", "success": true, "error": "" },
+  "notify_action": {
+    "attempted": true, "notification_id": "not_...", "action": "accept",
+    "success": true, "error": ""
+  }
 }
 ```
 
-`self` is absent until the server says who is logged in, and `join` until a
-self-invite has been attempted this session. `server_version` is the protocol
+`self` is absent until the server says who is logged in, `join` until a
+self-invite has been attempted this session, and `notify_action` until a
+notification has been answered. `notifications` is always present, empty array
+included: the page has to tell "nothing waiting" apart from "the link has not
+answered yet", and its length is the badge on the rail. `location` is set only
+on an invite, and is what lets the row offer a join instead of an
+acknowledgement. `server_version` is the protocol
 version from `auth_ok` as a number, zero when unknown. `n_users` and `capacity`
 are -1 when unknown. Friend entries carry no `bio` or `bioLinks` on purpose:
 the roster does not show them and they would bloat every broadcast.
@@ -276,10 +324,25 @@ Tabs:
 |-----|-------|
 | Feed | Live. Newest first, filterable; clicking an event jumps to that friend |
 | Online | Live. Friends grouped by instance, with instance and friend detail |
-| Inbox | Placeholder. Needs the link to subscribe to notification events |
+| Inbox | Live. Friend requests and invites, oldest first, with a count badge on the rail |
 | Stuff | Placeholder. Needs `get_files` / `get_prints` and an image proxy |
 | Tools | Placeholder. Most client tools are local and cannot appear here |
 | Profile | Live. Self profile plus the connection block |
+
+The inbox draws its buttons in the row rather than the detail pane: answering a
+friend request should be one tap, and in a headset the detour through a second
+pane is the expensive part. What each row offers depends on the type, and only
+what vrcd-server can actually do appears:
+
+| Type | Buttons |
+|------|---------|
+| `friendRequest` | ACCEPT, DECLINE |
+| `invite` | JOIN WORLD (the same self-invite the roster offers), DISMISS |
+| `requestInvite` | DISMISS, and a line saying why there is nothing else - sending an invite back needs an API the server does not expose |
+
+VRChat's accept endpoint only means anything for a friend request, so an invite
+is answered by going where it points instead. The sender opens in the detail
+pane when they are already a friend.
 
 Placeholders are the `soon` flag in the `TABS` table at the top of `app.js`, and
 each renders a line naming what it is waiting on. One profile layout serves both
