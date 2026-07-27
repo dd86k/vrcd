@@ -8,6 +8,7 @@ import core.sync.mutex;
 import core.time : MonoTime;
 
 import client.notifications : notifyEventLabels, feedEventLabels;
+import vrcd.notifications : NotificationInfo;
 
 /// Network connection state for the server connection.
 enum ConnectionState { disconnected, connecting, connected, failed }
@@ -461,18 +462,39 @@ struct AppState
     }
 
     /// Add a notification, deduplicating by notificationId.
+    ///
+    /// Appends, so the list stays oldest first. Every row carries its own
+    /// Accept and X, and prepending would push all of them down a row the
+    /// moment something arrived,  which in a headset means the button the
+    /// user was already reaching for is no longer the one under the pointer.
+    /// The same order is what vrcd-server sends and what the web inbox draws.
     void addNotification(string notificationId, string notificationType,
         string senderName, string message, long receivedAtUnix)
     {
-        // Deduplicate.
+        // Deduplicate. VRChat re-emits, and a repeat would draw a second row
+        // with the same buttons.
         foreach (ref NotificationEntry n; notifications)
         {
             if (n.notificationId == notificationId)
                 return;
         }
-        // Prepend (newest first).
-        notifications = NotificationEntry(notificationId, notificationType,
-            senderName, message, receivedAtUnix) ~ notifications;
+        notifications ~= NotificationEntry(notificationId, notificationType,
+            senderName, message, receivedAtUnix);
+    }
+
+    /// Replace the whole list from a server `notifications` snapshot. The
+    /// server's order is kept as-is (oldest first): re-sorting here would
+    /// only invite the client and the server to disagree.
+    void replaceNotifications(NotificationInfo[] list)
+    {
+        NotificationEntry[] rebuilt;
+        rebuilt.reserve(list.length);
+        foreach (ref NotificationInfo info; list)
+        {
+            rebuilt ~= NotificationEntry(info.id, info.notificationType,
+                info.senderName, info.message, info.receivedAtUnix);
+        }
+        notifications = rebuilt;
     }
 
     /// Whether a user is muted, per the last moderations snapshot.

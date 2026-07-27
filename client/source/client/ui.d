@@ -1743,6 +1743,17 @@ private void drawFriendProfile(mu_Context* ctx, AppState* state, int scrollDelta
 ///
 /// Deny was removed because it sent the same "hide" as Dismiss, so the
 /// X covers both cases.
+///
+/// Rows are oldest first and are never re-sorted (see
+/// AppState.addNotification). With the buttons in the rows, anything that
+/// reordered on arrival would slide a button out from under a pointer that
+/// was already on its way to it,  and on a friend request the one that moves
+/// into place is Accept. New notifications append to the bottom.
+///
+/// The list is seeded once per connect from the server's `notifications`
+/// snapshot and maintained from the events after that: the WebSocket only
+/// reports changes, so a request that arrived while the client was closed has
+/// no event to replay.
 private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDelta)
 {
     static immutable int[2] outerCols  = [-170, 160];

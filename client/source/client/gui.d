@@ -21,7 +21,8 @@ import ddlogger;
 import ddui;
 import vrcd.friends : FriendRoster, parseFriendsMessage;
 import vrcd.events : extractEventFields;
-import vrcd.notifications : NotificationInfo, NotificationChange, applyNotificationEvent;
+import vrcd.notifications : NotificationInfo, NotificationChange,
+    applyNotificationEvent, parseNotificationsMessage;
 
 import client.connection;
 import client.stream : loadTLS;
@@ -1241,6 +1242,10 @@ private void drainNetworkMessages()
                 applyModerationsSnapshot(msg);
                 break;
 
+            case "notifications":
+                applyNotificationsSnapshot(msg);
+                break;
+
             case "moderate_result", "unfriend_result":
                 appState.moderationActionInFlight = false;
                 bool modOk;
@@ -1876,6 +1881,29 @@ private void applyFriendsSnapshot(JSONValue msg)
 }
 
 /// Apply a `moderations` snapshot: mute and block lists.
+/// Replace the inbox from a server `notifications` snapshot, sent once per
+/// connect. This is the only way the client learns about a friend request
+/// that arrived while it was closed: the WebSocket reports changes, not
+/// state, so there is no event to replay for one.
+///
+/// A failure leaves whatever is already there rather than blanking the tab,
+/// since a stale inbox is more useful than an empty one, and the events keep
+/// working either way.
+private void applyNotificationsSnapshot(JSONValue msg)
+{
+    if (const(JSONValue)* v = "error" in msg)
+    {
+        logWarn("Could not fetch notifications: %s", v.str);
+        appState.addFeedEntry(0, "error", "", "Inbox: " ~ v.str,
+            timeNow(), "", false, EventSource.system);
+        return;
+    }
+
+    NotificationInfo[] list = parseNotificationsMessage(msg);
+    appState.replaceNotifications(list);
+    logInfo("Inbox seeded with %d notification(s)", list.length);
+}
+
 private void applyModerationsSnapshot(JSONValue msg)
 {
     appState.moderationsLoading = false;

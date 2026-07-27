@@ -23,6 +23,10 @@ alias EventCallback = void delegate(JSONValue event);
 /// (get_moderations, moderate_user, unfriend).
 enum long PROTOCOL_MODERATION = 3;
 
+/// Minimum server protocol version for the notification listing
+/// (get_notifications).
+enum long PROTOCOL_NOTIFICATIONS = 4;
+
 /// TCP connection to the vrcd server.
 /// Handles auth, catch-up, and live event streaming via JSON-L.
 /// Supports optional TLS encryption when compiled with the openssl dependency.
@@ -204,6 +208,21 @@ class ServerConnection
         logDebugging("requestModerations");
         sendMessage(JSONValue([
             "type": JSONValue("get_moderations"),
+        ]));
+    }
+
+    /// Request the pending notification snapshot. Server replies with
+    /// `notifications`. Requires PROTOCOL_NOTIFICATIONS.
+    ///
+    /// The inbox cannot be rebuilt from the event stream: the VRChat
+    /// WebSocket only reports changes, so a friend request that arrived while
+    /// the client was closed has no event to replay, and catch-up would only
+    /// find one if it happened to fall inside the replayed range.
+    void requestNotifications()
+    {
+        logDebugging("requestNotifications");
+        sendMessage(JSONValue([
+            "type": JSONValue("get_notifications"),
         ]));
     }
 
@@ -533,6 +552,8 @@ class ServerConnection
             // that would land in the feed; only ask when supported.
             if (serverVersion >= PROTOCOL_MODERATION)
                 requestModerations();
+            if (serverVersion >= PROTOCOL_NOTIFICATIONS)
+                requestNotifications();
             runThreadedImpl(queue, sdlEventType);
         }
         catch (Exception e)

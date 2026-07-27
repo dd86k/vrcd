@@ -90,7 +90,7 @@ UI layout using ddui (immediate-mode). Defines five tabs:
 |-----|---------|
 | Feed | Paginated event list with type filtering and text search |
 | Friends | Online friends grouped by instance |
-| Notifications | Friend requests, invites |
+| Notifications | Friend requests, invites; oldest first, never re-sorted |
 | Tools | PNG metadata stripping (drag-and-drop) |
 | Settings | Connection, font, notification preferences |
 
@@ -114,8 +114,9 @@ TCP client for the vrcd server using JSON-L protocol.
 - `connect()` -- establish TCP connection and authenticate with token
 - `catchUp(sinceId)` -- request replay of missed events
 - `requestFriends()` -- request friend state snapshot
+- `requestNotifications()` -- request the pending inbox (protocol v4). Sent once per connect, because the inbox cannot be rebuilt from the event stream: the VRChat WebSocket reports changes, not state, so a friend request that arrived while the client was closed has no event to replay. Catch-up may still replay old notification events into the list; the snapshot lands after them and replaces it
 - `runThreaded()` -- blocking receive loop on a separate thread; pushes messages to `MessageQueue` and wakes the main thread via SDL custom event
-- Protocol messages: `auth`, `auth_ok`, `event`, `caught_up`, `ping`/`pong`, `status`, `friends`, `error`
+- Protocol messages: `auth`, `auth_ok`, `event`, `caught_up`, `ping`/`pong`, `status`, `friends`, `notifications`, `error`
 
 ### `logwatcher.d`
 Monitors local VRChat log files for player and location events.
