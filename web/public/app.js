@@ -90,15 +90,19 @@ var SECTIONS = [
 ];
 
 /* What each section is, and what VRChat will not accept there. Shown under the
-   grid rather than on the upload button: it is worth reading once. */
+   grid rather than on the upload button: it is worth reading once. The shape
+   and format are what the crop frame is for, so they are stated as what a
+   picture becomes rather than as what will be refused. */
 var SECTION_HINTS = {
-    gallery: "Your VRC+ gallery. PNG, up to 2000x2000.",
-    icon: "Profile icons. PNG, up to 2000x2000. Setting one needs VRC+.",
-    sticker: "Stickers you can drop in a world. PNG, square, up to 2000x2000.",
-    emoji: "Emoji you can play. PNG, square, up to 2000x2000. Animated emoji " +
+    gallery: "Your VRC+ gallery. Goes up as PNG, at most 2000x2000.",
+    icon: "Profile icons. Goes up as PNG, at most 2000x2000. Setting one " +
+          "needs VRC+.",
+    sticker: "Stickers you can drop in a world. Square PNG, at most 2000x2000.",
+    emoji: "Emoji you can play. Square PNG, at most 2000x2000. Animated emoji " +
            "upload as a sprite sheet, which this page cannot describe yet, so " +
            "they arrive as a still.",
-    prints: "Photos printed in-world. PNG, up to 2000x2000. VRChat keeps 64.",
+    prints: "Photos printed in-world. Goes up as PNG, at most 2000x2000. " +
+            "VRChat keeps 64.",
     inventory: "Props, bundles and skins. Emoji and stickers are not here: " +
                "they have their own sections above."
 };
@@ -755,7 +759,13 @@ function renderStuff(body) {
         body.appendChild(more);
     }
 
-    body.appendChild(el("div", "hint", SECTION_HINTS[section]));
+    var hint = SECTION_HINTS[section];
+    // Said where the limits are said, since the limits are the reason it is
+    // worth knowing: a picture the section would have refused is croppable
+    // into one it takes, and dropping is the shortest way to that frame.
+    if (info.upload)
+        hint += " Drop a picture anywhere here to crop it to fit.";
+    body.appendChild(el("div", "hint", hint));
 }
 
 /* Big enough to hit in a headset, and scrolls sideways on a phone rather than
@@ -1088,28 +1098,24 @@ function contentAct(id, action, slot, button) {
 var printNote = "";
 var printCaret = -1;
 
+/* A picked file does not go straight up. VRChat takes PNG only, at most
+   2000x2000, and refuses a sticker or emoji that is not square, so a phone
+   photo is three separate rejections away from being accepted. The crop modal
+   is where it becomes one of those, which is also why anything the browser can
+   decode is allowed in: whatever comes out of the frame leaves as PNG. */
 function pickUpload(info) {
     var input = document.createElement("input");
     input.type = "file";
-    // PNG only, which is what vrcd-server accepts. The picker enforces it on
-    // most platforms and the check below covers the ones where it does not.
-    input.accept = "image/png,.png";
+    input.accept = "image/*";
     input.onchange = function () {
-        if (input.files && input.files[0]) sendUpload(info, input.files[0]);
+        if (input.files && input.files[0]) openCrop(info, input.files[0]);
     };
     input.click();
 }
 
+/* Send a picture already known to be PNG and within VRChat's limits: the
+   original bytes, straight from the file, no canvas in the way. */
 function sendUpload(info, file) {
-    if (file.type && file.type !== "image/png") {
-        showToast("VRChat only takes PNG here", true);
-        return;
-    }
-    if (file.size > UPLOAD_MAX_BYTES) {
-        showToast("That picture is over 10 MB", true);
-        return;
-    }
-
     var reader = new FileReader();
     reader.onerror = function () { showToast("Could not read that file", true); };
     reader.onload = function () {
@@ -1118,31 +1124,529 @@ function sendUpload(info, file) {
         var encoded = String(reader.result);
         var comma = encoded.indexOf(",");
         if (comma < 0) { showToast("Could not read that file", true); return; }
-
-        var body = { tag: info.upload, data_base64: encoded.slice(comma + 1) };
-        if (info.id === "prints" && printNote) body.note = printNote;
-
-        uploading[info.id] = true;
-        if (view.tab === "stuff") renderList();
-
-        fetch("/api/upload", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body)
-        }).then(function (r) {
-            if (r.ok) return;
-            uploading[info.id] = false;
-            showToast(r.status === 413
-                ? "That picture is too large to send"
-                : "The vrcd web server refused that upload", true);
-            if (view.tab === "stuff") renderList();
-        }).catch(function () {
-            uploading[info.id] = false;
-            showToast("Could not reach the vrcd web server", true);
-            if (view.tab === "stuff") renderList();
-        });
+        uploadData(info, encoded.slice(comma + 1));
     };
     reader.readAsDataURL(file);
+}
+
+function uploadData(info, base64) {
+    // Base64 carries four characters per three bytes, so this is the size the
+    // picture will land at without decoding it again to find out.
+    if (base64.length * 3 / 4 > UPLOAD_MAX_BYTES) {
+        showToast("That picture is over 10 MB. Crop tighter or zoom in.", true);
+        return;
+    }
+
+    var body = { tag: info.upload, data_base64: base64 };
+    if (info.id === "prints" && printNote) body.note = printNote;
+
+    uploading[info.id] = true;
+    if (view.tab === "stuff") renderList();
+
+    fetch("/api/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+    }).then(function (r) {
+        if (r.ok) return;
+        uploading[info.id] = false;
+        showToast(r.status === 413
+            ? "That picture is too large to send"
+            : "The vrcd web server refused that upload", true);
+        if (view.tab === "stuff") renderList();
+    }).catch(function () {
+        uploading[info.id] = false;
+        showToast("Could not reach the vrcd web server", true);
+        if (view.tab === "stuff") renderList();
+    });
+}
+
+/* ------------------------------------------------------------ crop widget */
+
+/* The frame stays put and the picture moves behind it, rather than a rectangle
+   with corner handles dragged over a still picture. Handles are small targets
+   by nature, and this page is meant to be usable in a headset: panning the
+   whole picture and a zoom slider are both as big as the thing they sit in.
+
+   VRChat's own ceiling. A crop is only ever downscaled to reach it; zooming in
+   past a picture's own resolution is allowed on screen but the output stops at
+   the pixels that were actually there. */
+var CROP_MAX = 2000;
+
+/* How far in the frame will go. Past this a crop is mostly guesswork about
+   pixels that were never in the file. */
+var CROP_ZOOM_MAX = 8;
+
+/* Frame shapes on offer. Stickers and emoji get none of this - VRChat takes
+   them square or not at all - so those sections are locked to SQUARE. */
+var CROP_ASPECTS = [
+    { id: "orig",  label: "ORIGINAL", ratio: 0 },
+    { id: "sq",    label: "SQUARE",   ratio: 1 },
+    { id: "wide",  label: "16:9",     ratio: 16 / 9 },
+    { id: "photo", label: "4:3",      ratio: 4 / 3 }
+];
+
+/* A raw camera file is far bigger than anything that comes out of the frame,
+   so the 10 MB ceiling cannot apply going in. This is only here to keep a
+   video or a disk image from being decoded as a picture. */
+var CROP_SOURCE_MAX_BYTES = 64 * 1024 * 1024;
+
+/* The modal while it is open, null the rest of the time. The picture is held
+   as a decoded Image; `cx`/`cy` are the point of it under the middle of the
+   frame, in its own pixels, and `zoom` is a multiple of the smallest scale
+   that still covers the frame. Everything drawn is derived from those three. */
+var crop = null;
+
+function openCrop(info, file) {
+    if (file.size > CROP_SOURCE_MAX_BYTES) {
+        showToast("That file is too big to open as a picture", true);
+        return;
+    }
+
+    var url = URL.createObjectURL(file);
+    var image = new Image();
+    image.onload = function () {
+        if (image.naturalWidth < 1 || image.naturalHeight < 1) {
+            URL.revokeObjectURL(url);
+            showToast("That picture has no pixels in it", true);
+            return;
+        }
+        closeCrop();
+        crop = {
+            info: info,
+            file: file,
+            image: image,
+            url: url,
+            square: info.id === "sticker" || info.id === "emoji",
+            aspect: CROP_ASPECTS[0],
+            zoom: 1,
+            cx: image.naturalWidth / 2,
+            cy: image.naturalHeight / 2,
+            frameW: 0,
+            frameH: 0,
+            pointers: {},
+            pinch: 0
+        };
+        if (crop.square) crop.aspect = CROP_ASPECTS[1];
+        buildCrop();
+    };
+    image.onerror = function () {
+        URL.revokeObjectURL(url);
+        showToast("The browser could not read that picture", true);
+    };
+    image.src = url;
+}
+
+function closeCrop() {
+    if (crop === null) return;
+    URL.revokeObjectURL(crop.url);
+    crop = null;
+
+    var box = document.getElementById("crop");
+    box.textContent = "";
+    box.classList.add("hidden");
+}
+
+function buildCrop() {
+    var box = document.getElementById("crop");
+    box.textContent = "";
+
+    var card = el("div", "modal-card crop-card");
+    var title = el("h2", null, "Crop for " + crop.info.label.toLowerCase());
+    title.id = "cropTitle";
+    card.appendChild(title);
+
+    card.appendChild(el("div", "why", crop.square
+        ? "VRChat takes these square only. Drag to move, pinch or use the " +
+          "slider to zoom."
+        : "Drag to move, pinch or use the slider to zoom. Whatever fills the " +
+          "frame is what goes up."));
+
+    if (crop.square === false) {
+        var chips = el("div", "chips");
+        CROP_ASPECTS.forEach(function (aspect) {
+            var chip = el("button", "chip" + (aspect.id === crop.aspect.id ? " on" : ""),
+                aspect.label);
+            chip.onclick = function () {
+                crop.aspect = aspect;
+                // Rebuilt rather than relaid out, so the chips redraw with the
+                // new one lit. The frame is measured at the end of that.
+                buildCrop();
+            };
+            chips.appendChild(chip);
+        });
+        card.appendChild(chips);
+    }
+
+    var stage = el("div", "crop-stage");
+    crop.canvas = el("canvas", "crop-canvas");
+    crop.canvas.onpointerdown = cropDown;
+    crop.canvas.onpointermove = cropMove;
+    crop.canvas.onpointerup = cropUp;
+    crop.canvas.onpointercancel = cropUp;
+    crop.canvas.onwheel = cropWheel;
+    stage.appendChild(crop.canvas);
+    card.appendChild(stage);
+
+    var zoom = el("input", "crop-zoom");
+    zoom.type = "range";
+    zoom.min = "100";
+    zoom.max = String(CROP_ZOOM_MAX * 100);
+    zoom.step = "1";
+    zoom.value = String(Math.round(crop.zoom * 100));
+    zoom.setAttribute("aria-label", "Zoom");
+    zoom.oninput = function (ev) {
+        crop.zoom = Number(ev.target.value) / 100;
+        drawCrop();
+    };
+    crop.zoomInput = zoom;
+    card.appendChild(zoom);
+
+    crop.size = el("div", "crop-size");
+    card.appendChild(crop.size);
+
+    var actions = el("div", "actions");
+    var send = el("button", "act primary", "UPLOAD");
+    send.onclick = commitCrop;
+    actions.appendChild(send);
+
+    var cancel = el("button", "act", "CANCEL");
+    cancel.onclick = closeCrop;
+    actions.appendChild(cancel);
+    card.appendChild(actions);
+
+    box.appendChild(card);
+    box.classList.remove("hidden");
+
+    // The frame is sized from the card, so it can only be measured once the
+    // card is in the document.
+    layoutCrop();
+}
+
+/* Fit the frame into the card at the chosen shape. Called on open, on an
+   aspect change and on a resize; the picture keeps the point it had under the
+   middle, so none of the three move what the crop is looking at. */
+function layoutCrop() {
+    if (crop === null) return;
+
+    var image = crop.image;
+    var ratio = crop.aspect.ratio > 0
+        ? crop.aspect.ratio
+        : image.naturalWidth / image.naturalHeight;
+
+    // The stage's content box, not its border box: clientWidth carries the
+    // padding, and a frame sized to that would hang over both edges.
+    var stage = crop.canvas.parentNode;
+    var pad = window.getComputedStyle(stage);
+    var wide = Math.max(80, stage.clientWidth -
+        parseFloat(pad.paddingLeft) - parseFloat(pad.paddingRight));
+    // Leaves the card's own chrome - title, chips, slider, buttons - on screen
+    // on a phone held in landscape, where the height is what runs out first.
+    var tall = Math.max(140, Math.min(window.innerHeight * 0.46, 460));
+
+    var w = wide, h = wide / ratio;
+    if (h > tall) { h = tall; w = tall * ratio; }
+
+    crop.frameW = Math.max(1, Math.round(w));
+    crop.frameH = Math.max(1, Math.round(h));
+    crop.canvas.style.width = crop.frameW + "px";
+    crop.canvas.style.height = crop.frameH + "px";
+
+    // A device pixel ratio of 1 on a 2x screen is a blurry preview of a sharp
+    // crop, which reads as the crop itself being soft.
+    var dpr = window.devicePixelRatio || 1;
+    crop.canvas.width = Math.round(crop.frameW * dpr);
+    crop.canvas.height = Math.round(crop.frameH * dpr);
+    crop.dpr = dpr;
+
+    drawCrop();
+}
+
+/* Smallest scale at which the picture still covers the frame. Zoom is a
+   multiple of it, so 1 always means "as much as the shape allows". */
+function cropMinScale() {
+    return Math.max(crop.frameW / crop.image.naturalWidth,
+                    crop.frameH / crop.image.naturalHeight);
+}
+
+/* Keep the frame inside the picture. Called after every pan and zoom, which is
+   what makes an empty corner impossible rather than merely unlikely. */
+function clampCrop() {
+    var scale = cropMinScale() * crop.zoom;
+    var halfW = crop.frameW / (2 * scale);
+    var halfH = crop.frameH / (2 * scale);
+    crop.cx = Math.min(Math.max(crop.cx, halfW), crop.image.naturalWidth - halfW);
+    crop.cy = Math.min(Math.max(crop.cy, halfH), crop.image.naturalHeight - halfH);
+    return scale;
+}
+
+function drawCrop() {
+    if (crop === null || crop.canvas === undefined) return;
+
+    // A pinch can push past either end, and the slider only holds the values
+    // it was given itself.
+    crop.zoom = Math.min(Math.max(crop.zoom, 1), CROP_ZOOM_MAX);
+    var scale = clampCrop();
+    var ctx = crop.canvas.getContext("2d");
+
+    ctx.setTransform(crop.dpr, 0, 0, crop.dpr, 0, 0);
+    ctx.clearRect(0, 0, crop.frameW, crop.frameH);
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(crop.image,
+        crop.frameW / 2 - crop.cx * scale, crop.frameH / 2 - crop.cy * scale,
+        crop.image.naturalWidth * scale, crop.image.naturalHeight * scale);
+
+    // Thirds, drawn over the picture rather than beside it: the frame is the
+    // only place the composition can be judged.
+    ctx.strokeStyle = "rgba(255, 255, 255, .28)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (var i = 1; i < 3; i++) {
+        var x = Math.round(crop.frameW * i / 3) + 0.5;
+        var y = Math.round(crop.frameH * i / 3) + 0.5;
+        ctx.moveTo(x, 0); ctx.lineTo(x, crop.frameH);
+        ctx.moveTo(0, y); ctx.lineTo(crop.frameW, y);
+    }
+    ctx.stroke();
+
+    if (crop.zoomInput) crop.zoomInput.value = String(Math.round(crop.zoom * 100));
+
+    var out = cropOutput(scale);
+    crop.size.textContent = out.w + " x " + out.h + " PNG" +
+        (out.whole ? ", the whole picture" : "");
+}
+
+/* What the upload will be: the frame in the picture's own pixels, never
+   upscaled past them and never past VRChat's 2000. */
+function cropOutput(scale) {
+    var full = { w: crop.image.naturalWidth, h: crop.image.naturalHeight };
+    var sw = Math.min(crop.frameW / scale, full.w);
+    var sh = Math.min(crop.frameH / scale, full.h);
+    // The clamp keeps the frame inside the picture to within rounding; this
+    // takes the rounding, since drawImage answers a source rectangle that
+    // hangs a hair over the edge with a transparent strip.
+    var sx = Math.min(Math.max(crop.cx - sw / 2, 0), full.w - sw);
+    var sy = Math.min(Math.max(crop.cy - sh / 2, 0), full.h - sh);
+
+    var w = sw, h = sh;
+    if (w > CROP_MAX || h > CROP_MAX) {
+        var shrink = Math.min(CROP_MAX / w, CROP_MAX / h);
+        w *= shrink;
+        h *= shrink;
+    }
+    w = Math.max(1, Math.round(w));
+    h = Math.max(1, Math.round(h));
+    // Rounding two sides separately is how a square crop arrives one pixel off
+    // square, which VRChat refuses.
+    if (crop.aspect.ratio === 1) h = w;
+
+    return {
+        sx: sx, sy: sy, sw: sw, sh: sh, w: w, h: h,
+        whole: sw >= full.w - 0.5 && sh >= full.h - 0.5
+    };
+}
+
+function commitCrop() {
+    if (crop === null) return;
+
+    var info = crop.info;
+    var out = cropOutput(clampCrop());
+
+    // Nothing was asked of it and VRChat would have taken it as it stands, so
+    // send the file itself. Re-encoding here would cost quality and size for
+    // a crop that is not a crop.
+    if (out.whole && crop.file.type === "image/png" &&
+        crop.image.naturalWidth <= CROP_MAX && crop.image.naturalHeight <= CROP_MAX &&
+        (crop.square === false || crop.image.naturalWidth === crop.image.naturalHeight)) {
+        var file = crop.file;
+        closeCrop();
+        sendUpload(info, file);
+        return;
+    }
+
+    var canvas = document.createElement("canvas");
+    canvas.width = out.w;
+    canvas.height = out.h;
+
+    var ctx = canvas.getContext("2d");
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(crop.image, out.sx, out.sy, out.sw, out.sh, 0, 0, out.w, out.h);
+
+    var encoded;
+    try {
+        encoded = canvas.toDataURL("image/png");
+    } catch (err) {
+        // A picture from another origin would taint the canvas. Ours never is,
+        // since it came off the local file picker, but a failure here is silent
+        // otherwise.
+        showToast("The browser would not encode that crop", true);
+        return;
+    }
+
+    closeCrop();
+    var comma = encoded.indexOf(",");
+    if (comma < 0) { showToast("The browser would not encode that crop", true); return; }
+    uploadData(info, encoded.slice(comma + 1));
+}
+
+/* Pan with one pointer, pinch with two. Pointer events cover mouse, touch and
+   pen at once, and capture keeps a drag alive when it leaves the frame.
+
+   Each of these checks the modal is still up: Escape during a drag tears the
+   canvas out from under a captured pointer, and the release still arrives. */
+function cropDown(ev) {
+    if (crop === null) return;
+    ev.preventDefault();
+    crop.canvas.setPointerCapture(ev.pointerId);
+    crop.pointers[ev.pointerId] = { x: ev.clientX, y: ev.clientY };
+    crop.pinch = pinchSpan();
+}
+
+function cropMove(ev) {
+    if (crop === null) return;
+    var held = crop.pointers[ev.pointerId];
+    if (held === undefined) return;
+    ev.preventDefault();
+
+    var ids = Object.keys(crop.pointers);
+    var scale = cropMinScale() * crop.zoom;
+
+    if (ids.length === 1) {
+        crop.cx -= (ev.clientX - held.x) / scale;
+        crop.cy -= (ev.clientY - held.y) / scale;
+    }
+    held.x = ev.clientX;
+    held.y = ev.clientY;
+
+    if (ids.length > 1) {
+        var span = pinchSpan();
+        if (crop.pinch > 0 && span > 0) crop.zoom *= span / crop.pinch;
+        crop.pinch = span;
+    }
+    drawCrop();
+}
+
+function cropUp(ev) {
+    if (crop === null) return;
+    delete crop.pointers[ev.pointerId];
+    // Whichever finger is left starts a fresh span, or the next move jumps by
+    // the distance between the two.
+    crop.pinch = pinchSpan();
+}
+
+function pinchSpan() {
+    var ids = Object.keys(crop.pointers);
+    if (ids.length < 2) return 0;
+    var a = crop.pointers[ids[0]], b = crop.pointers[ids[1]];
+    return Math.sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y));
+}
+
+function cropWheel(ev) {
+    if (crop === null) return;
+    ev.preventDefault();
+    // Zoom about the pointer, so the pixel under the cursor stays under it.
+    var box = crop.canvas.getBoundingClientRect();
+    var scale = cropMinScale() * crop.zoom;
+    var atX = crop.cx + (ev.clientX - box.left - crop.frameW / 2) / scale;
+    var atY = crop.cy + (ev.clientY - box.top - crop.frameH / 2) / scale;
+
+    var step = Math.exp(-ev.deltaY / 400);
+    var was = crop.zoom;
+    crop.zoom = Math.min(Math.max(crop.zoom * step, 1), CROP_ZOOM_MAX);
+
+    var moved = crop.zoom / was;
+    crop.cx = atX + (crop.cx - atX) / moved;
+    crop.cy = atY + (crop.cy - atY) / moved;
+    drawCrop();
+}
+
+/* --------------------------------------------------------- drag and drop */
+
+/* A file dragged onto the window is the other way into the crop modal. The
+   whole window is the target rather than the grid: a drop that lands two
+   pixels outside a zone is a page navigation away from losing the session,
+   so every drop is caught and answered, even the ones that cannot be used. */
+function watchDrops() {
+    var hint = document.getElementById("drop");
+    var depth = 0;
+    var idle = 0;
+
+    function dragging(ev) {
+        var kinds = ev.dataTransfer && ev.dataTransfer.types;
+        return kinds && Array.prototype.indexOf.call(kinds, "Files") >= 0;
+    }
+
+    function show() {
+        hint.textContent = dropTarget().hint;
+        hint.classList.remove("hidden");
+        // Browsers disagree about the last dragleave when a drag goes out of
+        // the window or ends over another application, and an overlay stuck
+        // over the whole page is not a recoverable state. dragover repeats
+        // while the file is over us, so a gap in those takes it down whatever
+        // the counting says. Hiding early costs nothing: the drop handler does
+        // not read this.
+        clearTimeout(idle);
+        idle = setTimeout(hide, 1200);
+    }
+
+    function hide() {
+        clearTimeout(idle);
+        depth = 0;
+        hint.classList.add("hidden");
+    }
+
+    document.addEventListener("dragenter", function (ev) {
+        if (dragging(ev) === false) return;
+        ev.preventDefault();
+        depth++;
+        show();
+    });
+    document.addEventListener("dragover", function (ev) {
+        if (dragging(ev) === false) return;
+        // Without this the browser takes the drop and opens the file, which
+        // navigates away from the page.
+        ev.preventDefault();
+        ev.dataTransfer.dropEffect = dropTarget().info ? "copy" : "none";
+        show();
+    });
+    document.addEventListener("dragleave", function (ev) {
+        if (dragging(ev) === false) return;
+        // Dragging over a child fires leave on the parent, so this counts
+        // rather than hides on the first one.
+        depth = Math.max(0, depth - 1);
+        if (depth === 0) hide();
+    });
+    document.addEventListener("dragend", hide);
+    document.addEventListener("drop", function (ev) {
+        if (dragging(ev) === false) return;
+        ev.preventDefault();
+        hide();
+
+        var target = dropTarget();
+        if (target.info === null) { showToast(target.hint, true); return; }
+
+        var files = ev.dataTransfer.files;
+        if (files.length === 0) return;
+        if (files.length > 1)
+            showToast("One at a time - taking the first", false);
+        openCrop(target.info, files[0]);
+    });
+}
+
+/* Where a drop would land right now, and what to say about it. A section has
+   to be open for a drop to mean anything: the picture is going somewhere
+   specific, and guessing which is worse than saying so. */
+function dropTarget() {
+    if (view.tab !== "stuff")
+        return { info: null, hint: "Open STUFF to upload a picture" };
+
+    var info = sectionInfo(view.section);
+    if (info.upload === undefined)
+        return { info: null, hint: "Items come from VRChat, not from a file" };
+    if (uploading[info.id] === true)
+        return { info: null, hint: "That section already has an upload going" };
+
+    return { info: info, hint: "Drop to crop and upload to " + info.label };
 }
 
 /* One profile layout, two callers: your own on the profile tab and a friend in
@@ -1766,5 +2270,14 @@ document.getElementById("search").oninput = function (ev) {
     renderList();
 };
 
+/* Escape leaves the crop modal but not the sign-in one: the server is blocked
+   waiting on that answer, and a stray key is not one. */
+document.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape" && crop) closeCrop();
+});
+
+window.addEventListener("resize", layoutCrop);
+
+watchDrops();
 render();
 connect();

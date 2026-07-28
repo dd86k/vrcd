@@ -66,6 +66,15 @@
      VRChat. Empty and hidden the rest of the time. -->
 <div id="signin" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="signinTitle"></div>
 
+<!-- The crop frame, raised by a picked or dropped picture and torn down when
+     it is uploaded or cancelled. -->
+<div id="crop" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="cropTitle"></div>
+
+<!-- Shown only while a file is being dragged over the window, and it must not
+     take pointer events: a target that swallows the drop it is advertising
+     would let the browser navigate to the file instead. -->
+<div id="drop" class="drop hidden" aria-hidden="true"></div>
+
 <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 <script src="/static/app.js"></script>
 </body>

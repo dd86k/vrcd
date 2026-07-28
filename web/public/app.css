@@ -372,6 +372,74 @@ button.head { cursor: pointer; }
 .modal-card .actions { flex-direction: row; }
 .modal-card .act { flex: 1; }
 
+/* ---- crop modal --------------------------------------------------------
+   Where a picked or dropped picture is made into something VRChat will take:
+   PNG, no larger than 2000x2000, square for stickers and emoji. The frame
+   holds still and the picture is dragged behind it, so the only targets are
+   the picture itself and a slider - no corner handles, which are too small to
+   find in a headset. */
+
+.crop-card { width: min(34rem, 100%); }
+.crop-card .chips { margin: 0 0 .85rem; }
+
+.crop-stage {
+    display: grid; place-items: center;
+    background: var(--bg); border: 1px solid var(--line);
+    border-radius: 8px; padding: .5rem; margin-bottom: .85rem;
+}
+/* touch-action none, or a drag on a phone scrolls the page behind the modal
+   instead of panning the picture, and a pinch zooms the whole document. */
+.crop-canvas {
+    display: block; max-width: 100%; border-radius: 4px;
+    touch-action: none; cursor: grab; background: #000;
+}
+.crop-canvas:active { cursor: grabbing; }
+
+/* Beats `.modal-card input`, which is written for the sign-in fields and would
+   otherwise put a text box's padding and border around the track. */
+.modal-card .crop-zoom {
+    -webkit-appearance: none; appearance: none;
+    width: 100%; height: 2.75rem; min-height: 0; margin: 0 0 .35rem;
+    padding: 0; background: none; border: 0;
+}
+.crop-zoom::-webkit-slider-runnable-track {
+    height: .5rem; background: var(--panel-hi);
+    border: 1px solid var(--line-hi); border-radius: 999px;
+}
+.crop-zoom::-moz-range-track {
+    height: .5rem; background: var(--panel-hi);
+    border: 1px solid var(--line-hi); border-radius: 999px;
+}
+/* A thumb sized for a thumb. The negative margin centres it on the track,
+   which WebKit does not do on its own. */
+.crop-zoom::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 2.25rem; height: 2.25rem;
+    margin-top: -.95rem; border-radius: 50%;
+    background: var(--accent-hi); border: 2px solid var(--text); cursor: pointer;
+}
+.crop-zoom::-moz-range-thumb {
+    width: 2.25rem; height: 2.25rem; border-radius: 50%;
+    background: var(--accent-hi); border: 2px solid var(--text); cursor: pointer;
+}
+.crop-zoom:focus-visible { outline: 2px solid var(--accent-hi); outline-offset: 4px; }
+
+.crop-size {
+    color: var(--dim); font-size: .8rem; text-align: center; margin-bottom: 1rem;
+}
+
+/* ---- drag hint ---------------------------------------------------------
+   Raised while a file is over the window. pointer-events none is load-bearing:
+   the drop has to reach the document handler, and an overlay that ate it would
+   hand the file to the browser, which navigates away from the page. */
+
+.drop {
+    position: fixed; inset: 0; z-index: 28; pointer-events: none;
+    display: grid; place-items: center; padding: 2rem;
+    background: rgba(10, 10, 14, .72);
+    box-shadow: inset 0 0 0 3px var(--accent-hi);
+    font-size: 1.1rem; font-weight: 700; letter-spacing: .05em; text-align: center;
+}
+
 .toast {
     position: fixed; left: 50%; transform: translateX(-50%);
     bottom: calc(1.5rem + env(safe-area-inset-bottom)); z-index: 30;
