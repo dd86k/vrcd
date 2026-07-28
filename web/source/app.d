@@ -241,6 +241,39 @@ int main(string[] args)
             req.replyJSON(HTTPStatus.ok, `{"requested":true}`);
             return REQUEST_OK;
         })
+        .post(`/api/auth`, (ref HTTPRequest req)
+        {
+            if (authorized(req, true) == false)
+                return REQUEST_OK;
+
+            AuthAnswer answer;
+            if (parseAuthAnswer(req.payload, answer) == false)
+            {
+                req.replyJSON(HTTPStatus.badRequest, `{"error":"bad sign-in answer"}`);
+                return REQUEST_OK;
+            }
+
+            // Not fire and forget, unlike the two above: there is no result
+            // message for a sign-in, so whether the answer reached the link is
+            // the only thing the page can be told.
+            bool sent;
+            switch (answer.action)
+            {
+            case "credentials": sent = link.submitCredentials(answer.username, answer.password); break;
+            case "two_factor":  sent = link.submitTwoFactor(answer.code); break;
+            default:            sent = link.cancelAuth(); break; // "cancel"; nothing else parses.
+            }
+
+            if (sent == false)
+            {
+                // 503, spelled as a number: ddhttpd's HTTPStatus stops at 413.
+                req.replyJSON(503, `{"error":"not connected to vrcd-server"}`);
+                return REQUEST_OK;
+            }
+
+            req.replyJSON(HTTPStatus.ok, `{"sent":true}`);
+            return REQUEST_OK;
+        })
         .websocket(`/ws/:ticket`, (WebSocketConnection conn)
         {
             // The cookie cannot be read after ddhttpd has upgraded the
@@ -324,6 +357,60 @@ private bool notificationAction(ubyte[] payload, out string id, out string actio
     if (id.length == 0)
         return false;
     return action == "accept" || action == "hide";
+}
+
+/// One answer to the VRChat sign-in prompt vrcd-server delegates to us.
+private struct AuthAnswer
+{
+    /// "credentials", "two_factor", or "cancel".
+    string action;
+    string username;
+    string password;
+    string code;
+}
+
+/// Pull a sign-in answer out of a /api/auth request body. Returns false when
+/// the action is not one of the three, or when the fields that action needs
+/// are missing: a blank password is worth refusing here rather than spending
+/// one of VRChat's login attempts on it.
+///
+/// Nothing here is logged. The body carries a VRChat password.
+private bool parseAuthAnswer(ubyte[] payload, out AuthAnswer answer)
+{
+    if (payload.length == 0)
+        return false;
+
+    JSONValue body_;
+    try body_ = parseJSON(cast(const(char)[])payload);
+    catch (JSONException)
+    {
+        logWarn("Malformed sign-in answer");
+        return false;
+    }
+
+    if (body_.type != JSONType.object)
+        return false;
+
+    if (const(JSONValue) *v = "action" in body_)
+        if (v.type == JSONType.string)
+            answer.action = v.str;
+    if (const(JSONValue) *v = "username" in body_)
+        if (v.type == JSONType.string)
+            answer.username = v.str;
+    if (const(JSONValue) *v = "password" in body_)
+        if (v.type == JSONType.string)
+            answer.password = v.str;
+    if (const(JSONValue) *v = "code" in body_)
+        if (v.type == JSONType.string)
+            answer.code = v.str;
+
+    switch (answer.action)
+    {
+    case "credentials": return answer.username.length > 0 && answer.password.length > 0;
+    case "two_factor":  return answer.code.length > 0;
+    case "cancel":      return true;
+    default:            return false;
+    }
 }
 
 /// Split a "host:port" argument. A bare host leaves the port untouched.

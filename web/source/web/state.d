@@ -26,6 +26,7 @@ string buildStateJSON(ServerLink link)
     JoinResult join = link.joinResult();
     NotificationInfo[] inbox = link.notifications();
     NotifyActionResult notifyAction = link.notifyResult();
+    AuthPrompt signin = link.authPrompt();
 
     JSONValue root = JSONValue([
         "type":             JSONValue("state"),
@@ -85,6 +86,18 @@ string buildStateJSON(ServerLink link)
     foreach (ref NotificationInfo entry; inbox)
         pending ~= buildNotificationJSON(entry);
     root["notifications"] = JSONValue(pending);
+
+    // Present only while the server is actually asking: the page drives its
+    // sign-in modal off this key existing, and an "inactive" object would put
+    // the burden of telling the two apart on every reader.
+    if (signin.active)
+    {
+        root["auth"] = JSONValue([
+            "kind":   JSONValue(signin.kind),
+            "method": JSONValue(signin.method),
+            "error":  JSONValue(signin.error),
+        ]);
+    }
 
     if (notifyAction.attempted)
     {

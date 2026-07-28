@@ -59,6 +59,14 @@ var NOTIFY_TYPES = {
                            "does not expose yet." }
 };
 
+/* What each 2FA method is asking for. VRChat calls them totp, otp and
+   emailOtp; only the first is the usual authenticator app. */
+var TWOFA_TEXT = {
+    totp:     "Enter the code from the account's authenticator app.",
+    emailOtp: "Enter the code VRChat emailed to the account.",
+    otp:      "Enter one of the account's one-time recovery codes."
+};
+
 var TITLES = {
     feed: "Feed", online: "Online", inbox: "Inbox",
     stuff: "Stuff", tools: "Tools", profile: "Profile"
@@ -698,6 +706,7 @@ function render() {
     renderRail();
     renderList();
     renderDetail();
+    renderSignin();
 }
 
 function select(sel) {
@@ -772,6 +781,147 @@ function notifyAct(id, action, button) {
         showToast("Could not reach the vrcd web server", true);
         button.disabled = false;
         button.textContent = label;
+    });
+}
+
+/* --------------------------------------------------------- vrchat sign-in */
+
+/* vrcd-server holds the VRChat session. When it runs headless and needs
+   credentials or a 2FA code it asks whichever front-end is connected - this
+   page or the SDL client - and the first answer wins. The prompt arrives in
+   the snapshot as `auth` and leaves it the moment anyone answers, so the modal
+   is driven by that key alone and closes on every browser at once.
+
+   The card is rebuilt only when the prompt itself changes. A snapshot arrives
+   every time a friend moves, and redrawing on one of those would take the
+   half-typed password with it. */
+var signinKey = "";
+
+function renderSignin() {
+    var box = document.getElementById("signin");
+    var ask = state.auth;
+
+    if (!ask) {
+        box.textContent = "";
+        box.classList.add("hidden");
+        // Cleared, so a repeat of the same prompt (the same wrong code twice)
+        // still counts as a change and draws a fresh card.
+        signinKey = "";
+        return;
+    }
+
+    var key = ask.kind + "|" + ask.method + "|" + ask.error;
+    if (key === signinKey) return;
+    signinKey = key;
+
+    box.textContent = "";
+    box.appendChild(signinCard(ask));
+    box.classList.remove("hidden");
+
+    var first = box.querySelector("input");
+    if (first) first.focus();
+}
+
+function signinCard(ask) {
+    var twoFactor = ask.kind === "two_factor";
+
+    // A form, so Enter submits and the browser can offer to fill and to save.
+    var card = el("form", "modal-card");
+    var title = el("h2", null, twoFactor ? "Two-factor code" : "Sign in to VRChat");
+    title.id = "signinTitle";
+    card.appendChild(title);
+
+    card.appendChild(el("div", "why", twoFactor
+        ? (TWOFA_TEXT[ask.method] || "vrcd-server needs a two-factor code.")
+        : "vrcd-server is signing in to VRChat and needs the account's " +
+          "credentials. They are passed straight through to VRChat and are " +
+          "not stored here."));
+
+    if (ask.error) card.appendChild(el("div", "err", ask.error));
+
+    var code, user, pass;
+    if (twoFactor) {
+        code = signinField(card, "Code", { name: "code",
+            autocomplete: "one-time-code", inputmode: "numeric", maxlength: 16 });
+    } else {
+        user = signinField(card, "Username or email", { name: "username",
+            autocomplete: "username" });
+        pass = signinField(card, "Password", { name: "password",
+            type: "password", autocomplete: "current-password" });
+    }
+
+    var actions = el("div", "actions");
+    var submit = el("button", "act primary", twoFactor ? "SUBMIT" : "SIGN IN");
+    submit.type = "submit";
+    actions.appendChild(submit);
+
+    // Cancel is an answer too: the server stops waiting, and a headless one
+    // gives up on the sign-in entirely.
+    var cancel = el("button", "act", "CANCEL");
+    cancel.type = "button";
+    cancel.onclick = function () { sendSignin({ action: "cancel" }, card); };
+    actions.appendChild(cancel);
+    card.appendChild(actions);
+
+    card.onsubmit = function (ev) {
+        ev.preventDefault();
+        if (twoFactor) {
+            sendSignin({ action: "two_factor", code: code.value.trim() }, card);
+            return;
+        }
+        // The password is passed as typed; only the username is trimmed, since
+        // trailing spaces are legal in one and a slip in the other.
+        sendSignin({ action: "credentials",
+            username: user.value.trim(), password: pass.value }, card);
+    };
+    return card;
+}
+
+function signinField(card, label, opts) {
+    var id = "signin-" + opts.name;
+    var tag = el("label", null, label);
+    tag.htmlFor = id;
+    card.appendChild(tag);
+
+    var input = el("input");
+    input.id = id;
+    input.name = opts.name;
+    input.type = opts.type || "text";
+    input.autocomplete = opts.autocomplete;
+    input.required = true;
+    if (opts.inputmode) input.inputMode = opts.inputmode;
+    if (opts.maxlength) input.maxLength = opts.maxlength;
+    card.appendChild(input);
+    return input;
+}
+
+/* Not fire and forget, unlike a join: there is no result message for a
+   sign-in, so this reply is all the page hears. On success the modal goes when
+   the next snapshot arrives without `auth`. */
+function sendSignin(body, card) {
+    var buttons = card.querySelectorAll("button");
+    function enable(on) {
+        for (var i = 0; i < buttons.length; i++) buttons[i].disabled = !on;
+    }
+    enable(false);
+
+    fetch("/api/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+    }).then(function (r) {
+        if (r.ok) {
+            showToast(body.action === "cancel"
+                ? "Sign-in cancelled" : "Sent to vrcd-server", false);
+            return;
+        }
+        showToast(r.status === 503
+            ? "No link to vrcd-server right now"
+            : "The vrcd web server refused that", true);
+        enable(true);
+    }).catch(function () {
+        showToast("Could not reach the vrcd web server", true);
+        enable(true);
     });
 }
 

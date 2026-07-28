@@ -260,6 +260,44 @@ button.head { cursor: pointer; }
 .placeholder { color: var(--dim); text-align: center; padding: 4rem 1rem; font-size: .9rem; }
 .placeholder b { display: block; color: var(--muted); margin-bottom: .5rem; }
 
+/* ---- sign-in modal -----------------------------------------------------
+   vrcd-server asks its front-ends for VRChat credentials and 2FA codes. It
+   sits over everything, including the bottom bar, and offers no dismissal
+   other than Cancel: the server is blocked waiting for an answer, and hiding
+   the prompt would not stop it waiting. Below the toast, so a failure to
+   reach the web server is still readable over it. */
+
+.modal {
+    position: fixed; inset: 0; z-index: 25; padding: 1rem;
+    display: grid; place-items: center;
+    background: rgba(10, 10, 14, .78);
+}
+.modal-card {
+    width: min(26rem, 100%); max-height: 100%; overflow-y: auto;
+    background: var(--panel); border: 1px solid var(--line-hi);
+    border-radius: 12px; padding: 1.25rem;
+}
+.modal-card h2 { font-size: 1.15rem; margin: 0 0 .35rem; }
+.modal-card .why { color: var(--muted); font-size: .85rem; margin-bottom: 1.1rem; }
+.modal-card label {
+    display: block; font-size: .75rem; font-weight: 700; letter-spacing: .05em;
+    text-transform: uppercase; color: var(--dim); margin-bottom: .35rem;
+}
+.modal-card input {
+    width: 100%; min-height: 3rem; margin-bottom: .85rem; font: inherit;
+    background: var(--bg); color: var(--text);
+    border: 1px solid var(--line-hi); border-radius: 8px; padding: 0 .85rem;
+}
+.modal-card input:focus { outline: 2px solid var(--accent-hi); outline-offset: -1px; }
+.modal-card .err {
+    color: #ffb3b3; font-size: .85rem; margin-bottom: .85rem;
+    border-left: 3px solid var(--bad); padding-left: .6rem;
+}
+/* Side by side, as in the inbox: the two are an answer either way, not a
+   confirm and an escape hatch. */
+.modal-card .actions { flex-direction: row; }
+.modal-card .act { flex: 1; }
+
 .toast {
     position: fixed; left: 50%; transform: translateX(-50%);
     bottom: calc(1.5rem + env(safe-area-inset-bottom)); z-index: 30;

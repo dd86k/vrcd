@@ -79,12 +79,27 @@ There is no logout route yet; clearing the cookie is the workaround.
 | GET | `/api/wsticket` | cookie | Single-use WebSocket ticket |
 | POST | `/api/join` | cookie | `{"location":"wrld_...:1234~..."}`, requests a self-invite |
 | POST | `/api/notification` | cookie | `{"notification_id":"not_...","action":"accept"\|"hide"}` |
+| POST | `/api/auth` | cookie | Answers a delegated VRChat sign-in prompt |
 | WS | `/ws/:ticket` | ticket | State snapshots and feed events |
 
 `/static/` is deliberately open: the assets carry no state, and the login page
 needs its stylesheet before there is a session to check. Names are restricted to
 a plain file name (no separators, no traversal, nothing hidden, 64 chars max)
 and only known extensions are served.
+
+`/api/auth` takes one of three bodies:
+
+```json
+{"action": "credentials", "username": "...", "password": "..."}
+{"action": "two_factor",  "code": "123456"}
+{"action": "cancel"}
+```
+
+Unlike the two above it is not fire and forget: there is no result message for
+a sign-in, so the reply is all the page hears. 200 means the answer went down
+the link, 503 means there is no link to put it on, 400 means the action was not
+one of the three or the fields it needs were empty (a blank password is refused
+here rather than spending one of VRChat's login attempts on it).
 
 Browser-to-server actions go over plain HTTP rather than up the socket, which
 keeps the WebSocket unidirectional. Both are fire and forget: the outcome comes
@@ -174,6 +189,31 @@ name, and the sender is by definition not in the roster, so the row shows the
 user ID until the next reconnect refetches the list. The server resolves names
 for the fetched list but the link cannot do a REST lookup of its own.
 
+### VRChat sign-in
+
+vrcd-server holds the VRChat session; this process never talks to VRChat. When
+the server runs headless and needs credentials or a 2FA code it delegates the
+prompt to whichever front-end is connected, as an `auth_request`, and the first
+`auth_response` wins. The SDL client has answered these since it existed; this
+front-end answers the same ones, so a server can be signed in from a browser.
+
+The prompt goes into the state snapshot as `auth` and the page puts a modal
+over everything. Answering clears it locally the moment the response is on the
+wire, which closes the modal on *every* browser: there is no "answered" message
+to wait for, and a wrong answer comes back as a fresh `auth_request` carrying
+the error. A server that is already waiting when this process connects replays
+the prompt after `auth_ok`, so a browser that arrives mid-prompt still sees it.
+A dropped link clears it too, since an answer would have nowhere to go and the
+server re-sends after the next `auth_ok`.
+
+Cancel is an answer, not a dismissal: the server stops waiting, and a headless
+one gives up on the sign-in.
+
+> **Note:** the password crosses the browser-to-web-server hop, so this is one
+> more reason to keep the listener on loopback or behind TLS. It is held only
+> long enough to forward and is never logged, and with no `--web-secret` set
+> anyone who can reach the port can answer these prompts.
+
 ### Feed seeding
 
 On connect the link sends `fetch_older` with `before_id: long.max` and a limit
@@ -197,16 +237,17 @@ TCP client for the vrcd-server JSON-L API, on its own thread.
 
 - Interprets `auth_ok`, `self`, `status`, `friends`, `event`, `event_older`,
   `older_fetched`, `join_instance_result`, `notifications`,
-  `notification_action_result`, `ping`, `error`. Everything else is logged and
-  dropped.
+  `notification_action_result`, `auth_request`, `ping`, `error`. Everything
+  else is logged and dropped.
 - `self()`, `status()`, `roster()`, `joinResult()`, `notifications()`,
-  `notifyResult()` -- mutex-guarded snapshots for HTTP threads.
-- `requestJoin(location)`, `requestNotificationAction(id, action)` -- safe from
-  any thread; sends are serialized.
+  `notifyResult()`, `authPrompt()` -- mutex-guarded snapshots for HTTP threads.
+- `requestJoin(location)`, `requestNotificationAction(id, action)`,
+  `submitCredentials(user, pass)`, `submitTwoFactor(code)`, `cancelAuth()` --
+  safe from any thread; sends are serialized.
 - Change and feed callbacks fire on the network thread, outside the state lock
   (the callback rebuilds a snapshot, which takes that same lock).
 - Types: `SelfInfo`, `LinkStatus`, `FeedEntry`, `JoinResult`,
-  `NotifyActionResult`.
+  `NotifyActionResult`, `AuthPrompt`.
 
 ### `web/hub.d`
 Fan-out to connected browsers. `publishState()`, `publishFeed()`, and `serve()`
@@ -267,6 +308,7 @@ State snapshot, sent on every change and also returned by `/api/state`:
     "sender_user_id": "usr_...", "sender_name": "...", "message": "...",
     "location": "", "received_at_unix": 1753632000
   }],
+  "auth": { "kind": "two_factor", "method": "totp", "error": "Invalid code" },
   "join": { "attempted": true, "location": "...", "success": true, "error": "" },
   "notify_action": {
     "attempted": true, "notification_id": "not_...", "action": "accept",
@@ -277,7 +319,11 @@ State snapshot, sent on every change and also returned by `/api/state`:
 
 `self` is absent until the server says who is logged in, `join` until a
 self-invite has been attempted this session, and `notify_action` until a
-notification has been answered. `notifications` is always present, empty array
+notification has been answered. `auth` is there only while vrcd-server is
+waiting on a sign-in answer, so its presence is what raises the modal; `kind`
+is `credentials` or `two_factor`, `method` is VRChat's `totp`, `otp` or
+`emailOtp` and is empty on a credentials prompt, and `error` carries what went
+wrong last time. `notifications` is always present, empty array
 included: the page has to tell "nothing waiting" apart from "the link has not
 answered yet", and its length is the badge on the rail. `location` is set only
 on an invite, and is what lets the row offer a join instead of an

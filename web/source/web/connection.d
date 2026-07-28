@@ -83,6 +83,24 @@ struct JoinResult
     string error;
 }
 
+/// A VRChat sign-in prompt vrcd-server has delegated to its front-ends.
+///
+/// vrcd-server holds the VRChat session. When it runs headless and needs
+/// credentials or a 2FA code it asks whoever is connected over the JSON-L API,
+/// and the first answer wins. This is the same delegation the SDL client
+/// answers, so either front-end can sign the server in.
+struct AuthPrompt
+{
+    /// False when nothing is being asked for.
+    bool active;
+    /// "credentials" or "two_factor".
+    string kind;
+    /// 2FA method on a two_factor prompt: "totp", "otp", or "emailOtp".
+    string method;
+    /// What went wrong last time (e.g. "Invalid code"). Empty on a first ask.
+    string error;
+}
+
 /// Outcome of the most recent accept/hide, for feedback on the page.
 struct NotifyActionResult
 {
@@ -178,6 +196,48 @@ class ServerLink
             return lastNotifyAction;
     }
 
+    /// The VRChat sign-in prompt the server is waiting on, if any.
+    AuthPrompt authPrompt()
+    {
+        synchronized (stateMutex)
+            return pendingAuth;
+    }
+
+    /// Answer a credentials prompt. Safe to call from an HTTP thread; the
+    /// server either signs in or asks again with an error.
+    bool submitCredentials(string username, string password)
+    {
+        logInfo("Sending VRChat credentials for %s to vrcd-server", username);
+        return answerAuth(JSONValue([
+            "type":     JSONValue("auth_response"),
+            "kind":     JSONValue("credentials"),
+            "username": JSONValue(username),
+            "password": JSONValue(password),
+        ]));
+    }
+
+    /// Answer a two-factor prompt.
+    bool submitTwoFactor(string code)
+    {
+        logInfo("Sending a %d-digit 2FA code to vrcd-server", code.length);
+        return answerAuth(JSONValue([
+            "type": JSONValue("auth_response"),
+            "kind": JSONValue("two_factor"),
+            "code": JSONValue(code),
+        ]));
+    }
+
+    /// Refuse the prompt. The server gives up on that sign-in attempt, which
+    /// for a headless server means it stops waiting and exits.
+    bool cancelAuth()
+    {
+        logWarn("Cancelling the VRChat sign-in vrcd-server asked for");
+        return answerAuth(JSONValue([
+            "type":      JSONValue("auth_response"),
+            "cancelled": JSONValue(true),
+        ]));
+    }
+
     /// Ask the server to self-invite us to an instance. Safe to call from an
     /// HTTP thread: sends are serialized and the reply arrives asynchronously
     /// as a `join_instance_result`.
@@ -255,6 +315,7 @@ private:
     /// friend request gets accepted.
     NotificationInfo[] inbox;
     NotifyActionResult lastNotifyAction;
+    AuthPrompt pendingAuth;
 
     /// Fire the change callback. Never called with the state lock held: the
     /// callback rebuilds a snapshot, which takes that same lock.
@@ -262,6 +323,26 @@ private:
     {
         if (onChange)
             onChange();
+    }
+
+    /// Write one `auth_response` and take the prompt down once it is away.
+    ///
+    /// The prompt is cleared here rather than on a reply, because there is no
+    /// reply: the server either signs in or asks again. Every browser is
+    /// looking at the same prompt, so the one that got answered has to close
+    /// on all of them, and a wrong answer comes back as a fresh auth_request.
+    bool answerAuth(JSONValue message)
+    {
+        if (sendMessage(message) == false)
+        {
+            logWarn("Sign-in answer dropped: no link to vrcd-server");
+            return false;
+        }
+
+        synchronized (stateMutex)
+            pendingAuth = AuthPrompt.init;
+        notifyChange();
+        return true;
     }
 
     void runLoop()
@@ -280,6 +361,10 @@ private:
             {
                 linkStatus.connected = false;
                 linkStatus.vrchatConnected = false;
+                // An answer has nowhere to go now, and the server replays a
+                // still-pending prompt after the next auth_ok. Leaving the
+                // modal up would collect a password for a socket that is gone.
+                pendingAuth = AuthPrompt.init;
             }
             notifyChange();
 
@@ -529,6 +614,26 @@ private:
                 logInfo("Self-invite sent for %s", result.location);
             else
                 logWarn("Self-invite for %s failed: %s", result.location, result.error);
+            break;
+
+        case "auth_request":
+            // The server cannot reach VRChat without this, so it goes into the
+            // snapshot and the page puts a modal over everything. A server
+            // connecting mid-prompt replays it after auth_ok, so a browser
+            // that arrives late still sees it.
+            AuthPrompt asked;
+            asked.active = true;
+            asked.kind   = jsonString(message, "kind");
+            asked.method = jsonString(message, "method");
+            asked.error  = jsonString(message, "error");
+
+            synchronized (stateMutex)
+                pendingAuth = asked;
+            notifyChange();
+
+            logInfo("vrcd-server is asking for %s", asked.kind == "credentials"
+                ? "VRChat credentials"
+                : "a 2FA code (" ~ asked.method ~ ")");
             break;
 
         case "status":

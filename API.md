@@ -281,6 +281,19 @@ Upload a PNG as a print. Same size limits as `upload_image`; additionally thrott
 | `world_name`  | string | Optional. World name                                   |
 | `timestamp`   | string | Optional. ISO 8601; defaults to the current time (UTC) |
 
+### `auth_response`
+
+Answer to an `auth_request`. The first answer to arrive wins; the server does not acknowledge it, it either signs in to VRChat or sends a new `auth_request` carrying the error. A cancel makes the server give up on that sign-in attempt, which for a headless server means it stops waiting and exits.
+
+| Field       | Type   | Description                                              |
+|-------------|--------|----------------------------------------------------------|
+| `type`      | string | `"auth_response"`                                        |
+| `kind`      | string | One of `"credentials"`, `"two_factor"`                   |
+| `username`  | string | Credentials only. VRChat username or email               |
+| `password`  | string | Credentials only                                         |
+| `code`      | string | Two-factor only. The 2FA code                            |
+| `cancelled` | bool   | Optional. `true` refuses the prompt; other fields ignored |
+
 ### `pong`
 
 Keepalive response to server's `ping`.
@@ -308,6 +321,19 @@ Authentication failed.
 |-----------|--------|--------------------|
 | `type`    | string | `"auth_error"`     |
 | `message` | string | Error description  |
+
+### `auth_request`
+
+The server needs to sign in to VRChat and has no TTY to ask on, so it delegates the prompt to its clients. Broadcast when the sign-in reaches that point, and replayed to a client that authenticates while one is still pending. Answered with `auth_response`; the server waits 30 minutes before giving up. Both front-ends handle these, so either can sign a headless server in.
+
+Note this is VRChat's sign-in, not this API's: the `auth` handshake above is a separate shared secret.
+
+| Field    | Type   | Description                                                     |
+|----------|--------|-----------------------------------------------------------------|
+| `type`   | string | `"auth_request"`                                                |
+| `kind`   | string | One of `"credentials"`, `"two_factor"`                          |
+| `method` | string | Two-factor only. One of `"totp"`, `"otp"`, `"emailOtp"`         |
+| `error`  | string | Optional. Why the previous attempt failed (e.g. `"Invalid code"`) |
 
 ### `status`
 
