@@ -6,7 +6,7 @@ copyright "Copyright © 2026, dd86k <dd@dax.moe>"
 license "BSD-3-Clause-Clear"
 
 dependency "ddlogger" repository="git+https://github.com/dd86k/ddlogger.git" version="4397d8e57a88bd6b3a3e5e4c846ba97ac3bfd364"
-dependency "ddhttpd" repository="git+https://github.com/dd86k/ddhttpd.git" version="02f6fc7175ba8063d16eff03f17189fee71b1045"
+dependency "ddhttpd" repository="git+https://github.com/dd86k/ddhttpd.git" version="b233be401f4a249d52d8c65a082dc9a1b32a64a0"
 
 # ".." for VERSION
 stringImportPaths ".."
