@@ -69,6 +69,41 @@ system: one secret, sessions in memory, all of them lost on restart.
 Without `--web-secret` every route is open and the server says so at startup.
 There is no logout route yet; clearing the cookie is the workaround.
 
+### Installing as an app
+
+The front-end is a PWA, so a browser will offer to install it and run it in its
+own window with no address bar -- which is most of the point on a phone, and
+what makes it reasonable to open from a headset browser.
+
+What that takes is `manifest.webmanifest` (name, `#16161c` theme, a 512px icon
+plus a maskable variant for Android launchers, `display: standalone`) and
+`sw.js`. Both are served from the root rather than `/static/`: a service
+worker's scope is the directory it came from, so `/static/sw.js` could only
+control `/static/`, and the manifest is fetched without cookies, which puts it
+outside a session check regardless. Neither carries state and the install
+prompt has to work before signing in, so both are open. iOS ignores the
+manifest entirely and reads the `apple-mobile-web-app-*` tags in the two
+documents instead.
+
+The worker is there for installability, not offline use: every screen is a view
+of state that arrives over the WebSocket, and with no link to vrcd-server there
+is nothing truthful to show. It caches the shell (`app.css`, `app.js`, the
+icon, the manifest, and each page as it is visited) and reaches for that cache
+only after the network has already failed, so an unreachable server opens the
+page instead of a browser error. Network-first also keeps the edit-and-refresh
+workflow intact -- a cache-first worker would serve the previous `app.css` for
+one more load after every edit. `/api/`, `/ws/`, `/login` and the worker itself
+are never intercepted: live state, a 202 from the image proxy, and the sign-in
+redirect are all things a cache would get wrong. Bump `CACHE` in `sw.js` when
+the precache list changes; activation deletes every other cache.
+
+**Registration needs a secure origin.** Browsers only allow service workers on
+HTTPS or `localhost`, and vrcd-web serves plain HTTP, so a phone pointed at
+`http://192.168.x.x:8080` gets the page but no install prompt (the failure is
+logged to the console and nothing else breaks). Put it behind a TLS reverse
+proxy, or reach it over something that terminates TLS for you, and the prompt
+appears.
+
 ## Routes
 
 | Method | Path | Auth | Purpose |
@@ -77,6 +112,8 @@ There is no logout route yet; clearing the cookie is the workaround.
 | GET | `/login` | open | Sign-in page |
 | POST | `/login` | -- | Exchange the secret for a session cookie |
 | GET | `/static/:name` | open | One file from the web root |
+| GET | `/manifest.webmanifest` | open | Web app manifest |
+| GET | `/sw.js` | open | Service worker |
 | GET | `/api/state` | cookie | Current snapshot, same JSON as the socket sends |
 | GET | `/api/wsticket` | cookie | Single-use WebSocket ticket |
 | POST | `/api/join` | cookie | `{"location":"wrld_...:1234~..."}`, requests a self-invite |

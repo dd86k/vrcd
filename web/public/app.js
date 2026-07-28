@@ -2281,3 +2281,15 @@ window.addEventListener("resize", layoutCrop);
 watchDrops();
 render();
 connect();
+
+/* Registered last and on load: the worker is what makes the browser offer to
+   install the page, and none of the screen depends on it, so it waits until
+   the shell is drawn and the socket is on its way. Registration only happens
+   on a secure origin -- https, or localhost -- so a plain-http LAN address
+   fails here, which is not worth interrupting the page over. */
+if ("serviceWorker" in navigator)
+    window.addEventListener("load", function () {
+        navigator.serviceWorker.register("/sw.js").catch(function (err) {
+            console.log("service worker not registered:", err);
+        });
+    });

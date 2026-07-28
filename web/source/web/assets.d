@@ -194,6 +194,7 @@ private const(char)* contentTypeFor(string ext)
     case ".css":  return "text/css; charset=utf-8".ptr;
     case ".js":   return "text/javascript; charset=utf-8".ptr;
     case ".json": return "application/json".ptr;
+    case ".webmanifest": return "application/manifest+json".ptr;
     case ".svg":  return "image/svg+xml".ptr;
     case ".png":  return "image/png".ptr;
     case ".jpg", ".jpeg": return "image/jpeg".ptr;

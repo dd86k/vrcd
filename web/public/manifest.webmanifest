@@ -1,0 +1,26 @@
+{
+    "id": "/",
+    "name": "vrcd",
+    "short_name": "vrcd",
+    "description": "VRChat friends, feed, and content, from your own vrcd server.",
+    "start_url": "/",
+    "scope": "/",
+    "display": "standalone",
+    "orientation": "any",
+    "background_color": "#16161c",
+    "theme_color": "#16161c",
+    "icons": [
+        {
+            "src": "/static/icon-512.png",
+            "type": "image/png",
+            "sizes": "512x512",
+            "purpose": "any"
+        },
+        {
+            "src": "/static/icon-maskable.svg",
+            "type": "image/svg+xml",
+            "sizes": "any",
+            "purpose": "maskable"
+        }
+    ]
+}

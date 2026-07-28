@@ -189,6 +189,22 @@ int main(string[] args)
             serveAsset(req, *name);
             return REQUEST_OK;
         })
+        // Both live at the root rather than under /static/ because their paths
+        // are load-bearing: a worker's scope is the directory it was served
+        // from, so /static/sw.js could only ever control /static/, and the
+        // manifest is fetched without cookies, which puts it outside a session
+        // check either way. Same open reasoning as /static/: neither carries
+        // state, and the install prompt has to work before signing in.
+        .get(`/sw.js`, (ref HTTPRequest req)
+        {
+            serveAsset(req, "sw.js");
+            return REQUEST_OK;
+        })
+        .get(`/manifest.webmanifest`, (ref HTTPRequest req)
+        {
+            serveAsset(req, "manifest.webmanifest");
+            return REQUEST_OK;
+        })
         .post(`/login`, (ref HTTPRequest req)
         {
             string token = sessions.login(formField(cast(const(char)[])req.payload, "secret"));

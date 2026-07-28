@@ -3,7 +3,17 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#16161c">
 <title>vrcd - sign in</title>
+<!-- The same manifest, so the install prompt is offered to someone who lands
+     here first; the installed app still starts at "/" and is sent back here
+     when there is no session. -->
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/static/icon-512.png">
+<link rel="apple-touch-icon" href="/static/icon-512.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="vrcd">
 <link rel="stylesheet" href="/static/login.css">
 </head>
 <body>
