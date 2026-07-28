@@ -208,6 +208,80 @@ button.head { cursor: pointer; }
 .notify .actions { flex-direction: row; margin-top: .85rem; }
 .notify .act { flex: 1; }
 
+/* ---- stuff -------------------------------------------------------------
+   A grid of cards rather than rows: these entries are mostly their artwork,
+   and the cards are sized so a headset can hit one without aiming. */
+
+/* One row, scrolled sideways rather than wrapped: a second row would push the
+   grid off the screen on a phone, and the chips are thumb-sized on purpose. */
+.chips {
+    display: flex; gap: .4rem; margin-bottom: .75rem;
+    overflow-x: auto; overscroll-behavior-x: contain;
+    scrollbar-width: none;
+}
+.chips::-webkit-scrollbar { display: none; }
+.chip {
+    display: flex; align-items: center; gap: .4rem; flex: none;
+    min-height: 2.75rem; padding: 0 .9rem; cursor: pointer;
+    font-size: .78rem; font-weight: 700; letter-spacing: .05em;
+    color: var(--muted); background: var(--panel);
+    border: 1px solid var(--line); border-radius: 999px;
+}
+.chip:hover { background: var(--panel-hi); border-color: var(--line-hi); }
+.chip.on { color: var(--text); background: var(--accent); border-color: var(--accent-hi); }
+.chip .n { font-size: .7rem; font-weight: 600; color: var(--dim); }
+.chip.on .n { color: #cfd9ea; }
+
+.bar {
+    display: flex; align-items: center; flex-wrap: wrap; gap: .5rem;
+    margin-bottom: .75rem;
+}
+.bar .count { flex: 1; min-width: 6rem; color: var(--muted); font-size: .85rem; }
+/* Takes the whole second line: a caption is text, and a text box squeezed
+   between two buttons is a text box nobody types in. */
+.note-input {
+    flex-basis: 100%; min-height: 2.75rem; font: inherit;
+    background: var(--panel); color: var(--text);
+    border: 1px solid var(--line); border-radius: 8px; padding: 0 .85rem;
+}
+.note-input::placeholder { color: var(--dim); }
+.act.small { width: auto; min-height: 2.5rem; padding: 0 1rem; font-size: .8rem; }
+.err {
+    color: #ffb3b3; font-size: .85rem; margin-bottom: .85rem;
+    border-left: 3px solid var(--bad); padding-left: .6rem;
+}
+.hint { color: var(--dim); font-size: .8rem; padding: .5rem .25rem; }
+
+.items {
+    display: grid; gap: .6rem;
+    grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+}
+.item {
+    display: flex; flex-direction: column; gap: .5rem;
+    padding: .6rem; text-align: left; cursor: pointer;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+}
+.item:hover { background: var(--panel-hi); border-color: var(--line-hi); }
+.item.on { background: var(--accent); border-color: var(--accent-hi); }
+.item .who { display: flex; flex-direction: column; gap: .25rem; min-width: 0; }
+.item .n { font-weight: 600; font-size: .9rem;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item .t { color: var(--muted); font-size: .75rem;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item.on .t { color: #cfd9ea; }
+.item .pill { align-self: flex-start; }
+
+/* The gradient shows through until the proxy answers, and stays for the many
+   items that have no artwork at all. */
+.thumb {
+    aspect-ratio: 1; width: 100%; border-radius: 8px; overflow: hidden;
+    border: 1px solid var(--line); position: relative;
+}
+.thumb.lg { aspect-ratio: 4 / 3; margin-bottom: .9rem; }
+.thumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
+
+.blurb { font-size: .9rem; margin-bottom: 1rem; overflow-wrap: anywhere; }
+
 /* ---- right detail pane ------------------------------------------------- */
 
 .detail { background: #191920; }
@@ -353,8 +427,10 @@ button.head { cursor: pointer; }
 
 /* Touch devices leave :hover paint stuck after a tap. */
 @media (hover: none) {
-    .row:hover, .event:hover, .act:hover, .rail button:hover { background: var(--panel); }
-    .row.on:hover { background: var(--accent); }
+    .row:hover, .event:hover, .act:hover, .item:hover, .chip:hover,
+    .rail button:hover { background: var(--panel); }
+    .row.on:hover, .item.on:hover, .chip.on:hover { background: var(--accent); }
+    .item:hover, .chip:hover { border-color: var(--line); }
     .act.primary:hover { background: var(--accent); }
     .group-head:hover { border-color: var(--line); }
 }

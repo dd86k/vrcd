@@ -13,6 +13,8 @@ vrcd_web [options]
       --secret      Shared secret for vrcd-server auth
       --web-secret  Shared secret browsers must present to sign in
       --web-root    Directory holding the front-end files
+      --image-cache vrcd-server's image cache directory, when it shares this host
+      --no-image-cache  Never read that cache, even on one host
   -v, --verbose     Enable verbose logging
       --version     Show version and exit
 ```
@@ -79,6 +81,10 @@ There is no logout route yet; clearing the cookie is the workaround.
 | GET | `/api/wsticket` | cookie | Single-use WebSocket ticket |
 | POST | `/api/join` | cookie | `{"location":"wrld_...:1234~..."}`, requests a self-invite |
 | POST | `/api/notification` | cookie | `{"notification_id":"not_...","action":"accept"\|"hide"}` |
+| GET | `/api/content/:section` | cookie | One section's entries, and the fetch that fills them. `?refresh=1` re-lists, `?more=1` asks for the next page |
+| POST | `/api/content` | cookie | `{"action":"...","id":"...","slot":"drone"}` -- see below |
+| POST | `/api/upload` | cookie | `{"tag":"gallery"\|"icon"\|"sticker"\|"emoji"\|"print","data_base64":"...","note":"..."}` |
+| GET | `/api/image/:file_id` | cookie | One proxied VRChat image, `?v=` version and `?size=` edge |
 | POST | `/api/auth` | cookie | Answers a delegated VRChat sign-in prompt |
 | WS | `/ws/:ticket` | ticket | State snapshots and feed events |
 
@@ -101,13 +107,28 @@ the link, 503 means there is no link to put it on, 400 means the action was not
 one of the three or the fields it needs were empty (a blank password is refused
 here rather than spending one of VRChat's login attempts on it).
 
+`/api/content` takes one action per request:
+
+| Action | ID | Effect |
+|--------|----|--------|
+| `equip` | `inv_...` | Puts the item in `slot` (`drone`, `portal`, `warp`) |
+| `unequip` | -- | Empties `slot`; VRChat addresses the slot, not the item |
+| `consume` | `inv_...` | Uses the item up |
+| `delete_file` | `file_...` | Deletes a gallery image, icon, sticker or emoji |
+| `delete_print` | `prnt_...` | Deletes a print |
+| `set_icon` | `file_...` | Sets the profile icon, or clears it when the ID is empty |
+
 Browser-to-server actions go over plain HTTP rather than up the socket, which
-keeps the WebSocket unidirectional. Both are fire and forget: the outcome comes
-back from vrcd-server as a `join_instance_result` or a
-`notification_action_result` and reaches the page in the next state broadcast,
-which is also what drops an answered notification from the inbox. An action
-other than `accept` or `hide` is refused here rather than travelling down to
-vrcd-server to be refused there.
+keeps the WebSocket unidirectional. They are fire and forget: the outcome comes
+back from vrcd-server as a `join_instance_result`, a
+`notification_action_result` or one of the content results, and reaches the
+page in the next state broadcast, which is also what drops an answered
+notification from the inbox. An action other than the ones listed is refused
+here rather than travelling down to vrcd-server to be refused there.
+
+Request bodies are capped at 16 MB, which is VRChat's 10 MB picture plus base64
+expansion and the JSON around it. Past that the reply is a 413 and nothing is
+buffered.
 
 ## Architecture
 
@@ -189,6 +210,123 @@ name, and the sender is by definition not in the roster, so the row shows the
 user ID until the next reconnect refetches the list. The server resolves names
 for the fetched list but the link cannot do a REST lookup of its own.
 
+### Stuff
+
+The STUFF tab is six sections over one mechanism:
+
+| Section | Source | Actions |
+|---------|--------|---------|
+| Gallery | `get_files` tag `gallery` | Upload, delete |
+| Icons | `get_files` tag `icon` | Upload, delete, set or clear the profile icon |
+| Stickers | `get_files` tag `sticker` | Upload, delete |
+| Emoji | `get_files` tag `emoji` | Upload, delete |
+| Prints | `get_prints` | Upload with a caption, delete |
+| Items | `get_inventory` | Equip, unequip, consume |
+
+Items are props, bundles, drone and portal skins and warp effects. Emoji and
+stickers are not among them: vrcd-server filters them out of `get_inventory`
+because they have sections of their own above.
+
+The entries do *not* ride in the state snapshot. A few hundred of them would be
+re-encoded and fanned out to every browser on every friend movement, and the
+tab is usually closed. So the snapshot carries a small block per section --
+`revision`, `loading`, `count`, `more`, `error` -- and the entries come from
+`GET /api/content/:section`. A revision that moves is the page's cue to come
+back for a new copy; a bump that lands while a fetch is in flight is
+remembered, since the copy already on its way is the one *before* the change.
+
+Nothing is fetched until someone opens a section: each listing costs
+vrcd-server a VRChat call, and most sessions never look at most of them. After
+that a section refreshes itself, because several things change one and only
+some of them are buttons here:
+
+- an action from this page -- the result says which section it touched, except
+  a delete, which does not name one, so every *loaded* files section re-lists,
+- an upload, which refreshes the section it went to,
+- a `content-refresh` event naming that section, which is how VRChat reports a
+  change made in-game or on another device,
+- a reconnect, but only for sections already fetched -- nothing that happened
+  while the link was down replays as an event.
+
+A failed refresh keeps the list that is on screen rather than blanking it: it
+is still the last thing VRChat said, and an empty section reads as "you own
+nothing" rather than "that did not work".
+
+Only the files sections page, at 100 entries a request (vrcd-server's own cap);
+prints and the inventory arrive whole. A full page means there may be another,
+which is what puts LOAD MORE under the grid, and those pages append.
+
+Deletes and consumes are two taps, and the second is not where the first
+landed: Cancel takes that spot, because none of them can be undone. Equip and
+unequip are both offered whenever an item is equippable, rather than guessing
+which one applies: VRChat reports which slot an item belongs to, not whether it
+is currently sitting in it, and both are one reversible tap. An item whose slot
+comes back empty falls back to its type (`droneskin` -> drone, `portalskin` ->
+portal, `warpeffect` -> warp), which are the only three slots vrcd-server
+accepts.
+
+Uploads are a file picker, read as base64 in the browser and posted whole. PNG
+and the 10 MB ceiling are checked here so a picture that was never going to be
+accepted does not travel twice; everything else -- dimensions, and the square
+requirement on stickers and emoji -- is vrcd-server's call, since it is the
+side that knows VRChat's rules and has to answer for them. There is no crop
+step yet, so a non-square sticker comes back refused rather than trimmed.
+Animated emoji upload as a still: the sprite-sheet fields exist in the API but
+this page has nothing to describe them with.
+
+### Image proxy
+
+A browser cannot fetch a VRChat file: the session lives on vrcd-server. So an
+image travels down the JSON-L link as base64 and back out over HTTP, which is
+far too slow to do inside a request handler -- ddhttpd runs handlers on the
+same thread as its poll loop, so one blocking handler stalls every other
+request and every WebSocket on that thread.
+
+`GET /api/image/:file_id` therefore never blocks:
+
+- **200** with the bytes, when they are cached.
+- **202** when the request has been put on the link. The page retries, backing
+  off at 800 ms for about 30 seconds; vrcd-server spaces uncached downloads
+  250 ms apart, so a cold grid takes a while to fill in.
+- **502** when VRChat or vrcd-server refused it. That is remembered for a
+  minute, so a wall of broken thumbnails does not hammer the link, and a
+  transient failure still heals.
+
+The cache is bounded by bytes (32 MB, oldest evicted first) and never
+invalidated: a file ID, version and size always describe the same picture, so
+a new upload is a new key. Replies carry a long `Cache-Control`, and the page
+keeps the object URLs it made, since the shell redraws on every snapshot.
+
+#### Reading vrcd-server's cache
+
+When vrcd-server is on this host, most of what the page asks for is already on
+its disk, so a miss checks there before going down the link. The name is the
+one vrcd-server writes -- `<image cache>/<file id>.<version>.<size>` -- and two
+properties of that cache make reading it from outside safe: entries are written
+to a temporary name and renamed into place, so a half-written file is never
+visible, and the name is the whole identity of the content, so there is no such
+thing as a stale hit.
+
+It is a shortcut around base64 and a round trip, never around vrcd-server: a
+miss still goes down the link, which is where the VRChat session, the rate
+limiter and the 250 ms spacing live. What it buys is that everything already
+downloaded answers 200 on the first request instead of 202 and a retry.
+
+The directory is `--image-cache` when given, otherwise vrcd-server's own
+default (`~/.local/share/vrcd/imagecache`, or `%APPDATA%\vrcd\imagecache`),
+used only when it is there. A path that does not exist is a warning rather
+than a startup error: sharing a host is a deployment choice, and losing the
+shortcut costs speed, not function. `--no-image-cache` turns it off outright.
+Reads bump the file's mtime, because vrcd-server evicts by mtime and bumps it
+on its own hits -- without that, the entries this page uses most would look
+like the coldest ones it holds. That bump is best effort, since the directory
+may belong to another user.
+
+`?size=` is 0 for the original file or one of VRChat's thumbnail edges (128,
+256, 512, 1024); the grid asks for 256 and the detail pane for 512. A file ID
+that is not shaped like one is refused here, since it lands in a path
+vrcd-server builds.
+
 ### VRChat sign-in
 
 vrcd-server holds the VRChat session; this process never talks to VRChat. When
@@ -237,17 +375,30 @@ TCP client for the vrcd-server JSON-L API, on its own thread.
 
 - Interprets `auth_ok`, `self`, `status`, `friends`, `event`, `event_older`,
   `older_fetched`, `join_instance_result`, `notifications`,
-  `notification_action_result`, `auth_request`, `ping`, `error`. Everything
-  else is logged and dropped.
+  `notification_action_result`, `files`, `prints`, `inventory`,
+  `inventory_action_result`, `delete_file_result`, `delete_print_result`,
+  `set_user_icon_result`, `upload_image_result`, `upload_print_result`,
+  `image`, `auth_request`, `ping`, `error`. Everything else is logged and
+  dropped.
 - `self()`, `status()`, `roster()`, `joinResult()`, `notifications()`,
-  `notifyResult()`, `authPrompt()` -- mutex-guarded snapshots for HTTP threads.
+  `notifyResult()`, `authPrompt()`, `content(section)`, `contentResult()` --
+  mutex-guarded snapshots for HTTP threads.
 - `requestJoin(location)`, `requestNotificationAction(id, action)`,
+  `requestContent(section, force)`, `requestMoreContent(section)`,
+  `requestInventoryAction(action, id, slot)`, `requestContentAction(action,
+  id)`, `requestUpload(tag, base64, note)`, `image(fileId, version, size)`,
   `submitCredentials(user, pass)`, `submitTwoFactor(code)`, `cancelAuth()` --
-  safe from any thread; sends are serialized.
+  safe from any thread; sends are serialized, and none of them block on a
+  reply.
 - Change and feed callbacks fire on the network thread, outside the state lock
-  (the callback rebuilds a snapshot, which takes that same lock).
+  (the callback rebuilds a snapshot, which takes that same lock). An image
+  arriving publishes nothing: the browser is already coming back for it, and a
+  broadcast per thumbnail would put a whole grid's worth of snapshots on every
+  socket.
 - Types: `SelfInfo`, `LinkStatus`, `FeedEntry`, `JoinResult`,
-  `NotifyActionResult`, `AuthPrompt`.
+  `NotifyActionResult`, `AuthPrompt`, `ContentSnapshot`,
+  `ContentActionResult`, plus `CONTENT_SECTIONS` and the two helpers that
+  validate a section name arriving over HTTP.
 
 ### `web/hub.d`
 Fan-out to connected browsers. `publishState()`, `publishFeed()`, and `serve()`
@@ -256,7 +407,20 @@ generation counter and the feed ring.
 
 ### `web/state.d`
 State encoding. `buildStateJSON()` produces the snapshot; `encodeFeedEntry()`
-encodes one feed entry once so the hub can fan the string out as-is.
+encodes one feed entry once so the hub can fan the string out as-is;
+`buildContentJSON()` produces the `/api/content/:section` body around the
+entries vrcd-server already trimmed.
+
+### `web/images.d`
+`ImageCache`: a bounded, mutex-guarded store of proxied images. `lookup()`
+answers ready, pending or failed and tells the caller when it has to start the
+fetch itself; `store()` and `storeFailure()` file the answer. Nothing here
+blocks or knows about the link.
+
+`readFromServerCache()` reads one image straight out of vrcd-server's cache
+directory, and `findServerImageCache()` picks that directory (the flag, else
+vrcd-server's own default, else null for link-only). Both refuse anything that
+could climb out of the directory, since the file ID lands in a path.
 
 ### `web/auth.d`
 `SessionStore` (login, session validation, ticket issue and redeem, expiry
@@ -313,13 +477,27 @@ State snapshot, sent on every change and also returned by `/api/state`:
   "notify_action": {
     "attempted": true, "notification_id": "not_...", "action": "accept",
     "success": true, "error": ""
+  },
+  "content": {
+    "gallery": { "revision": 4, "loading": false, "loaded": true,
+                 "count": 12, "total_count": 0, "more": false, "error": "" },
+    "icon": {}, "sticker": {}, "emoji": {}, "prints": {}, "inventory": {}
+  },
+  "content_action": {
+    "attempted": true, "action": "equip", "id": "inv_...",
+    "success": true, "error": ""
   }
 }
 ```
 
 `self` is absent until the server says who is logged in, `join` until a
-self-invite has been attempted this session, and `notify_action` until a
-notification has been answered. `auth` is there only while vrcd-server is
+self-invite has been attempted this session, `notify_action` until a
+notification has been answered, and `content_action` until something in STUFF
+has been acted on -- its `id` is the entry acted on, or the tag an upload went
+to. `content` is always there, with all six sections, and carries no entries on
+purpose: it says *that* a section moved, and the page fetches the entries from
+`/api/content/:section`. `total_count` is VRChat's own total, which only the
+inventory reports; `more` says the last page came back full. `auth` is there only while vrcd-server is
 waiting on a sign-in answer, so its presence is what raises the modal; `kind`
 is `credentials` or `two_factor`, `method` is VRChat's `totp`, `otp` or
 `emailOtp` and is empty on a credentials prompt, and `error` carries what went
@@ -371,7 +549,7 @@ Tabs:
 | Feed | Live. Newest first, filterable; clicking an event jumps to that friend |
 | Online | Live. Friends grouped by instance, with instance and friend detail |
 | Inbox | Live. Friend requests and invites, oldest first, with a count badge on the rail |
-| Stuff | Placeholder. Needs `get_files` / `get_prints` and an image proxy |
+| Stuff | Live. Gallery, icons, stickers, emoji, prints and inventory items as grids, with uploads, deletes, the profile icon, and equip/unequip/consume |
 | Tools | Placeholder. Most client tools are local and cannot appear here |
 | Profile | Live. Self profile plus the connection block |
 
@@ -395,9 +573,12 @@ each renders a line naming what it is waiting on. One profile layout serves both
 your own profile and a friend's; rows appear only when the field is present, so
 the difference between you and a friend is which fields the record carries.
 
-World thumbnails are stand-in gradients seeded from the world name. Real
-artwork needs an image proxy in front of the server's `get_image`, which does
-not exist yet.
+World thumbnails are stand-in gradients seeded from the world name. The image
+proxy that would replace them exists now, but the roster carries no world image
+to ask it for; that needs the world cache vrcd-server keeps. Everything in
+STUFF goes through the proxy, and falls back to the same gradient when there is
+nothing to fetch -- an item with no artwork, or a file whose only versions were
+deleted (`version: 0`, which the proxy would refuse anyway).
 
 ## Dependencies
 

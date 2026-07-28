@@ -31,7 +31,7 @@ var TABS = [
     { id: "feed",     label: "FEED",     icon: "i-feed",    search: true },
     { id: "online",   label: "ONLINE",   icon: "i-online",  search: true },
     { id: "inbox",    label: "INBOX",    icon: "i-inbox",   badge: true },
-    { id: "stuff",    label: "STUFF",    icon: "i-stuff",   soon: true },
+    { id: "stuff",    label: "STUFF",    icon: "i-stuff",   search: true },
     { id: "tools",    label: "TOOLS",    icon: "i-tools",   soon: true },
     /* The rail opens the profile through the self card at its foot, so only
        the bottom bar, which has no foot, draws a button for it. */
@@ -39,8 +39,6 @@ var TABS = [
 ];
 
 var SOON_TEXT = {
-    stuff: "Gallery, prints and icons come from get_files and get_prints, " +
-           "which need an image proxy in front of them first.",
     tools: "Screenshot and log tools belong to the local client; only the " +
            "ones that go through the server can appear here."
 };
@@ -74,8 +72,60 @@ var TITLES = {
 
 var PLACEHOLDERS = {
     feed: "Filter events...",
-    online: "Filter friends and worlds..."
+    online: "Filter friends and worlds...",
+    stuff: "Filter your stuff..."
 };
+
+/* The STUFF sections, in the order the switcher shows them. The first four are
+   tags on VRChat's files API and take uploads of the same name; prints and
+   items have endpoints of their own. `kind` is what an entry looks like, which
+   is what the card and the detail pane draw from. */
+var SECTIONS = [
+    { id: "gallery",   label: "GALLERY",  kind: "file",  upload: "gallery" },
+    { id: "icon",      label: "ICONS",    kind: "file",  upload: "icon" },
+    { id: "sticker",   label: "STICKERS", kind: "file",  upload: "sticker" },
+    { id: "emoji",     label: "EMOJI",    kind: "file",  upload: "emoji" },
+    { id: "prints",    label: "PRINTS",   kind: "print", upload: "print" },
+    { id: "inventory", label: "ITEMS",    kind: "item" }
+];
+
+/* What each section is, and what VRChat will not accept there. Shown under the
+   grid rather than on the upload button: it is worth reading once. */
+var SECTION_HINTS = {
+    gallery: "Your VRC+ gallery. PNG, up to 2000x2000.",
+    icon: "Profile icons. PNG, up to 2000x2000. Setting one needs VRC+.",
+    sticker: "Stickers you can drop in a world. PNG, square, up to 2000x2000.",
+    emoji: "Emoji you can play. PNG, square, up to 2000x2000. Animated emoji " +
+           "upload as a sprite sheet, which this page cannot describe yet, so " +
+           "they arrive as a still.",
+    prints: "Photos printed in-world. PNG, up to 2000x2000. VRChat keeps 64.",
+    inventory: "Props, bundles and skins. Emoji and stickers are not here: " +
+               "they have their own sections above."
+};
+
+/* Which equip slot an item type belongs to. VRChat reports the slot on the
+   item itself, but only ever one of these three exists, so an item whose slot
+   comes back empty can still be placed by its type. */
+var ITEM_SLOTS = {
+    droneskin: "drone",
+    portalskin: "portal",
+    warpeffect: "warp"
+};
+
+var ACTION_DONE = {
+    equip: "Equipped",
+    unequip: "Unequipped",
+    consume: "Consumed",
+    delete_file: "Deleted",
+    delete_print: "Print deleted",
+    set_icon: "Profile icon updated",
+    upload_image: "Uploaded",
+    upload_print: "Print uploaded"
+};
+
+/* VRChat's own ceiling. Checked here so a picture that was never going to be
+   accepted does not travel twice before being refused. */
+var UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
 
 var FEED_MAX = 500;
 
@@ -90,12 +140,34 @@ var state = {
     notifications: []
 };
 var feed = [];
-var view = { tab: "online", sel: null, filter: "" };
+var view = { tab: "online", sel: null, filter: "", section: "gallery" };
 var lastJoinKey = "";
 var lastNotifyKey = "";
+var lastActionKey = "";
 /* Notification IDs with a request in flight. A snapshot replaces `state`
    wholesale, so the in-flight mark cannot live on the entry itself. */
 var pendingNotifications = {};
+
+/* The STUFF sections, fetched over HTTP rather than carried in the snapshot: a
+   few hundred entries would ride along with every friend movement. The
+   snapshot's `content.<section>.revision` is the signal to come back for a new
+   copy. Everything here is per section and keyed by section id. */
+var content = {};
+var contentInFlight = {};
+var contentDirty = {};
+var contentRevisions = {};
+SECTIONS.forEach(function (section) {
+    content[section.id] = { fetched: false, loading: false, loaded: false,
+                            more: false, error: "", total_count: 0, items: [] };
+    contentRevisions[section.id] = -1;
+});
+
+/* Entry IDs with an action in flight, the entry armed for a destructive
+   confirm, and the sections with an upload going up. All three survive the
+   redraw a snapshot causes. */
+var pendingItems = {};
+var armedAction = "";
+var uploading = {};
 
 /* ------------------------------------------------------------- helpers */
 
@@ -492,6 +564,587 @@ function whenText(unix) {
     return Math.floor(mins / 1440) + "d ago";
 }
 
+/* --------------------------------------------------------------- images */
+
+/* Images are proxied: the browser cannot fetch a VRChat file itself, so the
+   web server asks vrcd-server for it and answers 202 until the bytes land. A
+   miss is therefore a retry, not a failure.
+
+   Object URLs are kept per key. The shell redraws on every snapshot, and a
+   grid that re-fetched its thumbnails each time would keep both ends busy for
+   nothing. A file, version and size never change what they point at, so a
+   cached URL never goes stale. */
+var imageURLs = {};
+/* Key -> the img nodes waiting on it. One fetch serves all of them, which is
+   what stops a redraw mid-fetch from starting a second. */
+var imageWaiting = {};
+var imageFailed = {};
+
+var IMAGE_RETRY_MS = 800;
+/* Roughly 30 seconds of retries. vrcd-server spaces uncached downloads 250 ms
+   apart, so a full grid takes a while to come through on a cold cache. */
+var IMAGE_TRIES = 40;
+
+function imageInto(img, fileId, version, size) {
+    var key = fileId + "/" + version + "/" + size;
+    if (imageURLs[key]) { img.src = imageURLs[key]; return; }
+    if (imageFailed[key]) return;
+
+    if (imageWaiting[key]) { imageWaiting[key].push(img); return; }
+    imageWaiting[key] = [img];
+    fetchImage(key, fileId, version, size, IMAGE_TRIES);
+}
+
+function fetchImage(key, fileId, version, size, tries) {
+    fetch("/api/image/" + encodeURIComponent(fileId) +
+          "?v=" + version + "&size=" + size).then(function (r) {
+        if (r.status === 202) {
+            if (tries > 0) {
+                setTimeout(function () {
+                    fetchImage(key, fileId, version, size, tries - 1);
+                }, IMAGE_RETRY_MS);
+            } else {
+                imageDone(key, null);
+            }
+            return null;
+        }
+        if (r.ok === false) { imageDone(key, null); return null; }
+        return r.blob();
+    }).then(function (blob) {
+        if (blob) imageDone(key, URL.createObjectURL(blob));
+    }).catch(function () {
+        imageDone(key, null);
+    });
+}
+
+function imageDone(key, url) {
+    var waiting = imageWaiting[key] || [];
+    delete imageWaiting[key];
+
+    if (url === null) { imageFailed[key] = true; return; }
+    imageURLs[key] = url;
+    // Nodes from a render that has since been replaced are detached by now,
+    // and setting src on one of those costs nothing.
+    waiting.forEach(function (img) { img.src = url; });
+}
+
+/* The gradient underneath is not a placeholder for a slow image so much as
+   what an artless entry looks like: plenty of items, and any file whose only
+   version was deleted, have no picture to show. */
+function thumb(entry, section, size, big) {
+    var box = el("div", "thumb" + (big ? " lg" : ""));
+    box.style.background = shotBackground(entryName(entry, section) || "?");
+
+    var picture = entryImage(entry, section);
+    if (picture) {
+        var img = document.createElement("img");
+        img.alt = "";
+        box.appendChild(img);
+        imageInto(img, picture.id, picture.version, size);
+    }
+    return box;
+}
+
+/* -------------------------------------------------------------- stuff */
+
+function sectionInfo(id) {
+    for (var i = 0; i < SECTIONS.length; i++)
+        if (SECTIONS[i].id === id) return SECTIONS[i];
+    return SECTIONS[0];
+}
+
+/* Where an entry's picture lives, which is a different pair of fields in each
+   of the three shapes. Null when there is none to ask for: a file version of 0
+   means every version was deleted, and the proxy would only refuse it. */
+function entryImage(entry, section) {
+    var kind = sectionInfo(section).kind;
+
+    if (kind === "file")
+        return entry.version > 0 ? { id: entry.id, version: entry.version } : null;
+    if (kind === "print")
+        return entry.file_id ? { id: entry.file_id, version: entry.file_version || 1 } : null;
+    return entry.image_file_id
+        ? { id: entry.image_file_id, version: entry.image_version || 1 }
+        : null;
+}
+
+function entryName(entry, section) {
+    var kind = sectionInfo(section).kind;
+    if (kind === "print") return entry.note || entry.worldName || entry.id;
+    return entry.name || entry.id;
+}
+
+/* The second line on a card: what the entry is, rather than what it is called.
+   Prints say where they were taken, which is the thing that tells two photos
+   of the same evening apart. */
+function entryDetail(entry, section) {
+    var kind = sectionInfo(section).kind;
+    if (kind === "file") return (entry.extension || entry.mimeType || "").replace(".", "");
+    if (kind === "print") return entry.worldName || "";
+    return entry.itemTypeLabel || entry.itemType || "";
+}
+
+function findEntry(section, id) {
+    var items = content[section].items;
+    for (var i = 0; i < items.length; i++)
+        if (items[i].id === id) return items[i];
+    return null;
+}
+
+function hasFlag(item, flag) {
+    return (item.flags || []).indexOf(flag) >= 0;
+}
+
+/* The slot to equip into. VRChat reports it on the item, but an item that is
+   not in a slot right now can come back with it empty, and the type says
+   where it would go. */
+function itemSlot(item) {
+    return item.equipSlot || ITEM_SLOTS[item.itemType] || "";
+}
+
+function sectionStatus(section) {
+    var held = content[section];
+    if (held.loading || (held.fetched === false && contentInFlight[section]))
+        return "Loading...";
+    if (held.fetched === false) return "";
+
+    var count = held.items.length;
+    // The inventory is the only section that reports a total, and vrcd-server
+    // stops paging at 500, so the two can disagree.
+    if (held.total_count > count) return count + " of " + held.total_count;
+    return count + (count === 1 ? " entry" : " entries");
+}
+
+/* ------------------------------------------------------------ stuff list */
+
+function renderStuff(body) {
+    var section = view.section;
+    var info = sectionInfo(section);
+    var held = content[section];
+
+    body.appendChild(sectionSwitcher());
+    body.appendChild(sectionBar(info, held));
+    restorePrintCaret();
+
+    if (held.error) body.appendChild(el("div", "err", held.error));
+
+    var items = held.items.filter(function (entry) {
+        return matches(entryName(entry, section)) ||
+               matches(entryDetail(entry, section)) ||
+               matches(entry.description);
+    });
+
+    if (items.length === 0) {
+        var why = "Nothing in " + info.label.toLowerCase() + ".";
+        if (held.fetched === false || held.loading) why = "Loading...";
+        else if (view.filter) why = "Nothing matches that filter.";
+        else if (held.error) why = "That section could not be fetched.";
+        body.appendChild(placeholder(why));
+    } else {
+        var grid = el("div", "items");
+        items.forEach(function (entry) { grid.appendChild(entryCard(entry, section)); });
+        body.appendChild(grid);
+    }
+
+    // Only the files sections page, and only when the last page came back
+    // full. Everything else arrives whole.
+    if (held.more) {
+        var more = el("button", "act", "LOAD MORE");
+        more.disabled = held.loading || contentInFlight[section] === true;
+        more.onclick = function () { loadContent(section, "more"); };
+        body.appendChild(more);
+    }
+
+    body.appendChild(el("div", "hint", SECTION_HINTS[section]));
+}
+
+/* Big enough to hit in a headset, and scrolls sideways on a phone rather than
+   wrapping into a second row that pushes the grid off screen. */
+function sectionSwitcher() {
+    var row = el("div", "chips");
+    SECTIONS.forEach(function (section) {
+        var chip = el("button", "chip" + (section.id === view.section ? " on" : ""),
+            section.label);
+        var count = state.content && state.content[section.id];
+        if (count && count.loaded && count.count)
+            chip.appendChild(el("span", "n", String(count.count)));
+        chip.onclick = function () { showSection(section.id); };
+        row.appendChild(chip);
+    });
+    return row;
+}
+
+function sectionBar(info, held) {
+    var bar = el("div", "bar");
+    bar.appendChild(el("div", "count", sectionStatus(info.id)));
+
+    var refresh = el("button", "act small", "REFRESH");
+    refresh.disabled = held.loading || contentInFlight[info.id] === true;
+    refresh.onclick = function () { loadContent(info.id, "refresh"); };
+    bar.appendChild(refresh);
+
+    // The inventory is the one section nothing can be uploaded to: items come
+    // from VRChat, not from a file picker.
+    if (info.upload) {
+        var busy = uploading[info.id] === true;
+        var upload = el("button", "act small primary", busy ? "UPLOADING..." : "UPLOAD");
+        upload.disabled = busy;
+        upload.onclick = function () { pickUpload(info); };
+        bar.appendChild(upload);
+    }
+
+    // Clearing the icon is not aimed at any one file, so it lives up here
+    // rather than in a detail pane. Two taps, since it undoes something the
+    // account is wearing.
+    if (info.id === "icon") {
+        if (armedAction === "clear-icon") {
+            bar.appendChild(cancelButton("small"));
+            var yes = el("button", "act small", "CONFIRM CLEAR");
+            yes.onclick = function () { contentAct("", "set_icon", "", yes); };
+            bar.appendChild(yes);
+        } else {
+            var clear = el("button", "act small", "CLEAR ICON");
+            clear.onclick = function () { armedAction = "clear-icon"; renderList(); };
+            bar.appendChild(clear);
+        }
+    }
+
+    if (info.id === "prints") {
+        var note = el("input", "note-input");
+        note.id = "printNote";
+        note.type = "text";
+        note.placeholder = "Caption for the next print";
+        note.maxLength = 32;
+        note.value = printNote;
+        // A snapshot arrives every time a friend moves and redraws this bar,
+        // so the text lives outside the DOM. Where the caret was is read off
+        // the old box just before the redraw drops it (see renderList), not
+        // from a blur handler: browsers disagree about whether removing a
+        // focused node fires one.
+        note.oninput = function (ev) { printNote = ev.target.value; };
+        bar.appendChild(note);
+    }
+    return bar;
+}
+
+/* Put the caption box back the way the redraw found it. Called once the bar is
+   in the document, since focus does nothing to a detached node. */
+function restorePrintCaret() {
+    if (printCaret < 0) return;
+
+    var note = document.getElementById("printNote");
+    if (note === null) return;
+
+    note.focus();
+    note.setSelectionRange(printCaret, printCaret);
+}
+
+function entryCard(entry, section) {
+    var card = el("button", "item");
+    if (view.sel && view.sel.kind === "content" && view.sel.id === entry.id)
+        card.classList.add("on");
+    card.appendChild(thumb(entry, section, 256));
+
+    var who = el("div", "who");
+    who.appendChild(el("div", "n", entryName(entry, section)));
+    var detail = entryDetail(entry, section);
+    if (detail) who.appendChild(el("div", "t", detail));
+    if (entry.equipSlot)
+        who.appendChild(el("span", "pill", entry.equipSlot.toUpperCase()));
+    card.appendChild(who);
+
+    card.onclick = function () {
+        select({ kind: "content", id: entry.id, section: section });
+    };
+    return card;
+}
+
+/* ---------------------------------------------------------- stuff detail */
+
+function detailContent(body, entry, section) {
+    var kind = sectionInfo(section).kind;
+    document.getElementById("detailTitle").textContent = entryName(entry, section);
+    body.appendChild(thumb(entry, section, 512, true));
+
+    if (kind === "item") detailItemBody(body, entry);
+    else if (kind === "print") detailPrintBody(body, entry);
+    else detailFileBody(body, entry, section);
+}
+
+function detailFileBody(body, file, section) {
+    var pills = el("div", "pills");
+    if (file.extension)
+        pills.appendChild(el("span", "pill", file.extension.replace(".", "").toUpperCase()));
+    (file.tags || []).forEach(function (tag) {
+        pills.appendChild(el("span", "pill", tag.toUpperCase()));
+    });
+    body.appendChild(pills);
+
+    var kv = el("dl", "kv");
+    if (file.name) pair(kv, "Name", file.name);
+    if (file.mimeType) pair(kv, "Type", file.mimeType);
+    // Zero means every version was deleted, which is why the card shows a
+    // gradient rather than the picture.
+    if (file.version !== undefined)
+        pair(kv, "Version", file.version > 0 ? String(file.version) : "none left");
+    pair(kv, "File ID", file.id);
+    body.appendChild(kv);
+
+    var actions = el("div", "actions");
+    var busy = pendingItems[file.id] === true;
+
+    // VRChat takes a profile icon from the icon tag only, so the button is
+    // offered there and nowhere else. It needs VRC+; the server says so if not.
+    if (section === "icon") {
+        var set = el("button", "act primary", "SET AS PROFILE ICON");
+        set.disabled = busy;
+        set.onclick = function () { contentAct(file.id, "set_icon", "", set); };
+        actions.appendChild(set);
+    }
+
+    appendDelete(actions, file.id, "delete_file", busy);
+    actions.appendChild(copyButton("Copy file ID", file.id));
+    body.appendChild(actions);
+}
+
+function detailPrintBody(body, print) {
+    if (print.note) body.appendChild(el("div", "blurb", print.note));
+
+    var kv = el("dl", "kv");
+    if (print.worldName) pair(kv, "World", print.worldName);
+    if (print.authorName) pair(kv, "Author", print.authorName);
+    if (print.timestamp) pair(kv, "Taken", whenDate(print.timestamp));
+    else if (print.createdAt) pair(kv, "Created", whenDate(print.createdAt));
+    pair(kv, "Print ID", print.id);
+    body.appendChild(kv);
+
+    var actions = el("div", "actions");
+    appendDelete(actions, print.id, "delete_print", pendingItems[print.id] === true);
+    actions.appendChild(copyButton("Copy print ID", print.id));
+    body.appendChild(actions);
+}
+
+function detailItemBody(body, item) {
+    var pills = el("div", "pills");
+    if (item.itemTypeLabel || item.itemType)
+        pills.appendChild(el("span", "pill", (item.itemTypeLabel || item.itemType).toUpperCase()));
+    if (item.equipSlot)
+        pills.appendChild(el("span", "pill", item.equipSlot.toUpperCase()));
+    if (item.isArchived) pills.appendChild(el("span", "pill", "ARCHIVED"));
+    (item.flags || []).forEach(function (flag) {
+        pills.appendChild(el("span", "pill", flag.toUpperCase()));
+    });
+    body.appendChild(pills);
+
+    if (item.description) body.appendChild(el("div", "blurb", item.description));
+
+    var kv = el("dl", "kv");
+    if (item.itemType) pair(kv, "Type", item.itemType);
+    var slot = itemSlot(item);
+    if (slot) pair(kv, "Slot", slot);
+    if (item.collections && item.collections.length)
+        pair(kv, "Collections", item.collections.join(", "));
+    if (item.expiryDate) pair(kv, "Expires", whenDate(item.expiryDate));
+    pair(kv, "Item ID", item.id);
+    body.appendChild(kv);
+
+    body.appendChild(itemActions(item));
+}
+
+/* Equip and unequip are both offered whenever the item can be equipped at all,
+   rather than guessing which one applies: VRChat reports the slot, not whether
+   the item is sitting in it, and both are one reversible tap. */
+function itemActions(item) {
+    var actions = el("div", "actions");
+    var busy = pendingItems[item.id] === true;
+    var slot = itemSlot(item);
+
+    if (hasFlag(item, "equippable") && slot) {
+        actions.appendChild(actionButton(item.id, "equip", slot, "EQUIP", true, busy));
+        actions.appendChild(actionButton(item.id, "unequip", slot, "UNEQUIP", false, busy));
+    }
+
+    if (hasFlag(item, "consumable"))
+        appendArmed(actions, item.id, "consume", "", "CONSUME", "CONFIRM CONSUME", busy);
+
+    actions.appendChild(copyButton("Copy item ID", item.id));
+    return actions;
+}
+
+function appendDelete(actions, id, action, busy) {
+    appendArmed(actions, id, action, "", "DELETE", "CONFIRM DELETE", busy);
+}
+
+/* Two taps, and the second one is not where the first landed: Cancel takes
+   that spot, because none of these can be undone. */
+function appendArmed(actions, id, action, slot, label, confirmLabel, busy) {
+    if (armedAction === action + "|" + id) {
+        actions.appendChild(cancelButton(""));
+        actions.appendChild(actionButton(id, action, slot, confirmLabel, false, busy));
+        return;
+    }
+
+    var arm = el("button", "act", label);
+    arm.disabled = busy;
+    arm.onclick = function () { armedAction = action + "|" + id; renderDetail(); };
+    actions.appendChild(arm);
+}
+
+function cancelButton(size) {
+    var cancel = el("button", "act" + (size ? " " + size : ""), "CANCEL");
+    cancel.onclick = function () { armedAction = ""; render(); };
+    return cancel;
+}
+
+function actionButton(id, action, slot, label, primary, busy) {
+    var button = el("button", "act" + (primary ? " primary" : ""), label);
+    button.disabled = busy;
+    button.onclick = function () { contentAct(id, action, slot, button); };
+    return button;
+}
+
+/* Dates arrive as ISO 8601 UTC; show them in the viewer's own timezone, and
+   fall back to the raw string rather than printing "Invalid Date". */
+function whenDate(text) {
+    var when = new Date(text);
+    return isNaN(when.getTime()) ? text : when.toLocaleString();
+}
+
+/* -------------------------------------------------------- stuff actions */
+
+function showSection(section) {
+    view.section = section;
+    view.sel = null;
+    armedAction = "";
+    render();
+
+    // On demand, not on connect: each section costs vrcd-server a VRChat call,
+    // and most sessions never open most of them.
+    if (content[section].fetched === false) loadContent(section, "");
+}
+
+function loadContent(section, mode) {
+    // A bump that lands mid-fetch would otherwise be lost: the revision is
+    // already marked as seen, and this copy is the one before it.
+    if (contentInFlight[section]) { contentDirty[section] = true; return; }
+    contentInFlight[section] = true;
+    contentDirty[section] = false;
+
+    // Reflects the request itself, not the server's: the page has to say it is
+    // doing something between the tap and the first reply.
+    if (view.tab === "stuff") renderList();
+
+    var query = mode === "refresh" ? "?refresh=1" : (mode === "more" ? "?more=1" : "");
+    fetch("/api/content/" + section + query).then(function (r) {
+        if (r.status === 401) { location.href = "/login"; return null; }
+        return r.json();
+    }).then(function (data) {
+        if (!data) return;
+        data.fetched = true;
+        if (!data.items) data.items = [];
+        content[section] = data;
+        armedAction = "";
+    }).catch(function () {
+        showToast("Could not reach the vrcd web server", true);
+    }).then(function () {
+        contentInFlight[section] = false;
+        if (view.tab === "stuff") { renderList(); renderDetail(); }
+        if (contentDirty[section]) loadContent(section, "");
+    });
+}
+
+function contentAct(id, action, slot, button) {
+    var label = button.textContent;
+    // In the map rather than on the button: a snapshot redraws the pane from
+    // scratch and would hand back an enabled button otherwise.
+    if (id) pendingItems[id] = true;
+    armedAction = "";
+    button.disabled = true;
+    button.textContent = "SENDING...";
+
+    fetch("/api/content", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: action, id: id, slot: slot })
+    }).then(function (r) {
+        if (r.ok) return;
+        delete pendingItems[id];
+        showToast("The vrcd web server refused that", true);
+        button.disabled = false;
+        button.textContent = label;
+    }).catch(function () {
+        delete pendingItems[id];
+        showToast("Could not reach the vrcd web server", true);
+        button.disabled = false;
+        button.textContent = label;
+    });
+}
+
+/* ---------------------------------------------------------- stuff upload */
+
+/* Caption for the next print, and where the caret was in it. Both kept out of
+   the DOM so a redraw mid-typing does not take them with it; -1 means the box
+   does not have focus and should not be given it back. */
+var printNote = "";
+var printCaret = -1;
+
+function pickUpload(info) {
+    var input = document.createElement("input");
+    input.type = "file";
+    // PNG only, which is what vrcd-server accepts. The picker enforces it on
+    // most platforms and the check below covers the ones where it does not.
+    input.accept = "image/png,.png";
+    input.onchange = function () {
+        if (input.files && input.files[0]) sendUpload(info, input.files[0]);
+    };
+    input.click();
+}
+
+function sendUpload(info, file) {
+    if (file.type && file.type !== "image/png") {
+        showToast("VRChat only takes PNG here", true);
+        return;
+    }
+    if (file.size > UPLOAD_MAX_BYTES) {
+        showToast("That picture is over 10 MB", true);
+        return;
+    }
+
+    var reader = new FileReader();
+    reader.onerror = function () { showToast("Could not read that file", true); };
+    reader.onload = function () {
+        // readAsDataURL gives "data:image/png;base64,...."; the server wants
+        // the part after the comma.
+        var encoded = String(reader.result);
+        var comma = encoded.indexOf(",");
+        if (comma < 0) { showToast("Could not read that file", true); return; }
+
+        var body = { tag: info.upload, data_base64: encoded.slice(comma + 1) };
+        if (info.id === "prints" && printNote) body.note = printNote;
+
+        uploading[info.id] = true;
+        if (view.tab === "stuff") renderList();
+
+        fetch("/api/upload", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body)
+        }).then(function (r) {
+            if (r.ok) return;
+            uploading[info.id] = false;
+            showToast(r.status === 413
+                ? "That picture is too large to send"
+                : "The vrcd web server refused that upload", true);
+            if (view.tab === "stuff") renderList();
+        }).catch(function () {
+            uploading[info.id] = false;
+            showToast("Could not reach the vrcd web server", true);
+            if (view.tab === "stuff") renderList();
+        });
+    };
+    reader.readAsDataURL(file);
+}
+
 /* One profile layout, two callers: your own on the profile tab and a friend in
    the detail pane. Rows appear only when the field is there, which is what
    keeps the two honest - a friend entry is a thinner record than self, not a
@@ -572,6 +1225,12 @@ function renderList() {
     var body = document.getElementById("listBody");
     var search = document.getElementById("search");
 
+    // Read off the print caption box before the redraw drops it, so the caret
+    // can be put back where the typing was. -1 means it did not have focus and
+    // must not be given it.
+    var note = document.getElementById("printNote");
+    printCaret = note && document.activeElement === note ? note.selectionStart : -1;
+
     body.textContent = "";
     document.getElementById("listTitle").textContent = TITLES[tab.id];
     document.title = "vrcd - " + TITLES[tab.id];
@@ -585,6 +1244,7 @@ function renderList() {
     if (tab.id === "online")       renderOnline(body);
     else if (tab.id === "feed")    renderFeed(body);
     else if (tab.id === "inbox")   renderInbox(body);
+    else if (tab.id === "stuff")   renderStuff(body);
     else if (tab.id === "profile") renderProfileTab(body);
     else body.appendChild(placeholder(SOON_TEXT[tab.id], "Not wired up yet"));
 }
@@ -680,9 +1340,19 @@ function renderDetail() {
     title.textContent = "Details";
 
     if (view.sel === null) {
-        body.appendChild(placeholder(view.tab === "inbox"
-            ? "Pick a sender you are already friends with."
-            : "Pick a world or a friend."));
+        var nothing = "Pick a world or a friend.";
+        if (view.tab === "inbox") nothing = "Pick a sender you are already friends with.";
+        else if (view.tab === "stuff") nothing = "Pick something.";
+        body.appendChild(placeholder(nothing));
+        return;
+    }
+
+    if (view.sel.kind === "content") {
+        var entry = findEntry(view.sel.section, view.sel.id);
+        if (entry) detailContent(body, entry, view.sel.section);
+        // Deleting or consuming is how something leaves the list while it is
+        // still on screen.
+        else body.appendChild(placeholder("That is no longer there."));
         return;
     }
 
@@ -725,9 +1395,15 @@ function showTab(tab) {
     // The box is hidden on tabs that cannot filter, so a leftover term would
     // silently cut the next list down.
     view.filter = "";
+    armedAction = "";
     document.getElementById("search").value = "";
     showList();
     render();
+
+    // On demand, not on connect: each section costs vrcd-server a VRChat call,
+    // and most sessions never open this tab.
+    if (tab === "stuff" && content[view.section].fetched === false)
+        loadContent(view.section, "");
 }
 
 var toastTimer = null;
@@ -945,6 +1621,61 @@ function applyState(message) {
     render();
     reportJoin();
     reportNotifyAction();
+    reportContentAction();
+    syncContent();
+}
+
+/* The snapshot carries only that a section moved, not its entries. A bump
+   means something changed it: our own action, an in-game upload, another
+   client. Nothing is fetched for a section that has never been opened. */
+function syncContent() {
+    if (!state.content) return;
+
+    // A link that went down takes every pending answer with it, and a button
+    // stuck on "SENDING..." or "UPLOADING..." is worse than one that can be
+    // pressed again: the answer it was waiting for is never coming.
+    if (state.connected === false) {
+        pendingItems = {};
+        uploading = {};
+    }
+
+    SECTIONS.forEach(function (section) {
+        var meta = state.content[section.id];
+        if (!meta || meta.revision === contentRevisions[section.id]) return;
+        contentRevisions[section.id] = meta.revision;
+
+        if (content[section.id].fetched ||
+            (view.tab === "stuff" && view.section === section.id))
+            loadContent(section.id, "");
+    });
+}
+
+function reportContentAction() {
+    var result = state.content_action;
+    if (!result || !result.attempted) return;
+
+    // Same as the join and notification results: the snapshot carries the last
+    // one indefinitely, so only say something when it actually changed.
+    var key = result.id + "|" + result.action + "|" +
+        result.success + "|" + result.error;
+    if (key === lastActionKey) return;
+    lastActionKey = key;
+
+    delete pendingItems[result.id];
+    armedAction = "";
+    // An upload finishing is what takes the button out of "UPLOADING...", and
+    // the tag it went to is what the result carries as its id.
+    uploading[result.id === "print" ? "prints" : result.id] = false;
+    if (view.tab === "stuff") { renderList(); renderDetail(); }
+
+    if (result.success) {
+        // The caption belonged to the print that just went up, not to the next
+        // one, which would otherwise inherit it silently.
+        if (result.action === "upload_print") printNote = "";
+        showToast(ACTION_DONE[result.action] || "Done", false);
+        return;
+    }
+    showToast("That failed: " + result.error, true);
 }
 
 function reportNotifyAction() {

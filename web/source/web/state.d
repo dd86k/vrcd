@@ -27,6 +27,7 @@ string buildStateJSON(ServerLink link)
     NotificationInfo[] inbox = link.notifications();
     NotifyActionResult notifyAction = link.notifyResult();
     AuthPrompt signin = link.authPrompt();
+    ContentActionResult contentAction = link.contentResult();
 
     JSONValue root = JSONValue([
         "type":             JSONValue("state"),
@@ -99,6 +100,37 @@ string buildStateJSON(ServerLink link)
         ]);
     }
 
+    // Only what the page needs to know *that* a section moved. The entries
+    // come from /api/content/:section instead: a few hundred of them would
+    // ride along with every friend movement, and the tab showing them is
+    // usually closed.
+    JSONValue content = JSONValue.emptyObject;
+    foreach (string name; CONTENT_SECTIONS)
+    {
+        ContentSnapshot section = link.content(name);
+        content[name] = JSONValue([
+            "revision":    JSONValue(section.revision),
+            "loading":     JSONValue(section.loading),
+            "loaded":      JSONValue(section.loaded),
+            "count":       JSONValue(cast(long)section.items.length),
+            "total_count": JSONValue(section.totalCount),
+            "more":        JSONValue(section.more),
+            "error":       JSONValue(section.error),
+        ]);
+    }
+    root["content"] = content;
+
+    if (contentAction.attempted)
+    {
+        root["content_action"] = JSONValue([
+            "attempted": JSONValue(true),
+            "action":    JSONValue(contentAction.action),
+            "id":        JSONValue(contentAction.id),
+            "success":   JSONValue(contentAction.success),
+            "error":     JSONValue(contentAction.error),
+        ]);
+    }
+
     if (notifyAction.attempted)
     {
         root["notify_action"] = JSONValue([
@@ -110,6 +142,28 @@ string buildStateJSON(ServerLink link)
         ]);
     }
 
+    return root.toString();
+}
+
+/// Build the payload served by /api/content/:section.
+///
+/// The entries go out as vrcd-server trimmed them: this side renders them and
+/// has no opinion about what a file, print or item is, so re-modelling them
+/// here would only add a place for the two to disagree.
+string buildContentJSON(ServerLink link, string name)
+{
+    ContentSnapshot section = link.content(name);
+
+    JSONValue root = JSONValue([
+        "section":     JSONValue(name),
+        "revision":    JSONValue(section.revision),
+        "loading":     JSONValue(section.loading),
+        "loaded":      JSONValue(section.loaded),
+        "total_count": JSONValue(section.totalCount),
+        "more":        JSONValue(section.more),
+        "error":       JSONValue(section.error),
+    ]);
+    root["items"] = JSONValue(section.items);
     return root.toString();
 }
 

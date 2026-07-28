@@ -11,6 +11,7 @@ module web.connection;
 import core.sync.mutex : Mutex;
 import core.thread : Thread;
 import core.time : Duration, dur;
+import std.base64 : Base64;
 import std.json;
 import std.socket;
 import std.string : indexOf, strip;
@@ -19,6 +20,7 @@ import ddlogger;
 import vrcd.events;
 import vrcd.friends;
 import vrcd.notifications;
+import web.images;
 
 /// First reconnect delay; doubles on every consecutive failure.
 private enum Duration RECONNECT_BASE = dur!"seconds"(2);
@@ -32,6 +34,15 @@ private enum int FEED_BACKLOG = 200;
 /// Protocol version that added `get_notifications`. An older server answers
 /// it with an `error`, so the inbox asks only when it will be understood.
 private enum long PROTOCOL_NOTIFICATIONS = 4;
+
+/// Protocol version that added the content API (`get_inventory`,
+/// `inventory_action`, `get_image`).
+private enum long PROTOCOL_CONTENT = 2;
+
+/// Byte budget for proxied images. Thumbnails run tens of kilobytes each, so
+/// this holds a few hundred of them; past that the oldest are dropped and
+/// re-fetched if they are looked at again.
+private enum size_t IMAGE_CACHE_BYTES = 32 * 1024 * 1024;
 
 /// Snapshot of the logged-in VRChat user, from the server's `self` message.
 struct SelfInfo
@@ -112,6 +123,83 @@ struct NotifyActionResult
     string error;
 }
 
+/// The STUFF sections, in the order the page shows them.
+///
+/// The first four are tags on VRChat's files API, the last two have endpoints
+/// of their own. They are one list here because the page treats them as one:
+/// six lists of pictures with an action or two attached.
+immutable string[6] CONTENT_SECTIONS =
+    [ "gallery", "icon", "sticker", "emoji", "prints", "inventory" ];
+
+/// How many entries a files page asks for. vrcd-server caps this at 100, and
+/// VRChat caps most of these sections well below that, so one page is usually
+/// the whole section.
+enum int CONTENT_PAGE = 100;
+
+/// Index of a section in `CONTENT_SECTIONS`, or -1 when the name is not one.
+/// Doubles as validation for a section name arriving over HTTP.
+ptrdiff_t contentSectionIndex(string section)
+{
+    foreach (size_t i, string name; CONTENT_SECTIONS)
+    {
+        if (name == section)
+            return i;
+    }
+    return -1;
+}
+
+/// Whether this section is a tag on the files API, as opposed to prints or
+/// the inventory, which have endpoints of their own.
+bool isFilesSection(string section)
+{
+    switch (section)
+    {
+    case "gallery", "icon", "sticker", "emoji": return true;
+    default:                                    return false;
+    }
+}
+
+/// One section's entries, exactly as vrcd-server trimmed them.
+///
+/// Entries are handed to the browser over HTTP rather than in the state
+/// broadcast: a few hundred would ride along with every friend movement, and
+/// the tab that shows them is usually not even open.
+struct ContentSnapshot
+{
+    /// True while a request for this section is outstanding.
+    bool loading;
+    /// True once a reply has landed. Stays true across a refresh, so the list
+    /// on screen is not blanked while a newer one is on its way.
+    bool loaded;
+    /// Bumped on every change. The page re-fetches the entries when it moves.
+    long revision;
+    /// True when the last page came back full, so there may be another.
+    bool more;
+    /// Total VRChat reports for the inventory, which can exceed what is held:
+    /// vrcd-server stops paging at 500 items. Zero for the other sections,
+    /// which report no total of their own.
+    long totalCount;
+    /// Entries as vrcd-server trimmed them, held rather than re-modelled: this
+    /// side renders them and has no opinion about what a file is.
+    JSONValue[] items;
+    string error;
+}
+
+/// Outcome of the most recent action on a piece of content: an equip, a
+/// delete, an icon change, an upload.
+struct ContentActionResult
+{
+    /// False until an action has been taken this session.
+    bool attempted;
+    /// The action asked for: "equip", "delete_file", "upload_image", ...
+    string action;
+    /// What it was aimed at: an item, file or print ID, or the tag an upload
+    /// went to. Empty when the action carries no target (clearing the icon).
+    string id;
+    bool success;
+    string error;
+}
+
 /// TCP client for the vrcd-server JSON-L API.
 ///
 /// Only the messages the web front-end renders are interpreted (`self`,
@@ -127,6 +215,7 @@ class ServerLink
         this.secret = secret;
         this.stateMutex = new Mutex();
         this.sendMutex = new Mutex();
+        this.images = new ImageCache(IMAGE_CACHE_BYTES);
     }
 
     /// Set the callback fired after any state change worth re-rendering.
@@ -201,6 +290,260 @@ class ServerLink
     {
         synchronized (stateMutex)
             return pendingAuth;
+    }
+
+    /// One section's snapshot. Empty until its first reply, and empty for a
+    /// name that is not a section.
+    ContentSnapshot content(string section)
+    {
+        ptrdiff_t index = contentSectionIndex(section);
+        if (index < 0)
+            return ContentSnapshot.init;
+
+        synchronized (stateMutex)
+            return sections[index];
+    }
+
+    /// Outcome of the most recent content action: equip, delete, icon, upload.
+    ContentActionResult contentResult()
+    {
+        synchronized (stateMutex)
+            return lastContentAction;
+    }
+
+    /// Ask vrcd-server for one section. Safe to call from an HTTP thread.
+    ///
+    /// Without `force` this is a no-op once the section has been fetched, so
+    /// the page can call it every time the section is opened. A request
+    /// already in flight is never doubled up: the reply reaches every browser
+    /// anyway.
+    ///
+    /// Params:
+    ///   section = One of `CONTENT_SECTIONS`.
+    ///   force = Re-fetch even when the section is already held.
+    void requestContent(string section, bool force)
+    {
+        ptrdiff_t index = contentSectionIndex(section);
+        if (index < 0)
+            return;
+
+        bool ask;
+        synchronized (stateMutex)
+        {
+            if (sections[index].loading)
+                return;
+            if (force == false && sections[index].loaded)
+                return;
+
+            // Fills in the reason and bumps the revision when it says no, so
+            // the page hears why rather than sitting on "Loading...".
+            if (sectionUnavailable(index) == false)
+            {
+                sections[index].loading = true;
+                sections[index].error = null;
+                ++sections[index].revision;
+                ask = true;
+            }
+        }
+        notifyChange();
+
+        if (ask == false)
+            return;
+
+        logInfo("Requesting %s", section);
+        if (sendMessage(sectionRequest(section, 0)))
+            return;
+
+        // The link went away between the check and the send. Nothing is going
+        // to answer, so say so rather than spinning on "Loading...".
+        failSection(index, "Not connected to vrcd-server");
+    }
+
+    /// Ask for the next page of a files section, appending to what is held.
+    /// Only the files sections page: prints and the inventory come whole.
+    void requestMoreContent(string section)
+    {
+        ptrdiff_t index = contentSectionIndex(section);
+        if (index < 0 || isFilesSection(section) == false)
+            return;
+
+        int offset;
+        bool ask;
+        synchronized (stateMutex)
+        {
+            if (sections[index].loading || sections[index].more == false)
+                return;
+
+            offset = cast(int)sections[index].items.length;
+            sections[index].loading = true;
+            sections[index].error = null;
+            ++sections[index].revision;
+            ask = true;
+        }
+        notifyChange();
+
+        if (ask == false)
+            return;
+
+        logInfo("Requesting %s from offset %d", section, offset);
+        if (sendMessage(sectionRequest(section, offset)))
+            return;
+
+        failSection(index, "Not connected to vrcd-server");
+    }
+
+    /// Equip, unequip, or consume an inventory item. Safe to call from an HTTP
+    /// thread; the reply arrives asynchronously as an
+    /// `inventory_action_result`, which also triggers a refresh.
+    void requestInventoryAction(string action, string inventoryId, string slot)
+    {
+        logInfo("Inventory %s: %s%s", action, inventoryId,
+            slot.length > 0 ? " (slot " ~ slot ~ ")" : "");
+
+        JSONValue message = JSONValue([
+            "type":         JSONValue("inventory_action"),
+            "action":       JSONValue(action),
+            "inventory_id": JSONValue(inventoryId),
+        ]);
+        if (slot.length > 0)
+            message["slot"] = JSONValue(slot);
+
+        if (sendMessage(message) == false)
+            failAction(action, inventoryId);
+    }
+
+    /// Delete a file or a print, or set the profile icon. Safe to call from an
+    /// HTTP thread; the reply arrives as the matching `*_result`, which also
+    /// refreshes the section it changed.
+    ///
+    /// Params:
+    ///   action = "delete_file", "delete_print", or "set_icon".
+    ///   id = File or print ID. Empty on a "set_icon", which clears the icon.
+    void requestContentAction(string action, string id)
+    {
+        logInfo("Content %s: %s", action, id.length > 0 ? id : "(none)");
+
+        JSONValue message;
+        switch (action)
+        {
+        case "delete_file":
+            message = JSONValue([
+                "type":    JSONValue("delete_file"),
+                "file_id": JSONValue(id),
+            ]);
+            break;
+
+        case "delete_print":
+            message = JSONValue([
+                "type":     JSONValue("delete_print"),
+                "print_id": JSONValue(id),
+            ]);
+            break;
+
+        case "set_icon":
+            message = JSONValue([
+                "type":    JSONValue("set_user_icon"),
+                "file_id": JSONValue(id),
+            ]);
+            break;
+
+        default:
+            logWarn("Refusing unknown content action: %s", action);
+            return;
+        }
+
+        if (sendMessage(message) == false)
+            failAction(action, id);
+    }
+
+    /// Upload a PNG as a gallery image, icon, sticker, emoji, or print.
+    /// vrcd-server validates the picture (PNG, size, and square for stickers
+    /// and emoji) and answers with an `upload_*_result`.
+    ///
+    /// Params:
+    ///   tag = "gallery", "icon", "sticker", "emoji", or "print".
+    ///   dataBase64 = The PNG, base64-encoded.
+    ///   note = Caption, prints only.
+    void requestUpload(string tag, string dataBase64, string note)
+    {
+        string action = tag == "print" ? "upload_print" : "upload_image";
+        logInfo("Uploading %s (%u base64 bytes)", tag, dataBase64.length);
+
+        JSONValue message;
+        if (tag == "print")
+        {
+            message = JSONValue([
+                "type":        JSONValue("upload_print"),
+                "data_base64": JSONValue(dataBase64),
+            ]);
+            if (note.length > 0)
+                message["note"] = JSONValue(note);
+        }
+        else
+        {
+            message = JSONValue([
+                "type":        JSONValue("upload_image"),
+                "tag":         JSONValue(tag),
+                "data_base64": JSONValue(dataBase64),
+            ]);
+        }
+
+        if (sendMessage(message) == false)
+            failAction(action, tag);
+    }
+
+    /// Point image lookups at vrcd-server's own cache directory, for when the
+    /// two run on one host. Null leaves every image going over the link.
+    void setImageCacheDir(string dir)
+    {
+        this.imageCacheDir = dir;
+    }
+
+    /// Look one proxied image up, asking vrcd-server for it when it is not
+    /// held yet. Never blocks: a caller that gets `pending` back replies 202
+    /// and the browser comes for it again.
+    ImageLookup image(string fileId, long fileVersion, int size)
+    {
+        string cacheKey = ImageCache.key(fileId, fileVersion, size);
+
+        bool startFetch;
+        ImageLookup found = images.lookup(cacheKey, startFetch);
+        if (startFetch == false)
+            return found;
+
+        // vrcd-server has already downloaded most of what this page asks for,
+        // and when it is on this host its cache is right there. Reading it is
+        // a shortcut around base64 and a round trip, not around vrcd-server: a
+        // miss still goes down the link, which is where the VRChat session and
+        // the download spacing live.
+        if (imageCacheDir.length > 0)
+        {
+            DiskImage onDisk = readFromServerCache(imageCacheDir, fileId, fileVersion, size);
+            if (onDisk.found)
+            {
+                // Into memory too: the next look skips even the disk, and the
+                // entry left pending by the lookup above has to be resolved.
+                images.store(cacheKey, onDisk.data, onDisk.mimeType);
+                logTrace("Image %s served from vrcd-server's cache", cacheKey);
+                return ImageLookup(ImageState.ready, onDisk.data, onDisk.mimeType);
+            }
+        }
+
+        logTrace("Fetching image %s", cacheKey);
+        bool sent = sendMessage(JSONValue([
+            "type":    JSONValue("get_image"),
+            "file_id": JSONValue(fileId),
+            "version": JSONValue(fileVersion),
+            "size":    JSONValue(size),
+        ]));
+
+        if (sent == false)
+        {
+            images.storeFailure(cacheKey, "Not connected to vrcd-server");
+            return ImageLookup(ImageState.failed, null, null,
+                "Not connected to vrcd-server");
+        }
+        return found;
     }
 
     /// Answer a credentials prompt. Safe to call from an HTTP thread; the
@@ -316,6 +659,88 @@ private:
     NotificationInfo[] inbox;
     NotifyActionResult lastNotifyAction;
     AuthPrompt pendingAuth;
+    /// One per entry in CONTENT_SECTIONS, in that order.
+    ContentSnapshot[CONTENT_SECTIONS.length] sections;
+    ContentActionResult lastContentAction;
+    /// Proxied VRChat images. Has its own lock: HTTP threads look images up
+    /// while this thread stores them, and neither needs the state lock.
+    ImageCache images;
+
+    /// Whether the link cannot serve this section right now, filling in the
+    /// reason as it says so. Caller holds the state lock.
+    bool sectionUnavailable(ptrdiff_t index)
+    {
+        if (linkStatus.connected == false)
+        {
+            sections[index].error = "Not connected to vrcd-server";
+            ++sections[index].revision;
+            return true;
+        }
+
+        if (linkStatus.serverVersion < PROTOCOL_CONTENT)
+        {
+            sections[index].error = "This vrcd-server is too old to serve " ~
+                "user content (needs protocol v2)";
+            ++sections[index].revision;
+            return true;
+        }
+        return false;
+    }
+
+    /// The message that fetches one section, from `offset` for the paged ones.
+    JSONValue sectionRequest(string section, int offset)
+    {
+        switch (section)
+        {
+        case "prints":
+            return JSONValue([ "type": JSONValue("get_prints") ]);
+
+        case "inventory":
+            return JSONValue([ "type": JSONValue("get_inventory") ]);
+
+        default:
+            return JSONValue([
+                "type":   JSONValue("get_files"),
+                "tag":    JSONValue(section),
+                "n":      JSONValue(CONTENT_PAGE),
+                "offset": JSONValue(offset),
+            ]);
+        }
+    }
+
+    /// Give up on a section that could not be asked for.
+    void failSection(ptrdiff_t index, string error)
+    {
+        synchronized (stateMutex)
+        {
+            sections[index].loading = false;
+            sections[index].error = error;
+            ++sections[index].revision;
+        }
+        notifyChange();
+    }
+
+    /// Answer an action here, when nothing carried it. As with a join: the
+    /// button that was pressed gets an answer rather than waiting on a result
+    /// that no one is going to send.
+    void failAction(string action, string id)
+    {
+        ContentActionResult result;
+        result.attempted = true;
+        result.action = action;
+        result.id = id;
+        result.error = "Not connected to vrcd-server";
+
+        synchronized (stateMutex)
+            lastContentAction = result;
+        notifyChange();
+
+        logWarn("Content %s for %s dropped: no link to vrcd-server", action,
+            id.length > 0 ? id : "(none)");
+    }
+    /// vrcd-server's image cache when it shares this host, else null. Set
+    /// once before the link starts and only read after, so it needs no lock.
+    string imageCacheDir;
 
     /// Fire the change callback. Never called with the state lock held: the
     /// callback rebuilds a snapshot, which takes that same lock.
@@ -365,6 +790,19 @@ private:
                 // still-pending prompt after the next auth_ok. Leaving the
                 // modal up would collect a password for a socket that is gone.
                 pendingAuth = AuthPrompt.init;
+
+                // A request that was in flight died with the socket. The
+                // entries themselves stay: they are worth reading while
+                // disconnected, and the reconnect re-fetches them.
+                foreach (ref ContentSnapshot snapshot; sections)
+                {
+                    if (snapshot.loading == false)
+                        continue;
+
+                    snapshot.loading = false;
+                    snapshot.error = "Not connected to vrcd-server";
+                    ++snapshot.revision;
+                }
             }
             notifyChange();
 
@@ -473,6 +911,20 @@ private:
             "limit":     JSONValue(FEED_BACKLOG),
         ]));
 
+        // Only sections someone has already looked at: each one costs
+        // vrcd-server a VRChat call, and a browser that never opened the tab
+        // does not need them spent every reconnect. What was fetched before is
+        // refreshed, since it may have changed while the link was down and no
+        // event replays that.
+        foreach (size_t i, string section; CONTENT_SECTIONS)
+        {
+            bool loaded;
+            synchronized (stateMutex)
+                loaded = sections[i].loaded;
+            if (loaded)
+                requestContent(section, true);
+        }
+
         while (true)
         {
             JSONValue message = readMessage();
@@ -530,6 +982,7 @@ private:
             // does not. Replaying old events over the server's snapshot would
             // resurrect notifications that were answered long ago.
             applyInboxEvent(message);
+            applyContentRefresh(message);
 
             if (onFeed)
                 onFeed([ toFeedEntry(message) ], false);
@@ -596,6 +1049,63 @@ private:
             else
                 logWarn("Notification %s for %s failed: %s",
                     result.action, result.notificationId, result.error);
+            break;
+
+        case "inventory":
+            applySection("inventory", message, "items", 0);
+            break;
+
+        case "prints":
+            applySection("prints", message, "prints", 0);
+            break;
+
+        case "files":
+            // The reply echoes the offset it was asked for, which is what
+            // tells a "load more" page apart from a fresh listing: the first
+            // replaces, the rest append.
+            long offset;
+            if (const(JSONValue) *v = "offset" in message)
+                if (v.type == JSONType.integer)
+                    offset = v.integer;
+            applySection(jsonString(message, "tag"), message, "files", offset);
+            break;
+
+        case "inventory_action_result":
+            applyActionResult(message, jsonString(message, "action"),
+                jsonString(message, "inventory_id"), "inventory");
+            break;
+
+        case "delete_file_result":
+            // The file's own section is not in the reply, so every files
+            // section is refreshed. It is one listing each, only for sections
+            // someone has actually opened, and only on a delete.
+            applyActionResult(message, "delete_file",
+                jsonString(message, "file_id"), null);
+            break;
+
+        case "delete_print_result":
+            applyActionResult(message, "delete_print",
+                jsonString(message, "print_id"), "prints");
+            break;
+
+        case "set_user_icon_result":
+            // Nothing in a section changed, so nothing is re-listed: the icon
+            // lives on the user, not in the files list.
+            applyActionResult(message, "set_icon",
+                jsonString(message, "file_id"), "");
+            break;
+
+        case "upload_image_result":
+            applyActionResult(message, "upload_image",
+                jsonString(message, "tag"), jsonString(message, "tag"));
+            break;
+
+        case "upload_print_result":
+            applyActionResult(message, "upload_print", "print", "prints");
+            break;
+
+        case "image":
+            applyImage(message);
             break;
 
         case "join_instance_result":
@@ -707,6 +1217,196 @@ private:
         notifyChange();
 
         logInfo("Notification: %s from %s", added.notificationType, added.senderName);
+    }
+
+    /// Fold one listing reply into its section.
+    ///
+    /// Params:
+    ///   section = Section the reply belongs to.
+    ///   message = The reply itself.
+    ///   arrayKey = Where the entries are: "items", "files", or "prints".
+    ///   offset = Offset the page was asked for. Past zero this appends,
+    ///            which is what a "load more" does.
+    void applySection(string section, ref JSONValue message, string arrayKey,
+        long offset)
+    {
+        ptrdiff_t index = contentSectionIndex(section);
+        if (index < 0)
+        {
+            logWarn("Listing reply for an unknown section: %s", section);
+            return;
+        }
+
+        string error = jsonString(message, "error");
+        long totalCount;
+        if (const(JSONValue) *v = "total_count" in message)
+            if (v.type == JSONType.integer)
+                totalCount = v.integer;
+
+        JSONValue[] entries;
+        if (JSONValue *v = arrayKey in message)
+            if (v.type == JSONType.array)
+                entries = v.array;
+
+        synchronized (stateMutex)
+        {
+            sections[index].loading = false;
+
+            // A failed refresh keeps the list that is on screen: it is still
+            // the last thing VRChat told us, and blanking it turns a hiccup
+            // into an empty section.
+            if (error.length > 0)
+                sections[index].error = error;
+            else
+            {
+                sections[index].error = null;
+                sections[index].loaded = true;
+                sections[index].totalCount = totalCount;
+                // Only the files sections page; a full page means there may be
+                // another behind it.
+                sections[index].more = isFilesSection(section) &&
+                    entries.length >= CONTENT_PAGE;
+
+                if (offset > 0)
+                    sections[index].items ~= entries;
+                else
+                    sections[index].items = entries;
+            }
+            ++sections[index].revision;
+        }
+        notifyChange();
+
+        if (error.length > 0)
+            logWarn("Could not fetch %s: %s", section, error);
+        else
+            logInfo("%s: %d entries", section, entries.length);
+    }
+
+    /// Fold one action reply into the last-action slot, then re-list whatever
+    /// it changed: VRChat's own view has moved and nothing else says how.
+    ///
+    /// Params:
+    ///   message = The reply.
+    ///   action = What was asked for, for the page's toast.
+    ///   id = What it was aimed at.
+    ///   refreshSection = Section to re-list on success. Empty refreshes
+    ///                    nothing; null refreshes every files section, for a
+    ///                    reply that does not say which one it changed.
+    void applyActionResult(ref JSONValue message, string action, string id,
+        string refreshSection)
+    {
+        ContentActionResult result;
+        result.attempted = true;
+        result.action = action;
+        result.id = id;
+        result.error = jsonString(message, "error");
+        if (const(JSONValue) *v = "success" in message)
+            result.success = v.type == JSONType.true_;
+
+        synchronized (stateMutex)
+            lastContentAction = result;
+        notifyChange();
+
+        string what = id.length > 0 ? id : "(none)";
+        if (result.success == false)
+        {
+            logWarn("Content %s for %s failed: %s", action, what, result.error);
+            return;
+        }
+
+        logInfo("Content %s done: %s", action, what);
+
+        if (refreshSection is null)
+            refreshFilesSections();
+        else if (refreshSection.length > 0)
+            requestContent(refreshSection, true);
+    }
+
+    /// Re-list every files section that has been looked at, for a reply that
+    /// does not name the section it changed.
+    void refreshFilesSections()
+    {
+        foreach (size_t i, string section; CONTENT_SECTIONS)
+        {
+            if (isFilesSection(section) == false)
+                continue;
+
+            bool loaded;
+            synchronized (stateMutex)
+                loaded = sections[i].loaded;
+            if (loaded)
+                requestContent(section, true);
+        }
+    }
+
+    /// Refresh a section when VRChat says it changed somewhere else: an
+    /// in-game upload, a drop, another device. Only when the section has been
+    /// fetched at least once, since nothing is waiting on the others.
+    void applyContentRefresh(ref JSONValue message)
+    {
+        if (jsonString(message, "event_type") != "content-refresh")
+            return;
+
+        const(JSONValue) *content = "content" in message;
+        if (content is null || content.type != JSONType.object)
+            return;
+
+        string section = sectionForContentType(jsonString(*content, "contentType"));
+        if (section.length == 0)
+            return;
+
+        bool loaded;
+        synchronized (stateMutex)
+            loaded = sections[contentSectionIndex(section)].loaded;
+        if (loaded == false)
+            return;
+
+        logInfo("%s changed elsewhere, refreshing", section);
+        requestContent(section, true);
+    }
+
+    /// File one proxied image away. No state change is published: the browser
+    /// is already coming back for it, and a broadcast per thumbnail would put
+    /// a whole grid's worth of snapshots on every socket.
+    void applyImage(ref JSONValue message)
+    {
+        string fileId = jsonString(message, "file_id");
+        long fileVersion = 1;
+        int size;
+        if (const(JSONValue) *v = "version" in message)
+            if (v.type == JSONType.integer)
+                fileVersion = v.integer;
+        if (const(JSONValue) *v = "size" in message)
+            if (v.type == JSONType.integer)
+                size = cast(int)v.integer;
+
+        string cacheKey = ImageCache.key(fileId, fileVersion, size);
+
+        bool success;
+        if (const(JSONValue) *v = "success" in message)
+            success = v.type == JSONType.true_;
+
+        if (success == false)
+        {
+            string error = jsonString(message, "error");
+            images.storeFailure(cacheKey, error.length > 0 ? error : "Image unavailable");
+            logDebugging("Image %s failed: %s", cacheKey, error);
+            return;
+        }
+
+        string encoded = jsonString(message, "data_base64");
+        ubyte[] data;
+        try data = Base64.decode(encoded);
+        catch (Exception ex)
+        {
+            images.storeFailure(cacheKey, "Malformed image data");
+            logWarn("Image %s came back malformed: %s", cacheKey, ex.msg);
+            return;
+        }
+
+        string mimeType = jsonString(message, "mime_type");
+        images.store(cacheKey, data, mimeType.length > 0 ? mimeType : "application/octet-stream");
+        logTrace("Image %s cached (%u bytes)", cacheKey, data.length);
     }
 
     /// Drop one notification. Caller holds the state lock.
@@ -840,6 +1540,20 @@ private FeedEntry toFeedEntry(ref JSONValue message)
 
     extractEventFields(entry.eventType, message, entry.user, entry.detail);
     return entry;
+}
+
+/// Section a `content-refresh` event names, or null when it names something
+/// this front-end does not show. VRChat's own wording is the section name for
+/// four of the six.
+private string sectionForContentType(string contentType)
+{
+    switch (contentType)
+    {
+    case "gallery", "icon", "sticker", "emoji": return contentType;
+    case "print", "prints":                     return "prints";
+    case "inventory":                           return "inventory";
+    default:                                    return null;
+    }
 }
 
 /// Read a string field out of a JSON object, or null when absent or not a string.
