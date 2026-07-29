@@ -318,57 +318,18 @@ private void resolveLinux()
 
 version (linux)
 {
-private __gshared string cachedLaunchClient;
-private __gshared bool launchClientResolved;
-
-/// Locate Steam's `steam-runtime-launch-client` tool, used to inject
-/// commands into the pressure-vessel container of a running Proton game.
-/// It ships with the SteamLinuxRuntime depot(s), so scan every library's
-/// common folder for a `SteamLinuxRuntime*` install. Returns null when
-/// not found.
-string steamRuntimeLaunchClientPath()
+/// Return the Proton prefix (WINEPREFIX) VRChat runs in, derived from the
+/// Steam library layout. Used to attach a Wine process to the game's
+/// wineserver when the prefix cannot be read out of the running game's own
+/// environment. Returns null when the Steam library was not found.
+string vrchatProtonPrefix()
 {
-    import std.algorithm.searching : startsWith;
-    import std.path : baseName;
+    import std.path : dirName;
 
     resolve();
-    if (launchClientResolved)
-        return cachedLaunchClient;
-    launchClientResolved = true;
-
-    string[] libraries = cachedLibraryPaths;
-    if (libraries.length == 0 && cachedSteamRoot)
-        libraries = [cachedSteamRoot];
-
-    foreach (string library; libraries)
-    {
-        string common = buildPath(library, "steamapps", "common");
-        if (exists(common) == false)
-            continue;
-        try
-        {
-            foreach (DirEntry entry; dirEntries(common, SpanMode.shallow))
-            {
-                if (entry.isDir == false)
-                    continue;
-                if (baseName(entry.name).startsWith("SteamLinuxRuntime") == false)
-                    continue;
-                string candidate = buildPath(entry.name,
-                    "pressure-vessel", "bin", "steam-runtime-launch-client");
-                if (exists(candidate))
-                {
-                    logInfo("directories: launch-client at %s", candidate);
-                    cachedLaunchClient = candidate;
-                    return candidate;
-                }
-            }
-        }
-        catch (Exception e)
-        {
-            logWarn("directories: failed to scan %s: %s", common, e.msg);
-        }
-    }
-    return null;
+    if (cachedProtonPrefix is null)
+        return null;
+    return dirName(cachedProtonPrefix); // .../compatdata/438100/pfx
 }
 } // version (linux)
 

@@ -1,9 +1,9 @@
 /// vrcd-pipehelper: send a vrchat:// launch URI to the running VRChat
 /// client via its VRChatURLLaunchPipe named pipe.
 ///
-/// On Linux, the vrcd client runs this executable under Wine inside
-/// VRChat's Proton container (via steam-runtime-launch-client), because
-/// the pipe only exists inside the game's wineserver.
+/// On Linux, the vrcd client runs this executable with the Proton build
+/// VRChat is running under and with the game's WINEPREFIX, which attaches it
+/// to the game's wineserver, because the pipe only exists in there.
 ///
 /// Exit codes: 0 = accepted, 1 = rejected or pipe error, 2 = pipe not
 /// found (VRChat not running), 3 = usage error.

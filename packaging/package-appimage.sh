@@ -59,11 +59,10 @@ mkdir -p "${APPDIR}/usr/bin"
 
 cp "${BINARY}" "${APPDIR}/usr/bin/vrcd_client"
 
-# Bundle the pipe helper away from usr/bin: the client prefers the copy next
-# to its own binary, but the AppImage mount lives under /tmp, which VRChat's
-# pressure-vessel container does not share, so Wine inside the container
-# could never read it there. AppRun instead installs it to ~/.config/vrcd/
-# (shared home), where the client's fallback lookup finds it.
+# Bundle the pipe helper away from usr/bin, and let AppRun install it to
+# ~/.config/vrcd/ where the client's fallback lookup finds it: the AppImage
+# mount is a fresh directory under /tmp on every run, so a copy in the mount
+# is not something anything else can be pointed at.
 if [[ -f "${PIPEHELPER_EXE}" ]]; then
     mkdir -p "${APPDIR}/usr/share/vrcd"
     cp "${PIPEHELPER_EXE}" "${APPDIR}/usr/share/vrcd/vrcd-pipehelper.exe"
@@ -90,9 +89,8 @@ cat > "${APPDIR}/AppRun" <<'EOF'
 #!/bin/bash
 HERE="$(dirname "$(readlink -f "${0}")")"
 export LD_LIBRARY_PATH="${HERE}/usr/lib:${LD_LIBRARY_PATH:-}"
-# Install/refresh the "Open in VRChat" pipe helper where both the client
-# and VRChat's Proton container can see it (the AppImage mount itself is
-# under /tmp, which the container does not share).
+# Install/refresh the "Open in VRChat" pipe helper at a stable path (the
+# AppImage mount itself is a new /tmp directory on every run).
 HELPER="${HERE}/usr/share/vrcd/vrcd-pipehelper.exe"
 # Matches the client's vrcdConfigPath, which hardcodes ~/.config.
 CONFDIR="${HOME}/.config/vrcd"

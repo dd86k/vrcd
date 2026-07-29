@@ -719,9 +719,9 @@ private void eventLoop(mu_Context* uictx)
 
         // Drain pending "Open in VRChat" requests. Windows reaches the
         // running client's launch pipe in-process (with a vrchat:// scheme
-        // fallback); on Linux the pipe write runs inside VRChat's Proton
-        // container, so it is spawned and polled asynchronously, with
-        // self-invite as the fallback.
+        // fallback); on Linux the pipe write is done by a Wine process
+        // attached to VRChat's wineserver, so it is spawned and polled
+        // asynchronously, with self-invite as the fallback.
         if (appState.pendingOpens.length > 0)
         {
             foreach (string loc; appState.pendingOpens)

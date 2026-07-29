@@ -24,25 +24,31 @@ join an instance directly, by writing a `vrchat://launch?...` URI to VRChat's
 notification). When VRChat is not running, the game is launched into the
 instance instead.
 
-On Windows this works out of the box. On Linux the pipe only exists inside
-the game's wineserver, which Steam isolates in a pressure-vessel container,
-so two extra pieces are needed:
+On Windows this works out of the box. On Linux the pipe lives in the game's
+wineserver, which runs inside a pressure-vessel container, so the write has
+to come from a Wine process attached to that same wineserver. Only one extra
+piece is needed for that: place a Windows build of `vrcd-pipehelper.exe` (the
+`pipehelper` subpackage) next to the client binary, or in `~/.config/vrcd/`.
+The AppImage bundles the helper and installs it to `~/.config/vrcd/` on
+launch.
 
-1. Set VRChat's Steam launch options to include:
-   `STEAM_COMPAT_LAUNCHER_SERVICE=proton %command%`
-   This makes Steam expose a launcher service for the running game that
-   vrcd uses (via `steam-runtime-launch-client`) to run commands inside the
-   container.
-2. Place a Windows build of `vrcd-pipehelper.exe` (the `pipehelper`
-   subpackage) next to the client binary, or in `~/.config/vrcd/`. It is
-   executed with the container's own Proton Wine and performs the pipe
-   write. The AppImage bundles the helper and installs it to
-   `~/.config/vrcd/` on launch (the AppImage mount lives under `/tmp`,
-   which the container cannot see). Note that this path must be visible
-   inside the container, so keep it under your home directory.
+No Steam launch options are involved. A wineserver's socket directory
+(`/tmp/.wine-<uid>/server-<dev>-<inode>`) is shared with the host, so Wine
+started on this side against the game's prefix attaches to the running
+wineserver rather than starting its own, and finds the pipe there. The
+client reads the prefix and the exact Proton build the game runs under from
+`/proc/<pid>` (`environ` and `exe`), so the Proton version does not have to
+be configured and cannot drift out of sync.
 
-If either piece is missing, or the IPC attempt fails, the client falls back
-to a server-side self-invite (`POST /invite/myself/to/{location}`), which is
+Earlier versions instead ran the helper inside the container through Steam's
+launcher service, which needed `STEAM_COMPAT_LAUNCHER_SERVICE=proton` in the
+game's launch options. That option makes Proton wrap the game's own Wine
+process in `steam-runtime-launcher-service`, which breaks VRChat's video
+players (they resolve URLs by spawning `yt-dlp.exe`), so it is no longer
+used. If you still have it in your launch options, remove it.
+
+If the helper is missing, or the IPC attempt fails, the client falls back to
+a server-side self-invite (`POST /invite/myself/to/{location}`), which is
 also available directly via the "Self-Invite" button.
 
 ## Architecture

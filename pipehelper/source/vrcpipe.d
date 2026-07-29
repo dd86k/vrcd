@@ -10,8 +10,8 @@
 /// read 1 byte back; 0x01 means VRChat accepted the URI.
 ///
 /// This module is shared between the Windows client (in-process) and the
-/// vrcd-pipehelper executable (run under Wine inside VRChat's Proton
-/// container on Linux).
+/// vrcd-pipehelper executable (on Linux, run with the game's own Proton Wine
+/// so that it lands in VRChat's wineserver).
 ///
 /// Copyright: dd86k <dd@dax.moe>
 /// License: BSD-3-Clause-Clear

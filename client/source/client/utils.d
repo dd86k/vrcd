@@ -92,24 +92,43 @@ private __gshared Pid ipcJoinPid;
 private __gshared string ipcJoinLocation;
 private __gshared MonoTime ipcJoinStart;
 
-/// D-Bus name the Steam launcher service registers for VRChat when the
-/// game is launched with STEAM_COMPAT_LAUNCHER_SERVICE=proton.
-private static immutable string VRCHAT_BUS_NAME = "com.steampowered.App438100";
-
 /// Give up on an IPC join attempt after this long (covers a hung Wine
-/// startup inside the container).
+/// startup against the game's wineserver).
 private enum ipcJoinTimeout = dur!"seconds"(15);
 
-/// True when a VRChat.exe process is visible. Proton keeps the Windows
-/// image path in the command line, and pressure-vessel does not hide the
-/// game's processes from the host.
-bool isVRChatRunning()
+/// A running VRChat process, with what is needed to attach a second Wine
+/// process to the wineserver it lives in.
+private struct ProtonProcess
+{
+    int pid;       /// PID of the VRChat.exe process.
+    string wine;   /// Wine binary of the Proton build running the game.
+    string prefix; /// Prefix the game runs in, as visible from the host.
+    string esync;  /// WINEESYNC, "0" when the game runs without it.
+    string fsync;  /// WINEFSYNC, "0" when the game runs without it.
+}
+
+/// Locate a running VRChat.exe and read out of /proc what is needed to talk
+/// to its wineserver. Proton keeps the Windows image path in the command
+/// line, and pressure-vessel does not hide the game's processes from the
+/// host, so the game is visible from here even though its filesystem view
+/// is not.
+///
+/// Several processes in the launch chain carry "VRChat.exe" in their command
+/// line (reaper, steam-launch-wrapper, the runtime entry point, the proton
+/// script) and none of those can answer for a prefix, so `wine` and `prefix`
+/// come from the first candidate that yields both. `pid` is set for any
+/// candidate, which is all "is the game running" needs.
+private ProtonProcess findVRChatProcess()
 {
     import std.algorithm.searching : canFind;
     import std.ascii : isDigit;
-    import std.file : dirEntries, read, DirEntry, SpanMode;
+    import std.conv : to;
+    import std.file : dirEntries, exists, read, DirEntry, SpanMode;
     import std.path : baseName, buildPath;
 
+    import client.directories : vrchatProtonPrefix;
+
+    ProtonProcess result;
     try
     {
         foreach (DirEntry entry; dirEntries("/proc", SpanMode.shallow))
@@ -121,17 +140,101 @@ bool isVRChatRunning()
             {
                 const(char)[] cmdline =
                     cast(const(char)[]) read(buildPath(entry.name, "cmdline"), 4096);
-                if (canFind(cmdline, "VRChat.exe"))
-                    return true;
+                if (canFind(cmdline, "VRChat.exe") == false)
+                    continue;
+
+                int pid = to!int(name);
+                if (result.pid == 0)
+                    result.pid = pid;
+
+                string wine = wineBinaryOf(entry.name);
+                if (wine is null)
+                    continue;
+
+                string[string] vars = wineEnvironOf(entry.name);
+                string prefix = vars.get("WINEPREFIX", null);
+                // The container can see the prefix at a path that does not
+                // exist out here; the Steam library layout gives the same
+                // prefix from this side. Never point Wine at a missing
+                // prefix: it would create a fresh one and start its own
+                // wineserver, which has no launch pipe in it.
+                if (prefix is null || exists(prefix) == false)
+                    prefix = vrchatProtonPrefix();
+                if (prefix is null || exists(prefix) == false)
+                    continue;
+
+                result.pid = pid;
+                result.wine = wine;
+                result.prefix = prefix;
+                result.esync = vars.get("WINEESYNC", "0");
+                result.fsync = vars.get("WINEFSYNC", "0");
+                return result;
             }
             catch (Exception) {} // Process exited mid-scan, unreadable, etc.
         }
     }
     catch (Exception ex)
     {
-        logWarn("isVRChatRunning: /proc scan failed: %s", ex.msg);
+        logWarn("findVRChatProcess: /proc scan failed: %s", ex.msg);
     }
-    return false;
+    return result;
+}
+
+/// Resolve the Wine binary of a running Proton process. `/proc/<pid>/exe`
+/// points at the loader the process was started with (`wine64-preloader` on
+/// older Proton builds, `wine` on wow64 ones), which is not something to
+/// start a program with, so a sibling Wine binary is used instead. Returns
+/// null when the process is not a Wine one.
+private string wineBinaryOf(string procDir)
+{
+    import std.algorithm.searching : startsWith;
+    import std.file : exists, readLink;
+    import std.path : baseName, buildPath, dirName;
+
+    string exe = readLink(buildPath(procDir, "exe"));
+    if (startsWith(baseName(exe), "wine") == false)
+        return null;
+
+    string dir = dirName(exe);
+    foreach (string candidate; [ "wine64", "wine" ])
+    {
+        string path = buildPath(dir, candidate);
+        if (exists(path))
+            return path;
+    }
+    return null;
+}
+
+/// Read the `WINE*` environment of a running process out of /proc.
+private string[string] wineEnvironOf(string procDir)
+{
+    import std.algorithm.iteration : splitter;
+    import std.algorithm.searching : startsWith;
+    import std.file : read;
+    import std.path : buildPath;
+    import std.string : indexOf;
+
+    string[string] vars;
+    // environ is a NUL-separated blob; 64 KiB covers it with room to spare.
+    const(char)[] blob =
+        cast(const(char)[]) read(buildPath(procDir, "environ"), 64 * 1024);
+    foreach (const(char)[] item; splitter(blob, '\0'))
+    {
+        ptrdiff_t eq = indexOf(item, '=');
+        if (eq <= 0)
+            continue;
+        const(char)[] key = item[0 .. eq];
+        if (startsWith(key, "WINE") == false)
+            continue;
+        vars[key.idup] = item[eq + 1 .. $].idup;
+    }
+    return vars;
+}
+
+/// True when a VRChat process is visible.
+bool isVRChatRunning()
+{
+    return findVRChatProcess().pid != 0;
 }
 
 /// Result of starting an IPC join attempt.
@@ -143,26 +246,31 @@ enum IPCJoinStart
 }
 
 /// Ask the running VRChat client to join an instance, over its launch-URI
-/// named pipe. The pipe lives inside the game's wineserver, which is
-/// isolated in a pressure-vessel container, so the write is done by
-/// running vrcd-pipehelper.exe (with the container's own Proton Wine) via
-/// Steam's launcher service. Requires VRChat to be launched with
-/// STEAM_COMPAT_LAUNCHER_SERVICE=proton in its Steam launch options.
+/// named pipe.
+///
+/// The pipe lives in the game's wineserver, which runs inside a
+/// pressure-vessel container, but the wineserver's socket directory
+/// (`/tmp/.wine-<uid>/server-<dev>-<inode>`) is shared with the host, so a
+/// Wine process started here against the same prefix attaches to that same
+/// wineserver and sees the pipe. The write is done by vrcd-pipehelper.exe,
+/// run with the Proton build the game itself is running under, both read out
+/// of /proc. No Steam launch options are involved.
 IPCJoinStart startVRChatIPCJoin(string location)
 {
     import std.file : exists, thisExePath;
     import std.path : buildPath, dirName;
     import std.process : spawnProcess;
+    import std.stdio : File;
 
-    import client.directories : steamRuntimeLaunchClientPath, vrcdConfigPath;
+    import client.directories : vrcdConfigPath;
 
     if (ipcJoinPid)
         return IPCJoinStart.busy;
 
-    string launchClient = steamRuntimeLaunchClientPath();
-    if (launchClient is null)
+    ProtonProcess game = findVRChatProcess();
+    if (game.wine is null)
     {
-        logWarn("IPC join: steam-runtime-launch-client not found in any Steam library");
+        logWarn("IPC join: no VRChat Wine process found in /proc");
         return IPCJoinStart.unavailable;
     }
 
@@ -178,19 +286,24 @@ IPCJoinStart startVRChatIPCJoin(string location)
     }
 
     string uri = vrchatLaunchUri(location);
-    logInfo("IPC join: injecting '%s' into container %s", uri, VRCHAT_BUS_NAME);
+    logInfo("IPC join: sending '%s' to the wineserver of pid %d (prefix %s)",
+        uri, game.pid, game.prefix);
     try
     {
-        // The "proton" launcher service runs commands inside the game's
-        // Wine environment, so plain `wine` resolves to the same Proton
-        // build (and wineserver) the game uses. Wine accepts the host path
-        // of the helper directly.
-        ipcJoinPid = spawnProcess([
-            launchClient,
-            "--bus-name=" ~ VRCHAT_BUS_NAME,
-            "--",
-            "wine", helper, uri,
-        ]);
+        // Same prefix, same wineserver, so the helper sees the pipe the
+        // game listens on; esync/fsync have to match the server it joins.
+        // Wine takes the host path of the helper as is. The helper is a
+        // console program with nothing to say that its exit code does not,
+        // and Wine is chatty on stderr, so its output goes nowhere.
+        string[string] env = [
+            "WINEPREFIX": game.prefix,
+            "WINEESYNC":  game.esync,
+            "WINEFSYNC":  game.fsync,
+            "WINEDEBUG":  "-all",
+        ];
+        File devNull = File("/dev/null", "r+");
+        ipcJoinPid = spawnProcess([ game.wine, helper, uri ],
+            devNull, devNull, devNull, env);
     }
     catch (Exception ex)
     {
@@ -242,12 +355,10 @@ IPCJoinPoll pollVRChatIPCJoin(out string location)
         return IPCJoinPoll.success;
     }
 
-    // 2 comes from the helper (pipe missing inside the container); 125-127
-    // come from launch-client itself, typically because the launcher
-    // service is not running.
-    if (res.status >= 125 && res.status <= 127)
-        logWarn("IPC join: launch-client exit %d; is VRChat launched with "
-            ~ "STEAM_COMPAT_LAUNCHER_SERVICE=proton %%command%% ?", res.status);
+    // 2 comes from the helper: it reached a wineserver, but not one with a
+    // launch pipe in it, so it is not the one the game listens in.
+    if (res.status == 2)
+        logWarn("IPC join: no launch pipe in the prefix; wrong wineserver?");
     else
         logWarn("IPC join: helper exit %d", res.status);
     return IPCJoinPoll.failed;
