@@ -38,6 +38,7 @@ vrcd-test-*
 # Personal
 perso/
 TODO
+*.swp
 
 # Packages
 *.zip

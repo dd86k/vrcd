@@ -41,10 +41,10 @@ Authentication uses a shared secret token. If the server's secret is empty, auth
 
 **Success:**
 ```json
-{"type": "auth_ok", "server_version": 4}
+{"type": "auth_ok", "server_version": 5}
 ```
 
-Protocol versions: `1` = base protocol, `2` = adds the content API (files, prints, inventory, images, uploads), `3` = adds the moderation API (moderations, moderate_user, unfriend), `4` = adds the notification listing (`get_notifications`).
+Protocol versions: `1` = base protocol, `2` = adds the content API (files, prints, inventory, images, uploads), `3` = adds the moderation API (moderations, moderate_user, unfriend), `4` = adds the notification listing (`get_notifications`), `5` = adds VRChat's v2 notifications (every type, each carrying its own responses).
 
 **Failure:**
 ```json
@@ -139,9 +139,11 @@ Remove a friend. The server calls `DELETE auth/user/friends/{userId}`, replies w
 
 Request the pending notification list. Server replies with `notifications`. Requires `server_version >= 4`.
 
-Always refetches `GET auth/user/notifications` from VRChat. The WebSocket only reports *changes*, so anything that arrived while a front-end was down has no event to replay and the inbox cannot be rebuilt from the event log; this is the authoritative list. Front-ends send it once per connect and then keep the list current from the notification events.
+Always refetches from VRChat. The WebSocket only reports *changes*, so anything that arrived while a front-end was down has no event to replay and the inbox cannot be rebuilt from the event log; this is the authoritative list. Front-ends send it once per connect and then keep the list current from the notification events.
 
-Only actionable types (`friendRequest`, `invite`, `requestInvite`) are returned. VRChat no longer includes sender names, so the server fills them in from the friend roster, then falls back to `GET /users/{id}` for the ones the roster cannot answer - a friend request is precisely the case where the sender is not a friend yet. Those lookups are capped per request; past the cap the user ID stands in as the name.
+VRChat has two notification systems and neither endpoint returns the other's, so the server fetches both: `GET auth/user/notifications` (v1: friend requests, invites, boops, votes to kick) and `GET notifications` (v2: group invites, join requests, transfers, announcements, queue-ready, instance closures, moderation). Every type is returned, not just the ones with an accept button - a front-end draws a dismiss for the rest. The v2 half is allowed to fail on its own: the failure is logged server-side and the v1 list is sent anyway, since a partial inbox beats an error that leaves the front-end with a stale one.
+
+VRChat no longer includes sender names, so the server fills them in from the friend roster, then falls back to `GET /users/{id}` for the ones the roster cannot answer - a friend request is precisely the case where the sender is not a friend yet. Those lookups are capped per request; past the cap the user ID stands in as the name. Group IDs (`grp_...`, which is what a v2 group notification puts in the sender field) are never looked up.
 
 ```json
 {"type": "get_notifications"}
@@ -149,13 +151,26 @@ Only actionable types (`friendRequest`, `invite`, `requestInvite`) are returned.
 
 ### `notification_action`
 
-Accept or hide one notification. The server calls `PUT auth/user/notifications/{id}/accept` or `PUT auth/user/notifications/{id}/hide` and replies with `notification_action_result`. For `hide`, HTTP 404 is treated as success: the notification is already gone, which is the desired end state.
+Answer one notification. The server replies with `notification_action_result`.
 
-| Field             | Type   | Description                        |
-|-------------------|--------|------------------------------------|
-| `type`            | string | `"notification_action"`            |
-| `notification_id` | string | Notification ID (`not_...`)        |
-| `action`          | string | One of `"accept"`, `"hide"`        |
+The two notification systems share no endpoints, so `api_version` decides which call is made:
+
+| Action     | v1                                          | v2                             |
+|------------|---------------------------------------------|--------------------------------|
+| `accept`   | `PUT auth/user/notifications/{id}/accept`   | rejected: use `respond`        |
+| `hide`     | `PUT auth/user/notifications/{id}/hide`     | `DELETE notifications/{id}`    |
+| `respond`  | rejected: v1 notifications have no responses | `POST notifications/{id}/respond` |
+
+For `hide`, HTTP 404 is treated as success: the notification is already gone, which is the desired end state.
+
+| Field             | Type   | Description                                                        |
+|-------------------|--------|--------------------------------------------------------------------|
+| `type`            | string | `"notification_action"`                                            |
+| `notification_id` | string | Notification ID (`not_...`)                                        |
+| `action`          | string | One of `"accept"`, `"hide"`, `"respond"`                           |
+| `api_version`     | int    | Which system it belongs to, `1` or `2`. Absent means `1`           |
+| `response_type`   | string | On `respond`: which of the entry's `responses` was pressed         |
+| `response_data`   | string | On `respond`: that response's `data`, sent back verbatim           |
 
 ### `set_status`
 
@@ -311,7 +326,7 @@ Authentication succeeded.
 | Field            | Type   | Description              |
 |------------------|--------|--------------------------|
 | `type`           | string | `"auth_ok"`              |
-| `server_version` | int    | Protocol version (currently 4) |
+| `server_version` | int    | Protocol version (currently 5) |
 
 ### `auth_error`
 
@@ -496,12 +511,27 @@ Each entry:
 | Field               | Type   | Description                                                     |
 |---------------------|--------|-----------------------------------------------------------------|
 | `id`                | string | Notification ID (`not_...`)                                     |
-| `notification_type` | string | `"friendRequest"`, `"invite"`, or `"requestInvite"`             |
-| `sender_user_id`    | string | Sender's user ID, empty when VRChat gave none                   |
+| `notification_type` | string | VRChat's type string: `"friendRequest"`, `"invite"`, `"group.announcement"`, `"group.queueReady"`, ... |
+| `sender_user_id`    | string | Sender's user ID, empty when VRChat gave none. A v2 group notification carries a `grp_...` ID here |
 | `sender_name`       | string | Resolved display name; falls back to the user ID                |
+| `title`             | string | v2 headline (`"Group Invite"`, an announcement's subject), empty on v1 |
 | `message`           | string | Message body, or the invite's world name when it carries no text |
 | `location`          | string | Instance an invite points at, empty for every other type        |
 | `received_at_unix`  | int    | Creation time, 0 when unknown                                   |
+| `responses`         | array  | Buttons this notification offers, empty on v1 (see below)       |
+| `can_delete`        | bool   | Whether it can be dismissed at all. VRChat clears some of its own and refuses to be told to |
+| `api_version`       | int    | Which system it came from, `1` or `2`. Echo it back in `notification_action` |
+
+Each response:
+
+| Field  | Type   | Description                                                          |
+|--------|--------|----------------------------------------------------------------------|
+| `type` | string | Posted back as `responseType`; also the identity of the button        |
+| `text` | string | Button label, written by VRChat (`"Accept"`, `"Decline"`, `"Block"`)  |
+| `icon` | string | Icon hint: `"check"`, `"cancel"`, `"ban"`, `"bell-slash"`, `"reply"`. Advisory, often absent |
+| `data` | string | Opaque payload, posted back as `responseData` alongside the type      |
+
+Carrying the buttons rather than a per-type table is what makes a notification type nobody wrote code for work: a group invite, a join request and a transfer all answer the same way. Responses of type `link` are dropped by the server - they point at a screen in VRChat's own client that neither front-end has.
 
 Order is part of the contract, not a detail. Front-ends draw the inbox with accept/dismiss buttons in each row and append new arrivals to the end, so the list never reflows under a thumb that is already reaching for a button - and on a friend request, the button that moves under it is an accept. Entries with no timestamp sort first.
 

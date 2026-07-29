@@ -295,6 +295,10 @@ string prettyPlatform(string platform)
 }
 
 /// Human-readable notification type.
+///
+/// The dotted names are v2 notifications. Unknown types fall through as-is:
+/// VRChat adds them faster than this list can be maintained, and a raw
+/// "group.somethingNew" still tells the reader what it is about.
 string prettyNotifType(string notifType)
 {
     switch (notifType)
@@ -302,8 +306,19 @@ string prettyNotifType(string notifType)
         case "invite":                    return "Invite";
         case "requestInvite":             return "Request Invite";
         case "requestInviteResponse":     return "Invite Response";
+        case "inviteResponse":            return "Invite Response";
         case "friendRequest":             return "Friend Request";
         case "votetokick":                return "Vote to Kick";
+        case "boop":                      return "Boop";
+        case "message":                   return "Message";
+        case "groupChange":               return "Group Change";
+        case "group.announcement":        return "Group Announcement";
+        case "group.informative":         return "Group Notice";
+        case "group.invite":              return "Group Invite";
+        case "group.joinRequest":         return "Group Join Request";
+        case "group.transfer":            return "Group Transfer";
+        case "group.queueReady":          return "Queue Ready";
+        case "instance.closed":           return "Instance Closed";
         default:                          return notifType;
     }
 }
