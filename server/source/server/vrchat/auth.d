@@ -18,6 +18,7 @@ import ddcurl;
 
 import server.authdelegate;
 import server.config;
+import server.userimage : UserImage, pickUserImage;
 import server.vrchat.totp : generateTOTP;
 import server.vrchat.vrcconfig : USER_AGENT;
 
@@ -33,6 +34,7 @@ struct AuthState
     string bio;               /// Self long-form profile blurb.
     string pronouns;          /// Self pronouns.
     string[] bioLinks;        /// Self profile URLs.
+    UserImage picture;        /// Self profile picture, as a file to fetch.
 }
 
 /// Authenticate with VRChat and obtain a WebSocket token.
@@ -372,6 +374,7 @@ AuthState finishAuth(HTTPClient client, JSONValue userJson)
             foreach (ref const(JSONValue) item; v.array)
                 if (item.type == JSONType.string)
                     state.bioLinks ~= item.str;
+    state.picture = pickUserImage(userJson);
     return state;
 }
 

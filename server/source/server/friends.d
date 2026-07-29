@@ -13,6 +13,7 @@ import ddlogger;
 
 import server.events;
 import server.instancecache;
+import server.userimage;
 import server.worldcache;
 
 /// Tracks the current state of all friends from WebSocket events.
@@ -30,6 +31,8 @@ class FriendsTracker
         string worldName;
         string platform;         // "standalonewindows", "android", etc.
         string currentAvatar;    // "avtr_..." of currently-equipped avatar
+        string imageFileId;      // "file_..." of their profile picture, if any
+        long imageVersion;       // Version of that file (1+)
         string bio;              // Long-form profile blurb (not statusDescription)
         string pronouns;         // User-set pronouns
         string[] bioLinks;       // URLs the user pinned on their profile
@@ -67,7 +70,8 @@ class FriendsTracker
     /// it out so clients never see themselves in the friends list.
     void setSelf(string userId, string displayName, string currentAvatar,
         string status, string statusDescription,
-        string bio, string pronouns, string[] bioLinks)
+        string bio, string pronouns, string[] bioLinks,
+        UserImage picture)
     {
         if (userId.length == 0)
             return;
@@ -89,6 +93,11 @@ class FriendsTracker
                 f.pronouns = pronouns;
             if (bioLinks.length > 0)
                 f.bioLinks = bioLinks;
+            if (picture.fileId.length > 0)
+            {
+                f.imageFileId = picture.fileId;
+                f.imageVersion = picture.fileVersion;
+            }
         }
     }
 
@@ -119,6 +128,8 @@ class FriendsTracker
                 "bio":               JSONValue(f.bio),
                 "pronouns":          JSONValue(f.pronouns),
                 "bioLinks":          JSONValue(f.bioLinks),
+                "imageFileId":       JSONValue(f.imageFileId),
+                "imageVersion":      JSONValue(f.imageVersion),
             ]);
         }
     }
@@ -212,6 +223,10 @@ class FriendsTracker
                 if (v.type == JSONType.string)
                     state.currentAvatar = v.str;
 
+            UserImage picture = pickUserImage(f);
+            state.imageFileId = picture.fileId;
+            state.imageVersion = picture.fileVersion;
+
             if (const(JSONValue)* v = "bio" in f)
                 if (v.type == JSONType.string)
                     state.bio = v.str;
@@ -261,6 +276,22 @@ class FriendsTracker
             if (selfUserId.length > 0)
                 if (FriendState* self = selfUserId in friends)
                     newFriends[selfUserId] = *self;
+
+            // A listing entry with no usable picture is the robot placeholder
+            // or a legacy CloudFront URL, not a friend who lost their face:
+            // keep the one we had rather than blinking every list back to
+            // initials on each re-seed.
+            foreach (string userId, ref FriendState replacement; newFriends)
+            {
+                if (replacement.imageFileId.length > 0)
+                    continue;
+                if (FriendState* old = userId in friends)
+                {
+                    replacement.imageFileId = old.imageFileId;
+                    replacement.imageVersion = old.imageVersion;
+                }
+            }
+
             friends = newFriends;
             logInfo("Replaced friends tracker with %d friends", friends.length);
         }
@@ -358,6 +389,8 @@ class FriendsTracker
         string bio;
         string pronouns;
         string[] bioLinks;
+        string imageFileId;
+        long imageVersion;
         bool online;
     }
 
@@ -377,6 +410,8 @@ class FriendsTracker
         v.bio = f.bio;
         v.pronouns = f.pronouns;
         v.bioLinks = f.bioLinks;
+        v.imageFileId = f.imageFileId;
+        v.imageVersion = f.imageVersion;
         v.online = f.online;
         return v;
     }
@@ -495,6 +530,8 @@ class FriendsTracker
             "bio": JSONValue(f.bio),
             "pronouns": JSONValue(f.pronouns),
             "bioLinks": JSONValue(f.bioLinks),
+            "imageFileId": JSONValue(f.imageFileId),
+            "imageVersion": JSONValue(f.imageVersion),
         ]);
     }
 
@@ -612,6 +649,7 @@ private:
 
         if (applyAvatarUpdate(f, c)) changed = true;
         if (applyProfileUpdate(f, c)) changed = true;
+        if (applyPictureUpdate(f, c)) changed = true;
         return changed;
     }
 
@@ -693,6 +731,7 @@ private:
 
         if (applyAvatarUpdate(f, c)) changed = true;
         if (applyProfileUpdate(f, c)) changed = true;
+        if (applyPictureUpdate(f, c)) changed = true;
         return changed;
     }
 
@@ -773,6 +812,7 @@ private:
 
         if (applyAvatarUpdate(f, c)) changed = true;
         if (applyProfileUpdate(f, c)) changed = true;
+        if (applyPictureUpdate(f, c)) changed = true;
         return changed;
     }
 
@@ -808,6 +848,7 @@ private:
 
         if (applyAvatarUpdate(f, c)) changed = true;
         if (applyProfileUpdate(f, c)) changed = true;
+        if (applyPictureUpdate(f, c)) changed = true;
         return changed;
     }
 
@@ -848,6 +889,7 @@ private:
 
         if (applyAvatarUpdate(f, c)) changed = true;
         if (applyProfileUpdate(f, c)) changed = true;
+        if (applyPictureUpdate(f, c)) changed = true;
         // Self is filtered out of buildFriendsMessage, so no snapshot push.
         return false;
     }
@@ -882,6 +924,7 @@ private:
 
         if (applyAvatarUpdate(f, c)) changed = true;
         if (applyProfileUpdate(f, c)) changed = true;
+        if (applyPictureUpdate(f, c)) changed = true;
         // Self is filtered out of buildFriendsMessage, so no snapshot push.
         return false;
     }
@@ -977,6 +1020,44 @@ private:
 
         f.currentAvatar = newAvatar;
         return changed;
+    }
+
+    /// Diff the incoming profile picture against cached state.
+    ///
+    /// No synthetic event: a friend swapping their profile picture is not a
+    /// moment in a feed the way a world or avatar change is, it is just the
+    /// face next to their name changing on the next snapshot.
+    ///
+    /// Only a frame offering a usable picture replaces the cached one. A frame
+    /// with nothing usable in it is not a friend without a face: it is the
+    /// robot placeholder VRChat serves while an avatar image is still being
+    /// made, a legacy CloudFront URL that is not a file, or a stripped user
+    /// object. Clearing on those would blank the face in every list and put it
+    /// back a frame later. A friend who drops their profile picture still has
+    /// their avatar, so the picture moves rather than disappearing.
+    bool applyPictureUpdate(FriendState* f, JSONValue c)
+    {
+        UserImage picture;
+
+        foreach (string field; userImageFields)
+        {
+            string url;
+            if (extractProfileString(c, field, url) == false || url.length == 0)
+                continue;
+
+            picture = parseImageURL(url);
+            if (picture.fileId.length > 0)
+                break;
+        }
+
+        if (picture.fileId.length == 0)
+            return false;
+        if (picture.fileId == f.imageFileId && picture.fileVersion == f.imageVersion)
+            return false;
+
+        f.imageFileId = picture.fileId;
+        f.imageVersion = picture.fileVersion;
+        return true;
     }
 
     /// Diff incoming bio / pronouns / bioLinks against cached state and queue
@@ -1235,10 +1316,8 @@ private:
 
     // VRChat's "robot" placeholder image, served while the real avatar
     // image is still loading. Treat it as absent so we don't see real -> robot
-    // -> real transitions as two avatar swaps. Matched by file ID since the
-    // host portion varies between endpoints (cf. VRCX src/stores/user.js).
-    enum string robotAvatarFileId = "file_0e8c4e32-7444-44ea-ade4-313c010d4bae";
-
+    // -> real transitions as two avatar swaps. Matched by file ID (from
+    // server.userimage) since the host portion varies between endpoints.
     static bool isRobotAvatar(string s)
     {
         import std.string : indexOf;

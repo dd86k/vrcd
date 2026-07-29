@@ -414,6 +414,17 @@ Each friend entry (in both `instances[].friends` and `offline`):
 | `bio`               | string | Long-form profile blurb (distinct from `statusDescription`) |
 | `pronouns`          | string | User-set pronouns        |
 | `bioLinks`          | array  | Profile URLs the user pinned |
+| `imageFileId`       | string | Profile picture file (`file_...`), empty when there is none to fetch |
+| `imageVersion`      | int    | Version of that file, for `get_image`                      |
+
+The picture is a file rather than a URL because only the server holds the
+VRChat session: pass `imageFileId` and `imageVersion` to `get_image` with the
+size you want. VRChat describes the same picture with up to five fields
+(`profilePicOverrideThumbnail`, `profilePicOverride`, `userIcon`,
+`currentAvatarThumbnailImageUrl`, `currentAvatarImageUrl`) and the server picks
+between them in that order, so every front-end shows the same face. It is empty
+for a friend whose only picture is a legacy CloudFront thumbnail, which is not
+a file, and while VRChat is still serving its robot placeholder.
 
 ### `self`
 
@@ -429,6 +440,8 @@ Snapshot of the logged-in user's own status. Sent after auth (immediately follow
 | `bio`               | string | Long-form profile blurb                                    |
 | `pronouns`          | string | User-set pronouns                                          |
 | `bioLinks`          | array  | Profile URLs the user pinned                               |
+| `imageFileId`       | string | Own profile picture file, same rules as a friend entry      |
+| `imageVersion`      | int    | Version of that file                                       |
 
 ### `set_status_result`
 

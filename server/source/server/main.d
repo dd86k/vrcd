@@ -197,7 +197,8 @@ void cmdRun(ref Config config)
     tracker.setInstanceCache(instanceCache);
     tracker.setSelf(authState.userId, authState.displayName, authState.currentAvatar,
         authState.status, authState.statusDescription,
-        authState.bio, authState.pronouns, authState.bioLinks);
+        authState.bio, authState.pronouns, authState.bioLinks,
+        authState.picture);
 
     apiServer.setWorldCache(worldCache);
     apiServer.setInstanceCache(instanceCache);
