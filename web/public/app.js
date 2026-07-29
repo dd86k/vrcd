@@ -43,19 +43,39 @@ var SOON_TEXT = {
            "ones that go through the server can appear here."
 };
 
-/* What each notification type is called, and what can be done about it.
+/* What each v1 notification type is called, and what can be done about it.
    `accept` is VRChat's accept endpoint, which only means anything for a
    friend request. An invite is answered by joining where it points, and a
    request for an invite cannot be answered at all from here: sending one back
    needs an API vrcd-server does not expose yet, so the row says so rather
-   than drawing a button that would lie. */
+   than drawing a button that would lie.
+
+   Only v1 needs this table. A v2 notification - group invites, join
+   requests, announcements, queue-ready, instance closures, moderation -
+   carries its own buttons in `responses`, so those rows are drawn from the
+   data and a type nobody here has heard of still works. Anything not listed
+   and not carrying responses gets a dismiss and its type as the label. */
 var NOTIFY_TYPES = {
     friendRequest: { label: "Friend request", accept: "ACCEPT", hide: "DECLINE" },
     invite:        { label: "Invite",         join: true,       hide: "DISMISS" },
     requestInvite: { label: "Invite request", hide: "DISMISS",
                      note: "Sending an invite back needs an API the server " +
-                           "does not expose yet." }
+                           "does not expose yet." },
+    inviteResponse:        { label: "Invite response",  hide: "DISMISS" },
+    requestInviteResponse: { label: "Request response", hide: "DISMISS" },
+    boop:                  { label: "Boop",             hide: "DISMISS" },
+    message:               { label: "Message",          hide: "DISMISS" },
+    votetokick:            { label: "Vote to kick",     hide: "DISMISS" }
 };
+
+/* Which response types read as the affirmative one, so the row can give that
+   button the primary treatment. Everything else draws plain, and a response
+   type nobody listed here still draws - just not emphasised. */
+var NOTIFY_PRIMARY = { accept: true, join: true, confirm: true, yes: true };
+
+/* What to say once one went through. Keyed by the action, not the response:
+   which button of a group invite was pressed is the server's business. */
+var NOTIFY_DONE = { accept: "Accepted", hide: "Dismissed", respond: "Answered" };
 
 /* What each 2FA method is asking for. VRChat calls them totp, otp and
    emailOtp; only the first is the usual authenticator app. */
@@ -521,16 +541,23 @@ function renderInbox(body) {
 }
 
 function notifyCard(entry) {
+    var responses = entry.responses || [];
     var kind = NOTIFY_TYPES[entry.notification_type] ||
-        { label: entry.notification_type, hide: "DISMISS" };
-    var who = entry.sender_name || entry.sender_user_id || "Someone";
+        { label: notifyLabel(entry.notification_type), hide: "DISMISS" };
     var busy = pendingNotifications[entry.id] === true;
+
+    /* A group notification puts the group's own ID where a user ID goes and
+       sends no name with it, so there is nobody to name and nobody to open.
+       The title carries the row instead. */
+    var fromUser = (entry.sender_user_id || "").indexOf("usr_") === 0;
+    var who = entry.sender_name || (fromUser ? entry.sender_user_id : "") ||
+        entry.title || "VRChat";
 
     var card = el("div", "notify");
 
     // A button, not a div, so the sender opens in the detail pane the way a
     // feed row does. The action buttons are siblings of it, never inside it.
-    var friend = entry.sender_user_id ? findFriend(entry.sender_user_id) : null;
+    var friend = fromUser ? findFriend(entry.sender_user_id) : null;
     var head = el(friend ? "button" : "div", "head");
     head.appendChild(avatar(who, false, friend));
     var text = el("div", "who");
@@ -543,30 +570,61 @@ function notifyCard(entry) {
         head.onclick = function () { select({ kind: "friend", id: entry.sender_user_id }); };
     card.appendChild(head);
 
+    // Only when it says something the two lines above did not: VRChat's
+    // titles are often just the type over again ("Group Invite").
+    if (entry.title && entry.title !== who && entry.title !== kind.label)
+        card.appendChild(el("div", "ntitle", entry.title));
     if (entry.message) card.appendChild(el("div", "msg", entry.message));
     if (kind.note) card.appendChild(el("div", "note", kind.note));
 
+    /* A v2 notification names its own buttons, and they are the only ones
+       that mean anything for it - a group invite is not accepted through the
+       friend-request endpoint. So when there are responses they replace the
+       table's buttons rather than joining them. */
     var actions = el("div", "actions");
-    if (kind.accept)
-        actions.appendChild(notifyButton(entry, "accept", kind.accept, true, busy));
-    // An invite is answered by going there, which is the same self-invite the
-    // roster offers; VRChat's accept endpoint does nothing useful for one.
-    if (kind.join && entry.location) {
-        var go = joinButton(entry.location, "JOIN WORLD");
-        go.disabled = busy;
-        actions.appendChild(go);
+    if (responses.length) {
+        responses.forEach(function (response) {
+            var label = (response.text || response.type).toUpperCase();
+            actions.appendChild(notifyButton(entry, "respond", label,
+                NOTIFY_PRIMARY[response.type] === true, busy, response));
+        });
+    } else {
+        if (kind.accept)
+            actions.appendChild(notifyButton(entry, "accept", kind.accept, true, busy));
+        // An invite is answered by going there, which is the same self-invite
+        // the roster offers; VRChat's accept endpoint does nothing for one.
+        if (kind.join && entry.location) {
+            var go = joinButton(entry.location, "JOIN WORLD");
+            go.disabled = busy;
+            actions.appendChild(go);
+        }
     }
-    if (kind.hide)
-        actions.appendChild(notifyButton(entry, "hide", kind.hide, false, busy));
-    card.appendChild(actions);
+
+    /* VRChat clears some of its own (a queue-ready expires, an announcement
+       is retracted) and refuses to be told to. Those rows are read-only:
+       a dismiss button on one only fails. */
+    if (entry.can_delete !== false) {
+        var dismiss = responses.length ? "DISMISS" : kind.hide;
+        if (dismiss)
+            actions.appendChild(notifyButton(entry, "hide", dismiss, false, busy));
+    }
+    if (actions.childNodes.length) card.appendChild(actions);
 
     return card;
 }
 
-function notifyButton(entry, action, label, primary, busy) {
+/* "group.queueReady" -> "Group queue ready". A type this build has never
+   heard of still has to head its row, and raw it reads like code. */
+function notifyLabel(type) {
+    if (!type) return "Notification";
+    var words = type.replace(/\./g, " ").replace(/([a-z])([A-Z])/g, "$1 $2");
+    return words.charAt(0).toUpperCase() + words.slice(1).toLowerCase();
+}
+
+function notifyButton(entry, action, label, primary, busy, response) {
     var button = el("button", "act" + (primary ? " primary" : ""), label);
     button.disabled = busy;
-    button.onclick = function () { notifyAct(entry.id, action, button); };
+    button.onclick = function () { notifyAct(entry, action, button, response); };
     return button;
 }
 
@@ -2007,7 +2065,8 @@ function join(location, button) {
     });
 }
 
-function notifyAct(id, action, button) {
+function notifyAct(entry, action, button, response) {
+    var id = entry.id;
     var label = button.textContent;
     // Marked in the map rather than on the button: the next snapshot redraws
     // the card from scratch and would hand back an enabled button otherwise.
@@ -2018,7 +2077,15 @@ function notifyAct(id, action, button) {
     fetch("/api/notification", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ notification_id: id, action: action })
+        body: JSON.stringify({
+            notification_id: id,
+            action: action,
+            // Which system this notification belongs to: the endpoints for
+            // the two do not overlap, so the server has to be told.
+            api_version: entry.api_version || 1,
+            response_type: response ? response.type : "",
+            response_data: response ? response.data : ""
+        })
     }).then(function (r) {
         if (r.ok) return;
         delete pendingNotifications[id];
@@ -2263,14 +2330,14 @@ function reportNotifyAction() {
     lastNotifyKey = key;
 
     if (result.success) {
-        showToast(result.action === "accept" ? "Accepted" : "Dismissed", false);
+        showToast(NOTIFY_DONE[result.action] || "Done", false);
         return;
     }
 
     // A failure leaves the row where it was, so give its buttons back.
     delete pendingNotifications[result.notification_id];
     if (view.tab === "inbox") renderList();
-    showToast("Could not " + result.action + " that: " + result.error, true);
+    showToast("That failed: " + result.error, true);
 }
 
 function reportJoin() {

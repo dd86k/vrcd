@@ -611,15 +611,27 @@ class ServerLink
         logWarn("Self-invite for %s dropped: no link to vrcd-server", location);
     }
 
-    /// Accept or hide a notification. Safe to call from an HTTP thread; the
-    /// reply arrives asynchronously as a `notification_action_result`.
-    void requestNotificationAction(string notificationId, string action)
+    /// Answer a notification: `accept` or `hide` on a v1 one, `respond` or
+    /// `hide` on a v2 one. Safe to call from an HTTP thread; the reply
+    /// arrives asynchronously as a `notification_action_result`.
+    ///
+    /// Params:
+    ///   notificationId = Notification to act on.
+    ///   action = "accept", "hide", or "respond".
+    ///   apiVersion = Which notification system it belongs to, 1 or 2.
+    ///   responseType = Which of its responses was pressed ("respond" only).
+    ///   responseData = That response's opaque payload, sent back with it.
+    void requestNotificationAction(string notificationId, string action,
+        int apiVersion = 1, string responseType = null, string responseData = null)
     {
         logInfo("Notification %s: %s", action, notificationId);
         if (sendMessage(JSONValue([
             "type":            JSONValue("notification_action"),
             "notification_id": JSONValue(notificationId),
             "action":          JSONValue(action),
+            "api_version":     JSONValue(apiVersion),
+            "response_type":   JSONValue(responseType),
+            "response_data":   JSONValue(responseData),
         ])))
             return;
 
@@ -1200,6 +1212,23 @@ private:
             synchronized (stateMutex)
                 foreach (string id; removedIds)
                     removeFromInbox(id);
+            notifyChange();
+            return;
+        }
+
+        // An edit to something already on the page. Nothing is added for one:
+        // an update for a row this front-end never saw is an update to a
+        // notification the user already answered.
+        if (change == NotificationChange.updated)
+        {
+            synchronized (stateMutex)
+                foreach (ref NotificationInfo entry; inbox)
+                {
+                    if (entry.id != added.id)
+                        continue;
+                    mergeNotificationUpdate(entry, added);
+                    break;
+                }
             notifyChange();
             return;
         }

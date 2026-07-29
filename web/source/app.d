@@ -262,8 +262,8 @@ int main(string[] args)
             if (authorized(req, true) == false)
                 return REQUEST_OK;
 
-            string id, action;
-            if (notificationAction(req.payload, id, action) == false)
+            NotifyRequest notify;
+            if (notificationAction(req.payload, notify) == false)
             {
                 req.replyJSON(HTTPStatus.badRequest,
                     `{"error":"missing notification_id or action"}`);
@@ -273,7 +273,8 @@ int main(string[] args)
             // Fire and forget, like /api/join: the outcome arrives as a
             // notification_action_result and reaches the page in the next
             // broadcast, which also drops the row.
-            link.requestNotificationAction(id, action);
+            link.requestNotificationAction(notify.id, notify.action,
+                notify.apiVersion, notify.responseType, notify.responseData);
             req.replyJSON(HTTPStatus.ok, `{"requested":true}`);
             return REQUEST_OK;
         })
@@ -475,11 +476,21 @@ private string joinLocation(ubyte[] payload)
     return null;
 }
 
-/// Pull the notification ID and action out of a /api/notification request
-/// body. Returns false when either is missing or the action is not one the
-/// server takes, so an unknown action is refused here rather than travelling
-/// down to vrcd-server to be refused there.
-private bool notificationAction(ubyte[] payload, out string id, out string action)
+/// One answer to a notification, as the page sends it.
+private struct NotifyRequest
+{
+    string id;
+    string action;       /// "accept", "hide", or "respond".
+    int apiVersion = 1;  /// Which notification system it belongs to.
+    string responseType; /// Which button was pressed ("respond" only).
+    string responseData; /// That button's opaque payload.
+}
+
+/// Pull a notification answer out of a /api/notification request body.
+/// Returns false when the ID is missing or the action is not one the server
+/// takes, so an unknown action is refused here rather than travelling down to
+/// vrcd-server to be refused there.
+private bool notificationAction(ubyte[] payload, out NotifyRequest notify)
 {
     if (payload.length == 0)
         return false;
@@ -497,14 +508,27 @@ private bool notificationAction(ubyte[] payload, out string id, out string actio
 
     if (const(JSONValue) *v = "notification_id" in body_)
         if (v.type == JSONType.string)
-            id = v.str;
+            notify.id = v.str;
     if (const(JSONValue) *v = "action" in body_)
         if (v.type == JSONType.string)
-            action = v.str;
+            notify.action = v.str;
+    if (const(JSONValue) *v = "api_version" in body_)
+        if (v.type == JSONType.integer)
+            notify.apiVersion = cast(int)v.integer;
+    if (const(JSONValue) *v = "response_type" in body_)
+        if (v.type == JSONType.string)
+            notify.responseType = v.str;
+    if (const(JSONValue) *v = "response_data" in body_)
+        if (v.type == JSONType.string)
+            notify.responseData = v.str;
 
-    if (id.length == 0)
+    if (notify.id.length == 0)
         return false;
-    return action == "accept" || action == "hide";
+    // Which of these the notification actually offers is vrcd-server's call;
+    // this only keeps a typo from becoming a round trip.
+    if (notify.action == "respond")
+        return notify.responseType.length > 0;
+    return notify.action == "accept" || notify.action == "hide";
 }
 
 /// Pull a content action out of a /api/content request body. Returns false
