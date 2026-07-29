@@ -56,6 +56,10 @@ struct SelfInfo
     string bio;
     string pronouns;
     string[] bioLinks;
+    /// Own profile picture, as a file for the image proxy. Same shape as a
+    /// friend's, since the profile tab draws both through one path.
+    string imageFileId;
+    long imageVersion;
 }
 
 /// Snapshot of the link to vrcd-server itself.
@@ -957,6 +961,10 @@ private:
                     foreach (const(JSONValue) link; v.array)
                         if (link.type == JSONType.string)
                             info.bioLinks ~= link.str;
+            info.imageFileId = jsonString(message, "imageFileId");
+            if (const(JSONValue) *v = "imageVersion" in message)
+                if (v.type == JSONType.integer)
+                    info.imageVersion = v.integer;
 
             synchronized (stateMutex)
                 selfInfo = info;

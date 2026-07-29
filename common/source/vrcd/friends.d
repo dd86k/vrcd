@@ -25,6 +25,11 @@ struct FriendInfo
     string bio;
     string pronouns;
     string[] bioLinks;
+    /// Profile picture, as a file the image proxy can ask for. The server
+    /// picks which of VRChat's several picture fields this came from; empty
+    /// when the friend has none we can fetch.
+    string imageFileId;
+    long imageVersion;
 }
 
 /// Friends grouped by instance.
@@ -168,6 +173,12 @@ FriendInfo parseFriendInfo(JSONValue f)
             foreach (ref const(JSONValue) item; v.array)
                 if (item.type == JSONType.string)
                     fi.bioLinks ~= item.str;
+    if (const(JSONValue)* v = "imageFileId" in f)
+        if (v.type == JSONType.string)
+            fi.imageFileId = v.str;
+    if (const(JSONValue)* v = "imageVersion" in f)
+        if (v.type == JSONType.integer || v.type == JSONType.uinteger)
+            fi.imageVersion = v.integer;
     return fi;
 }
 

@@ -47,6 +47,8 @@ string buildStateJSON(ServerLink link)
             "bio":               JSONValue(info.bio),
             "pronouns":          JSONValue(info.pronouns),
             "bioLinks":          JSONValue(info.bioLinks),
+            "imageFileId":       JSONValue(info.imageFileId),
+            "imageVersion":      JSONValue(info.imageVersion),
         ]);
     }
 
@@ -188,7 +190,7 @@ private JSONValue friendsJSON(FriendInfo[] friends)
     JSONValue[] items;
     foreach (ref FriendInfo friend; friends)
     {
-        items ~= JSONValue([
+        JSONValue entry = JSONValue([
             "id":                JSONValue(friend.userId),
             "displayName":       JSONValue(friend.displayName),
             "status":            JSONValue(friend.status),
@@ -197,6 +199,17 @@ private JSONValue friendsJSON(FriendInfo[] friends)
             "location":          JSONValue(friend.location),
             "pronouns":          JSONValue(friend.pronouns),
         ]);
+
+        // Only when there is one. A roster runs to hundreds of entries and
+        // goes out whole on every friend movement, so two empty fields per
+        // friend without a picture is worth not sending.
+        if (friend.imageFileId.length > 0)
+        {
+            entry["imageFileId"] = JSONValue(friend.imageFileId);
+            entry["imageVersion"] = JSONValue(friend.imageVersion);
+        }
+
+        items ~= entry;
     }
     return JSONValue(items);
 }

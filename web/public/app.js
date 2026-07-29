@@ -204,9 +204,21 @@ function hash(text) {
     return h;
 }
 
-function avatar(name, big) {
+/* The initials on a hued disc are the avatar, not a placeholder for one: a
+   friend with no profile picture, and one whose picture is still coming down
+   the link, both keep it underneath. `person` is any record carrying a picture
+   (a roster friend, self); leave it out for someone we only know by name. */
+function avatar(name, big, person) {
     var node = el("div", "av" + (big ? " lg" : ""), name.slice(0, 2).toUpperCase());
     node.style.background = "hsl(" + (hash(name) % 360) + " 55% 62%)";
+
+    if (person && person.imageFileId) {
+        var img = document.createElement("img");
+        img.alt = "";
+        node.appendChild(img);
+        imageWhenVisible(img, person.imageFileId, person.imageVersion || 1,
+            big ? AV_BIG_SIZE : AV_SIZE);
+    }
     return node;
 }
 
@@ -328,7 +340,7 @@ function tabButton(tab) {
 
     // Your own face reads faster than a generic person glyph.
     if (tab.id === "profile" && state.self) {
-        var face = avatar(state.self.displayName);
+        var face = avatar(state.self.displayName, false, state.self);
         face.classList.add("xs");
         button.appendChild(face);
     } else {
@@ -375,7 +387,7 @@ function friendRow(friend) {
     var row = el("button", "row");
     if (view.sel && view.sel.kind === "friend" && view.sel.id === friend.id)
         row.classList.add("on");
-    row.appendChild(avatar(friend.displayName));
+    row.appendChild(avatar(friend.displayName, false, friend));
 
     var who = el("div", "who");
     var line = el("div", "n");
@@ -520,7 +532,7 @@ function notifyCard(entry) {
     // feed row does. The action buttons are siblings of it, never inside it.
     var friend = entry.sender_user_id ? findFriend(entry.sender_user_id) : null;
     var head = el(friend ? "button" : "div", "head");
-    head.appendChild(avatar(who));
+    head.appendChild(avatar(who, false, friend));
     var text = el("div", "who");
     text.appendChild(el("div", "n", who));
     text.appendChild(el("div", "d", kind.label));
@@ -584,19 +596,69 @@ var imageURLs = {};
 var imageWaiting = {};
 var imageFailed = {};
 
+/* Thumbnail edges asked for behind a face. A row avatar is 36 CSS pixels and
+   the profile hero 80, so these cover both at twice the density; VRChat serves
+   128/256/512/1024 and nothing in between. */
+var AV_SIZE = 128;
+var AV_BIG_SIZE = 256;
+
 var IMAGE_RETRY_MS = 800;
 /* Roughly 30 seconds of retries. vrcd-server spaces uncached downloads 250 ms
    apart, so a full grid takes a while to come through on a cold cache. */
 var IMAGE_TRIES = 40;
 
+function imageKey(fileId, version, size) {
+    return fileId + "/" + version + "/" + size;
+}
+
 function imageInto(img, fileId, version, size) {
-    var key = fileId + "/" + version + "/" + size;
+    var key = imageKey(fileId, version, size);
     if (imageURLs[key]) { img.src = imageURLs[key]; return; }
     if (imageFailed[key]) return;
 
     if (imageWaiting[key]) { imageWaiting[key].push(img); return; }
     imageWaiting[key] = [img];
     fetchImage(key, fileId, version, size, IMAGE_TRIES);
+}
+
+/* Same, but not until the picture is near the viewport.
+
+   A roster runs to hundreds of friends, and vrcd-server spaces uncached
+   downloads a quarter second apart, so asking for every face at once would
+   spend minutes of link time on rows nobody scrolled to -- and hold up the
+   ones on screen behind them. Faces already fetched are set straight away:
+   they cost nothing, and waiting for the observer would blank them for a frame
+   on every redraw.
+
+   The observer is dropped at the start of each render (see render()), since a
+   redraw replaces the nodes it was watching. */
+var imageObserver = null;
+
+function imageWhenVisible(img, fileId, version, size) {
+    var key = imageKey(fileId, version, size);
+    if (imageURLs[key]) { img.src = imageURLs[key]; return; }
+    if (imageFailed[key]) return;
+
+    if (window.IntersectionObserver === undefined) {
+        imageInto(img, fileId, version, size);
+        return;
+    }
+
+    if (imageObserver === null) {
+        imageObserver = new IntersectionObserver(function (entries) {
+            entries.forEach(function (entry) {
+                if (entry.isIntersecting === false) return;
+                imageObserver.unobserve(entry.target);
+                var want = entry.target.imageWanted;
+                if (want) imageInto(entry.target, want.id, want.version, want.size);
+            });
+        // A screenful of lead time, so scrolling lands on faces rather than
+        // on the gap where they are about to appear.
+        }, { rootMargin: "300px" });
+    }
+
+    img.imageWanted = { id: fileId, version: version, size: size };
+    imageObserver.observe(img);
 }
 
 function fetchImage(key, fileId, version, size, tries) {
@@ -1655,7 +1717,7 @@ function dropTarget() {
    different kind of thing. */
 function renderProfile(body, person, opts) {
     var hero = el("div", "hero");
-    hero.appendChild(avatar(person.displayName, true));
+    hero.appendChild(avatar(person.displayName, true, person));
     hero.appendChild(el("div", "name", person.displayName));
     var sub = el("div", "sub");
     sub.appendChild(statusDot(person.status));
@@ -1877,6 +1939,13 @@ function renderDetail() {
 /* ------------------------------------------------------------- actions */
 
 function render() {
+    // Every node the observer was watching is about to be replaced, and an
+    // IntersectionObserver holds on to its targets, so the watch list is
+    // dropped here rather than grown by one screenful per snapshot. Fetches
+    // already in flight are keyed by file, not by node, and land in whatever
+    // node is on screen when they arrive.
+    if (imageObserver) imageObserver.disconnect();
+
     renderRail();
     renderList();
     renderDetail();
