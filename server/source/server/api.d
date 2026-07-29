@@ -13,7 +13,7 @@ import core.sync.condition;
 import std.json;
 import std.conv : to;
 import std.socket;
-import std.string : strip;
+import std.string : strip, startsWith;
 
 import ddlogger;
 import ddcurl;
@@ -33,12 +33,13 @@ import server.vrchat.auth : postJSON, putJSON;
 import vrcd.notifications;
 
 /// Protocol version reported in `auth_ok`. 1 = base, 2 = content API,
-/// 3 = moderation API, 4 = notification listing (`get_notifications`).
-private enum int PROTOCOL_VERSION = 4;
+/// 3 = moderation API, 4 = notification listing (`get_notifications`),
+/// 5 = v2 notifications (every type, per-notification responses).
+private enum int PROTOCOL_VERSION = 5;
 
-/// How many notifications to pull for `get_notifications`. The inbox only
-/// holds things still waiting on an answer, so this is a ceiling nobody
-/// realistically reaches rather than a page size.
+/// How many notifications to pull from each listing for `get_notifications`.
+/// A ceiling rather than a page size: an inbox this deep is one nobody has
+/// answered in months, and the front-ends draw the whole thing.
 private enum int NOTIFICATION_FETCH_LIMIT = 100;
 
 /// How many GET /users/:id calls one `get_notifications` may spend resolving
@@ -1210,9 +1211,10 @@ private class ClientHandler
 
         try
         {
-            // v1 covers exactly the actionable types (friend requests and
-            // invites); the v2 endpoint carries badges and announcements the
-            // inbox has no action to draw for.
+            // v1 carries friend requests and invites, v2 everything VRChat
+            // added since: group invites and join requests, announcements,
+            // queue-ready, instance closures, moderation. Neither endpoint
+            // returns the other's notifications, so the inbox needs both.
             HTTPResponse resp = server.httpClient.get(
                 "/auth/user/notifications?n=" ~ NOTIFICATION_FETCH_LIMIT.to!string());
             logDebugging("handleGetNotifications: VRC GET /auth/user/notifications -> HTTP %d",
@@ -1248,10 +1250,17 @@ private class ClientHandler
 
                 NotificationInfo info = parseNotificationObject(entry,
                     senderId.length ? server.friendsTracker.getDisplayName(senderId) : null);
-                if (info.id.length == 0) // Not actionable, or unusable.
+                if (info.id.length == 0) // Unusable object.
                     continue;
                 parsed ~= info;
             }
+            size_t v1Count = parsed.length;
+
+            // The v2 half is fetched second and is allowed to fail on its
+            // own: a front-end that gets friend requests and no group
+            // announcements is in better shape than one that gets an error
+            // and keeps whatever stale list it had.
+            fetchNotificationsV2Locked(parsed);
 
             // A friend request is precisely the case the roster cannot
             // answer: the sender is not a friend yet, which is the whole
@@ -1274,12 +1283,84 @@ private class ClientHandler
                 "notifications": JSONValue(items),
             ]);
             sendLine(result.toString() ~ "\n");
-            logDebugging("handleGetNotifications: %d actionable of %d",
-                items.length, json.array.length);
+            logDebugging("handleGetNotifications: %d entries (%d v1, %d v2)",
+                items.length, v1Count, parsed.length - v1Count);
         }
         catch (Exception e)
         {
             sendNotificationsError(e.msg);
+        }
+    }
+
+    /// Append the v2 listing to a list already holding the v1 one. Caller
+    /// holds the API mutex.
+    ///
+    /// Failures are logged and swallowed rather than raised: this half is an
+    /// addition to an inbox that already has something in it, and the caller
+    /// would otherwise throw away a good v1 fetch over a bad v2 one.
+    void fetchNotificationsV2Locked(ref NotificationInfo[] list)
+    {
+        if (server.rateLimiter && server.rateLimiter.isBlocked())
+        {
+            logWarn("Skipping v2 notifications: rate limited by VRChat");
+            return;
+        }
+
+        try
+        {
+            HTTPResponse resp = server.httpClient.get(
+                "/notifications?n=" ~ NOTIFICATION_FETCH_LIMIT.to!string());
+            logDebugging("fetchNotificationsV2Locked: VRC GET /notifications -> HTTP %d",
+                resp.code);
+            if (server.rateLimiter)
+            {
+                server.rateLimiter.update(resp);
+                server.broadcastStatus();
+            }
+            if (resp.code < 200 || resp.code >= 300)
+            {
+                logWarn("Could not fetch v2 notifications: HTTP %d", resp.code);
+                return;
+            }
+
+            JSONValue json = parseJSON(resp.text);
+            if (json.type != JSONType.array)
+            {
+                logWarn("Unexpected v2 notifications response");
+                return;
+            }
+
+            foreach (JSONValue entry; json.array)
+            {
+                string senderId;
+                if (const(JSONValue)* v = "senderUserId" in entry)
+                    if (v.type == JSONType.string)
+                        senderId = v.str;
+
+                NotificationInfo info = parseNotificationV2Object(entry,
+                    senderId.length ? server.friendsTracker.getDisplayName(senderId) : null);
+                if (info.id.length == 0)
+                    continue;
+
+                // The two systems have overlapped before (an invite showing
+                // up in both listings), and two rows for one notification
+                // means two sets of buttons for one answer.
+                bool seen;
+                foreach (ref NotificationInfo existing; list)
+                {
+                    if (existing.id == info.id)
+                    {
+                        seen = true;
+                        break;
+                    }
+                }
+                if (seen == false)
+                    list ~= info;
+            }
+        }
+        catch (Exception e)
+        {
+            logWarn("Could not fetch v2 notifications: %s", e.msg);
         }
     }
 
@@ -1299,6 +1380,12 @@ private class ClientHandler
         foreach (ref NotificationInfo info; list)
         {
             if (info.senderName.length > 0 || info.senderUserId.length == 0)
+                continue;
+
+            // A v2 notification from a group puts the group ID here, and
+            // GET /users/grp_... is a 404 spent for nothing. The title says
+            // which group it is anyway.
+            if (startsWith(info.senderUserId, "usr_") == false)
                 continue;
 
             if (string *cached = info.senderUserId in resolved)
@@ -1363,6 +1450,23 @@ private class ClientHandler
         if (const(JSONValue)* v = "action" in msg)
             action = v.str;
 
+        // Which notification system answers this one. Absent means v1, which
+        // is what every front-end older than protocol 5 sends.
+        int apiVersion = 1;
+        if (const(JSONValue)* v = "api_version" in msg)
+            if (v.type == JSONType.integer)
+                apiVersion = cast(int)v.integer;
+
+        // A v2 notification names its own buttons, so the answer is whichever
+        // response the user pressed rather than a fixed accept.
+        string responseType, responseData;
+        if (const(JSONValue)* v = "response_type" in msg)
+            if (v.type == JSONType.string)
+                responseType = v.str;
+        if (const(JSONValue)* v = "response_data" in msg)
+            if (v.type == JSONType.string)
+                responseData = v.str;
+
         if (notifId.length == 0 || action.length == 0)
         {
             sendError("Missing notification_id or action");
@@ -1375,23 +1479,50 @@ private class ClientHandler
             return;
         }
 
-        // Map action to VRChat API endpoint.
+        // Map action to VRChat API endpoint. The two systems share no
+        // endpoints: v1 hides with a PUT, v2 deletes, and only v2 responds.
         string path;
+        string method = "PUT";
         switch (action)
         {
             case "accept":
+                if (apiVersion >= 2)
+                {
+                    sendError("A v2 notification is answered with respond");
+                    return;
+                }
                 path = "/auth/user/notifications/" ~ notifId ~ "/accept";
                 break;
             case "hide":
-                path = "/auth/user/notifications/" ~ notifId ~ "/hide";
+                if (apiVersion >= 2)
+                {
+                    path = "/notifications/" ~ notifId;
+                    method = "DELETE";
+                }
+                else
+                    path = "/auth/user/notifications/" ~ notifId ~ "/hide";
+                break;
+            case "respond":
+                if (apiVersion < 2)
+                {
+                    sendError("A v1 notification has no responses");
+                    return;
+                }
+                if (responseType.length == 0)
+                {
+                    sendError("Missing response_type");
+                    return;
+                }
+                path = "/notifications/" ~ notifId ~ "/respond";
+                method = "POST";
                 break;
             default:
                 sendError("Unknown action: " ~ action);
                 return;
         }
 
-        logDebugging("handleNotificationAction: action=%s notifId=%s path=%s",
-            action, notifId, path);
+        logDebugging("handleNotificationAction: action=%s notifId=%s %s %s",
+            action, notifId, method, path);
 
         // Call VRChat API (serialized via mutex).
         server.apiMutex.lock();
@@ -1406,8 +1537,24 @@ private class ClientHandler
 
         try
         {
-            HTTPResponse resp = server.httpClient.putJSON(path);
-            logDebugging("handleNotificationAction: VRC PUT %s -> HTTP %d", path, resp.code);
+            HTTPResponse resp;
+            switch (method)
+            {
+                case "DELETE":
+                    resp = server.httpClient.del(path);
+                    break;
+                case "POST":
+                    JSONValue payload = JSONValue([
+                        "responseType": JSONValue(responseType),
+                        "responseData": JSONValue(responseData),
+                    ]);
+                    resp = server.httpClient.postJSON(path, payload.toString());
+                    break;
+                default:
+                    resp = server.httpClient.putJSON(path);
+            }
+            logDebugging("handleNotificationAction: VRC %s %s -> HTTP %d",
+                method, path, resp.code);
             if (server.rateLimiter)
             {
                 server.rateLimiter.update(resp);

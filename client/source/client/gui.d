@@ -701,7 +701,7 @@ private void eventLoop(mu_Context* uictx)
             if (conn && appState.connected)
             {
                 foreach (ref NotificationAction act; appState.pendingActions)
-                    conn.sendNotificationAction(act.notificationId, act.action);
+                    conn.sendNotificationAction(act);
             }
             appState.pendingActions.length = 0;
         }
@@ -1076,7 +1076,7 @@ private void drainNetworkMessages()
                 if (catchUpComplete)
                     dispatchNotification(eventType, user, detail, saved);
 
-                // Store actionable notifications.
+                // Keep the inbox current from the same event.
                 storeNotification(eventType, msg, user, rawReceivedAt);
 
                 // The user's files/prints/inventory changed somewhere else
@@ -1343,7 +1343,7 @@ private void drainNetworkMessages()
                     bool stillPresent;
                     foreach (ref NotificationEntry n; appState.notifications)
                     {
-                        if (n.notificationId == notifId)
+                        if (n.info.id == notifId)
                         {
                             n.actionPending = false;
                             stillPresent = true;
@@ -1987,11 +1987,12 @@ private bool moderationLess(ref const ModerationEntry a, ref const ModerationEnt
     return icmp(a.displayName, b.displayName) < 0;
 }
 
-/// Store an actionable notification or remove on delete/hide events.
+/// Fold one event into the inbox: a notification arriving, changing, or
+/// going away.
 ///
 /// The decoding itself is shared with vrcd-server and the web front-end (see
-/// vrcd.notifications): VRChat hands the same notification out in two shapes
-/// and all three have to agree on what comes out of them.
+/// vrcd.notifications): VRChat has two notification systems and hands each
+/// out in two shapes, and all three have to agree on what comes out of them.
 private void storeNotification(string eventType, JSONValue msg, string user, string rawReceivedAt)
 {
     NotificationInfo added = void;
@@ -2005,8 +2006,11 @@ private void storeNotification(string eventType, JSONValue msg, string user, str
         return;
 
     case NotificationChange.added:
-        appState.addNotification(added.id, added.notificationType,
-            added.senderName, added.message, added.receivedAtUnix);
+        appState.addNotification(added);
+        return;
+
+    case NotificationChange.updated:
+        appState.updateNotification(added);
         return;
 
     case NotificationChange.removed:

@@ -14,6 +14,7 @@ import std.json : JSONValue;
 
 import ddui;
 import vrcd.events : prettyPlatform, prettyNotifType, shortAvatarId;
+import vrcd.notifications : NotificationInfo, NotificationResponse;
 
 import client.notifications : notifyEventLabels, feedEventLabels, feedFilterSections,
     feedEventIndex, prettyEventType;
@@ -1728,7 +1729,8 @@ private void drawFriendProfile(mu_Context* ctx, AppState* state, int scrollDelta
     mu_end_panel(ctx);
 }
 
-/// Notifications tab: friend requests, invites, etc.
+/// Notifications tab: friend requests, invites, group notifications, and
+/// anything else VRChat sends.
 ///
 /// Layout: each entry is a three-line cell with action buttons stacked
 /// on the right (VR-friendly touch targets). At ~640px (half of a 1280
@@ -1743,6 +1745,13 @@ private void drawFriendProfile(mu_Context* ctx, AppState* state, int scrollDelta
 ///
 /// Deny was removed because it sent the same "hide" as Dismiss, so the
 /// X covers both cases.
+///
+/// A v2 notification (group invite, join request, transfer, queue-ready)
+/// names its own buttons instead, and the row draws those: VRChat writes
+/// their labels, and a type this build has never heard of still gets the
+/// right actions. The row grows to fit them. Rows that answer nothing --
+/// an announcement, an instance closure -- keep only the X, and rows VRChat
+/// says it will clear itself get no buttons at all.
 ///
 /// Rows are oldest first and are never re-sorted (see
 /// AppState.addNotification). With the buttons in the rows, anything that
@@ -1759,8 +1768,8 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
     static immutable int[2] outerCols  = [-170, 160];
     static immutable int[1] fullCol    = [-1];
     static immutable int[2] headerCols = [-130, 120];
-    enum int rowHeight    = 90;
-    enum int actionHeight = 36; // two stacked buttons fit in ~90px row
+    enum int minRowHeight = 90;
+    enum int actionHeight = 36; // two stacked buttons fit in a 90px row
     enum lineColor = mu_Color(50, 50, 60, 255);
 
     mu_begin_panel(ctx, "NotificationsPanel");
@@ -1779,45 +1788,64 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
         string[] dismissedIds;
 
         // Header row with "Dismiss all". Queues hide actions for every
-        // non-pending notification.
+        // non-pending notification VRChat lets us dismiss.
         mu_layout_row(ctx, 2, headerCols.ptr, 30);
         mu_label(ctx, "");
         if (mu_button(ctx, "Dismiss all"))
         {
             foreach (ref NotificationEntry n; state.notifications)
             {
-                if (n.actionPending)
+                if (n.actionPending || n.info.canDelete == false)
                     continue;
-                state.pendingActions ~= NotificationAction(n.notificationId, "hide");
-                dismissedIds ~= n.notificationId;
+                state.pendingActions ~= dismissAction(n.info);
+                dismissedIds ~= n.info.id;
             }
         }
 
         foreach (ref NotificationEntry n; state.notifications)
         {
-            // Scope widget IDs by notificationId so identical button labels
+            // Scope widget IDs by notification ID so identical button labels
             // ("X", "Accept") across rows don't collide in microui.
-            mu_push_id(ctx, n.notificationId.ptr, cast(int) n.notificationId.length);
+            mu_push_id(ctx, n.info.id.ptr, cast(int) n.info.id.length);
+
+            // Tall enough for whatever buttons this one draws: a group
+            // invite offering three responses does not fit two rows.
+            int buttons = cast(int) n.info.responses.length;
+            if (buttons == 0 && n.info.notificationType == "friendRequest")
+                buttons = 1;
+            if (n.info.canDelete)
+                ++buttons;
+            int rowHeight = buttons * (actionHeight + 4);
+            if (rowHeight < minRowHeight)
+                rowHeight = minRowHeight;
 
             mu_layout_row(ctx, 2, outerCols.ptr, rowHeight);
 
             // Left column: type+date / from / message, each on its own row.
             char[32] relBuf = void;
-            const(char)[] relDate = formatRelative(n.receivedAtUnix, relBuf[]);
+            const(char)[] relDate = formatRelative(n.info.receivedAtUnix, relBuf[]);
+            string label = prettyNotifType(n.info.notificationType);
             char[96] headBuf = void;
             const(char)[] head = relDate.length > 0
-                ? sformat(headBuf[], "%s . %s", prettyNotifType(n.notificationType), relDate)
-                : prettyNotifType(n.notificationType);
+                ? sformat(headBuf[], "%s . %s", label, relDate)
+                : label;
+
+            // A group notification has no sender to name (VRChat puts the
+            // group's own ID there), so its title takes that line instead --
+            // unless the title is just the type over again, which it often is.
+            const(char)[] from = n.info.senderName;
+            if (from.length == 0 && n.info.title != label)
+                from = n.info.title;
 
             mu_layout_begin_column(ctx);
                 mu_layout_row(ctx, 1, fullCol.ptr, 0);
                 gridCell(ctx, head, lineColor, true);
 
                 mu_layout_row(ctx, 1, fullCol.ptr, 0);
-                gridCell(ctx, n.senderName, lineColor, true);
+                gridCell(ctx, from, lineColor, true);
 
                 mu_layout_row(ctx, 1, fullCol.ptr, 0);
-                gridCell(ctx, n.message, lineColor, true);
+                gridCell(ctx, n.info.message, lineColor, true);
             mu_layout_end_column(ctx);
 
             // Right column: stacked action buttons.
@@ -1827,31 +1855,53 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
                     mu_layout_row(ctx, 1, fullCol.ptr, 0);
                     mu_label(ctx, "Pending...");
                 }
-                else if (n.notificationType == "friendRequest")
-                {
-                    mu_layout_row(ctx, 1, fullCol.ptr, actionHeight);
-                    if (mu_button(ctx, "Accept"))
-                    {
-                        // Keep pending-confirmation flow for Accept: the user
-                        // wants to know whether the friendship was actually made.
-                        n.actionPending = true;
-                        state.pendingActions ~= NotificationAction(n.notificationId, "accept");
-                    }
-                    mu_layout_row(ctx, 1, fullCol.ptr, actionHeight);
-                    if (mu_button(ctx, "X"))
-                    {
-                        state.pendingActions ~= NotificationAction(n.notificationId, "hide");
-                        dismissedIds ~= n.notificationId;
-                    }
-                }
                 else
                 {
-                    // Other types (invite, requestInvite, ...) only support hide.
-                    mu_layout_row(ctx, 1, fullCol.ptr, 0);
-                    if (mu_button(ctx, "X"))
+                    // A v2 notification's own buttons replace anything this
+                    // build would have guessed: a group invite is not
+                    // accepted through the friend-request endpoint.
+                    foreach (ref NotificationResponse response; n.info.responses)
                     {
-                        state.pendingActions ~= NotificationAction(n.notificationId, "hide");
-                        dismissedIds ~= n.notificationId;
+                        mu_layout_row(ctx, 1, fullCol.ptr, actionHeight);
+                        if (mu_button(ctx, response.text.length
+                            ? response.text : response.type))
+                        {
+                            // Waits for the result rather than dropping the
+                            // row: the user pressed Accept on something and
+                            // wants to know whether it took.
+                            n.actionPending = true;
+                            state.pendingActions ~= NotificationAction(n.info.id,
+                                "respond", n.info.apiVersion,
+                                response.type, response.data);
+                        }
+                    }
+
+                    if (n.info.responses.length == 0
+                        && n.info.notificationType == "friendRequest")
+                    {
+                        mu_layout_row(ctx, 1, fullCol.ptr, actionHeight);
+                        if (mu_button(ctx, "Accept"))
+                        {
+                            // Keep pending-confirmation flow for Accept: the user
+                            // wants to know whether the friendship was actually made.
+                            n.actionPending = true;
+                            state.pendingActions ~= NotificationAction(n.info.id,
+                                "accept", n.info.apiVersion);
+                        }
+                    }
+
+                    // VRChat clears some of its own (a queue-ready expires, an
+                    // announcement is retracted) and refuses to be told to.
+                    // Those rows are read-only rather than wearing a button
+                    // that only fails.
+                    if (n.info.canDelete)
+                    {
+                        mu_layout_row(ctx, 1, fullCol.ptr, actionHeight);
+                        if (mu_button(ctx, "X"))
+                        {
+                            state.pendingActions ~= dismissAction(n.info);
+                            dismissedIds ~= n.info.id;
+                        }
                     }
                 }
             mu_layout_end_column(ctx);
@@ -1869,6 +1919,13 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
     }
 
     mu_end_panel(ctx);
+}
+
+/// The dismiss for one notification. Which endpoint that is depends on the
+/// system it came from, so the version travels with the action.
+private NotificationAction dismissAction(ref NotificationInfo info)
+{
+    return NotificationAction(info.id, "hide", info.apiVersion);
 }
 
 /// Tools tab: utility buttons.
@@ -2535,8 +2592,13 @@ private void drawToolsTab(mu_Context* ctx, AppState* state, int scrollDelta)
         // be a no-op if accidentally dispatched, and unique per click so the
         // dedup in addNotification doesn't swallow repeats.
         string id = "test_" ~ to!string(Clock.currTime.toUnixTime!long());
-        state.addNotification(id, "friendRequest", "TestUser",
-            "Synthetic friend request", Clock.currTime.toUnixTime!long());
+        NotificationInfo test;
+        test.id = id;
+        test.notificationType = "friendRequest";
+        test.senderName = "TestUser";
+        test.message = "Synthetic friend request";
+        test.receivedAtUnix = Clock.currTime.toUnixTime!long();
+        state.addNotification(test);
     }
 
     mu_end_panel(ctx);

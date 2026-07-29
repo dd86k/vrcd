@@ -8,7 +8,8 @@ import core.sync.mutex;
 import core.time : MonoTime;
 
 import client.notifications : notifyEventLabels, feedEventLabels;
-import vrcd.notifications : NotificationInfo;
+import vrcd.notifications : NotificationInfo, NotificationResponse,
+    mergeNotificationUpdate;
 
 /// Network connection state for the server connection.
 enum ConnectionState { disconnected, connecting, connected, failed }
@@ -143,18 +144,21 @@ enum ToolsPage { main, stripMetadata, friendList, muteList, blockList }
 struct NotificationAction
 {
     string notificationId; // VRChat notification ID (not_...)
-    string action;         // "accept" or "hide"
+    string action;         // "accept", "hide", or "respond"
+    int apiVersion = 1;    // Which notification system answers it, 1 or 2
+    string responseType;   // Which response was pressed ("respond" only)
+    string responseData;   // That response's opaque payload
 }
 
-/// A notification entry (friend request, invite, etc.).
+/// A notification entry (friend request, group invite, announcement, ...).
+///
+/// The notification itself is kept exactly as the shared model decoded it,
+/// so a type this build has never heard of still carries its title, message
+/// and buttons; only `actionPending` belongs to the UI.
 struct NotificationEntry
 {
-    string notificationId;   // VRChat "not_..." ID
-    string notificationType; // "friendRequest", "invite", "requestInvite"
-    string senderName;
-    string message;
-    long receivedAtUnix;     // 0 if unknown; UI formats relative to now
-    bool actionPending;      // true while waiting for server response
+    NotificationInfo info;
+    bool actionPending;    // true while waiting for server response
 }
 
 /// A file entry from the VRChat files API (gallery, icon, sticker, emoji).
@@ -468,18 +472,30 @@ struct AppState
     /// moment something arrived,  which in a headset means the button the
     /// user was already reaching for is no longer the one under the pointer.
     /// The same order is what vrcd-server sends and what the web inbox draws.
-    void addNotification(string notificationId, string notificationType,
-        string senderName, string message, long receivedAtUnix)
+    void addNotification(ref NotificationInfo info)
     {
         // Deduplicate. VRChat re-emits, and a repeat would draw a second row
         // with the same buttons.
         foreach (ref NotificationEntry n; notifications)
         {
-            if (n.notificationId == notificationId)
+            if (n.info.id == info.id)
                 return;
         }
-        notifications ~= NotificationEntry(notificationId, notificationType,
-            senderName, message, receivedAtUnix);
+        notifications ~= NotificationEntry(info);
+    }
+
+    /// Merge a `notification-v2-update` onto the row it names. Does nothing
+    /// when that row is not here: an update for a notification this client
+    /// never saw is an update to one already answered.
+    void updateNotification(ref NotificationInfo update)
+    {
+        foreach (ref NotificationEntry n; notifications)
+        {
+            if (n.info.id != update.id)
+                continue;
+            mergeNotificationUpdate(n.info, update);
+            return;
+        }
     }
 
     /// Replace the whole list from a server `notifications` snapshot. The
@@ -490,10 +506,7 @@ struct AppState
         NotificationEntry[] rebuilt;
         rebuilt.reserve(list.length);
         foreach (ref NotificationInfo info; list)
-        {
-            rebuilt ~= NotificationEntry(info.id, info.notificationType,
-                info.senderName, info.message, info.receivedAtUnix);
-        }
+            rebuilt ~= NotificationEntry(info);
         notifications = rebuilt;
     }
 
@@ -525,7 +538,7 @@ struct AppState
         NotificationEntry[] kept;
         foreach (ref NotificationEntry n; notifications)
         {
-            if (n.notificationId != notificationId)
+            if (n.info.id != notificationId)
                 kept ~= n;
         }
         notifications = kept;

@@ -250,14 +250,21 @@ class ServerConnection
         ]));
     }
 
-    /// Send a notification action (accept/hide) to the server.
-    void sendNotificationAction(string notificationId, string action)
+    /// Answer a notification: `accept` or `hide` on a v1 one, `respond` or
+    /// `hide` on a v2 one. The response fields are empty except on a
+    /// `respond`, where they name which of the notification's own buttons
+    /// was pressed.
+    void sendNotificationAction(ref NotificationAction act)
     {
-        logDebugging("sendNotificationAction: id=%s action=%s", notificationId, action);
+        logDebugging("sendNotificationAction: id=%s action=%s v%d response=%s",
+            act.notificationId, act.action, act.apiVersion, act.responseType);
         sendMessage(JSONValue([
             "type": JSONValue("notification_action"),
-            "notification_id": JSONValue(notificationId),
-            "action": JSONValue(action),
+            "notification_id": JSONValue(act.notificationId),
+            "action": JSONValue(act.action),
+            "api_version": JSONValue(act.apiVersion),
+            "response_type": JSONValue(act.responseType),
+            "response_data": JSONValue(act.responseData),
         ]));
     }
 
