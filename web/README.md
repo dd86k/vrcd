@@ -118,6 +118,7 @@ appears.
 | GET | `/api/wsticket` | cookie | Single-use WebSocket ticket |
 | POST | `/api/join` | cookie | `{"location":"wrld_...:1234~..."}`, requests a self-invite |
 | POST | `/api/notification` | cookie | `{"notification_id":"not_...","action":"accept"\|"hide"}` |
+| POST | `/api/status` | cookie | `{"status":"busy","status_description":"..."}`, sets your own status |
 | GET | `/api/content/:section` | cookie | One section's entries, and the fetch that fills them. `?refresh=1` re-lists, `?more=1` asks for the next page |
 | POST | `/api/content` | cookie | `{"action":"...","id":"...","slot":"drone"}` -- see below |
 | POST | `/api/upload` | cookie | `{"tag":"gallery"\|"icon"\|"sticker"\|"emoji"\|"print","data_base64":"...","note":"..."}` |
@@ -144,6 +145,16 @@ the link, 503 means there is no link to put it on, 400 means the action was not
 one of the three or the fields it needs were empty (a blank password is refused
 here rather than spending one of VRChat's login attempts on it).
 
+`/api/status` carries either field or both, and needs at least one. `status` is
+one of `active`, `join me`, `ask me`, `busy` -- anything else is a 400 here
+rather than a round trip. An absent `status_description` leaves the message as
+it is and an empty one clears it, which is why the two are not the same request:
+by the time it reaches vrcd-server, an absent field is a field left out of the
+`set_status`. The message is stripped of surrounding space and cut to 32 code
+points, counted as characters rather than bytes because that is what VRChat
+counts and because cutting UTF-8 by the byte would leave half a character
+behind.
+
 `/api/content` takes one action per request:
 
 | Action | ID | Effect |
@@ -158,10 +169,16 @@ here rather than spending one of VRChat's login attempts on it).
 Browser-to-server actions go over plain HTTP rather than up the socket, which
 keeps the WebSocket unidirectional. They are fire and forget: the outcome comes
 back from vrcd-server as a `join_instance_result`, a
-`notification_action_result` or one of the content results, and reaches the
-page in the next state broadcast, which is also what drops an answered
-notification from the inbox. An action other than the ones listed is refused
-here rather than travelling down to vrcd-server to be refused there.
+`notification_action_result`, a `set_status_result` or one of the content
+results, and reaches the page in the next state broadcast, which is also what
+drops an answered notification from the inbox. An action other than the ones
+listed is refused here rather than travelling down to vrcd-server to be refused
+there.
+
+Fire and forget is not only about the page: ddhttpd runs handlers on its poll
+thread, so a handler that waited for the link to answer would hold every other
+request behind it, which is the same reason the image proxy replies 202 rather
+than blocking.
 
 Request bodies are capped at 16 MB, which is VRChat's 10 MB picture plus base64
 expansion and the JSON around it. Past that the reply is a 413 and nothing is
@@ -415,12 +432,13 @@ TCP client for the vrcd-server JSON-L API, on its own thread.
   `notification_action_result`, `files`, `prints`, `inventory`,
   `inventory_action_result`, `delete_file_result`, `delete_print_result`,
   `set_user_icon_result`, `upload_image_result`, `upload_print_result`,
-  `image`, `auth_request`, `ping`, `error`. Everything else is logged and
-  dropped.
+  `image`, `set_status_result`, `auth_request`, `ping`, `error`.
+  Everything else is logged and dropped.
 - `self()`, `status()`, `roster()`, `joinResult()`, `notifications()`,
-  `notifyResult()`, `authPrompt()`, `content(section)`, `contentResult()` --
-  mutex-guarded snapshots for HTTP threads.
+  `notifyResult()`, `statusResult()`, `authPrompt()`, `content(section)`,
+  `contentResult()` -- mutex-guarded snapshots for HTTP threads.
 - `requestJoin(location)`, `requestNotificationAction(id, action)`,
+  `requestStatus(status, description, setDescription)`,
   `requestContent(section, force)`, `requestMoreContent(section)`,
   `requestInventoryAction(action, id, slot)`, `requestContentAction(action,
   id)`, `requestUpload(tag, base64, note)`, `image(fileId, version, size)`,
@@ -433,7 +451,7 @@ TCP client for the vrcd-server JSON-L API, on its own thread.
   broadcast per thumbnail would put a whole grid's worth of snapshots on every
   socket.
 - Types: `SelfInfo`, `LinkStatus`, `FeedEntry`, `JoinResult`,
-  `NotifyActionResult`, `AuthPrompt`, `ContentSnapshot`,
+  `NotifyActionResult`, `StatusUpdate`, `AuthPrompt`, `ContentSnapshot`,
   `ContentActionResult`, plus `CONTENT_SECTIONS` and the two helpers that
   validate a section name arriving over HTTP.
 
@@ -523,13 +541,18 @@ State snapshot, sent on every change and also returned by `/api/state`:
   "content_action": {
     "attempted": true, "action": "equip", "id": "inv_...",
     "success": true, "error": ""
+  },
+  "status_action": {
+    "attempted": true, "pending": false, "status": "busy",
+    "statusDescription": "at the club", "success": true, "error": ""
   }
 }
 ```
 
 `self` is absent until the server says who is logged in, `join` until a
 self-invite has been attempted this session, `notify_action` until a
-notification has been answered, and `content_action` until something in STUFF
+notification has been answered, `status_action` until a status change has been
+asked for, and `content_action` until something in STUFF
 has been acted on -- its `id` is the entry acted on, or the tag an upload went
 to. `content` is always there, with all six sections, and carries no entries on
 purpose: it says *that* a section moved, and the page fetches the entries from
@@ -542,7 +565,11 @@ wrong last time. `notifications` is always present, empty array
 included: the page has to tell "nothing waiting" apart from "the link has not
 answered yet", and its length is the badge on the rail. `location` is set only
 on an invite, and is what lets the row offer a join instead of an
-acknowledgement. `server_version` is the protocol
+acknowledgement. `status_action` carries what was asked for, since the
+`set_status_result` that answers it does not, and `pending` is true while the
+answer is outstanding: it lives in the snapshot rather than in the browser
+because the answer is broadcast, so a second browser on the same profile has to
+be able to show the change going out too. `server_version` is the protocol
 version from `auth_ok` as a number, zero when unknown. `n_users` and `capacity`
 are -1 when unknown. Friend entries carry no `bio` or `bioLinks` on purpose:
 the roster does not show them and they would bloat every broadcast.
@@ -588,7 +615,7 @@ Tabs:
 | Inbox | Live. Friend requests and invites, oldest first, with a count badge on the rail |
 | Stuff | Live. Gallery, icons, stickers, emoji, prints and inventory items as grids, with uploads, deletes, the profile icon, and equip/unequip/consume |
 | Tools | Placeholder. Most client tools are local and cannot appear here |
-| Profile | Live. Self profile plus the connection block |
+| Profile | Live. Self profile, the status picker, plus the connection block |
 
 The inbox draws its buttons in the row rather than the detail pane: answering a
 friend request should be one tap, and in a headset the detour through a second
@@ -608,7 +635,69 @@ pane when they are already a friend.
 Placeholders are the `soon` flag in the `TABS` table at the top of `app.js`, and
 each renders a line naming what it is waiting on. One profile layout serves both
 your own profile and a friend's; rows appear only when the field is present, so
-the difference between you and a friend is which fields the record carries.
+the difference between you and a friend is which fields the record carries. The
+one deliberate difference is the status picker, which the profile tab asks for
+with `editStatus` and a friend's detail pane never does.
+
+### Status
+
+Your own status is set from the profile tab, directly under the hero and above
+the fields nobody opened the tab to read. It is on that tab and not on the self
+card in the rail, which would have been the shorter reach on a desktop: the card
+lives in the rail foot, the bottom bar has no foot, and a popup hung off it would
+exist only on the layout that is not the phone. The card is the way in instead --
+it already opens the tab.
+
+The four are drawn as the rows the friends list is built from -- `.flat`, `.row`,
+`.row.on`, plus a tick -- left-aligned, and always open. Which is what a
+dropdown's opened menu looks like anyway, minus the press that opens it: VRChat
+and Discord hang theirs off a trigger because their status control lives in
+cramped chrome, and this pane has the room to just show them. Only the disabled
+state and the tick are new CSS, and both stay scoped to `.status-list` since no
+other row is ever disabled.
+
+A press selects; nothing is sent until SET STATUS. Both reasons are about this
+being a list inside a scrolling pane. A stationary mis-tap on the way to the
+message box would otherwise reach VRChat -- a touch that moves enough to scroll
+never fires `click`, so the drag is safe, but the fat-finger tap is not. And a
+status and a message picked together would cost two VRChat calls instead of the
+one `set_status` that carries both fields. The SDL client stages the same way
+(`selfStatusDraft` behind a Set button).
+
+That means two states have to be legible at once, and the two the app already
+draws split cleanly:
+
+| Mark | Means |
+|------|-------|
+| Accent band (`.row.on`) | What SET STATUS will send |
+| Tick | What VRChat has now |
+
+They sit on the same row until a pick separates them, so a staged change needs
+no badge of its own, and the tick is muted on a plain row and light on an
+accented one. SET STATUS goes `.primary` while anything differs, which is the
+app's existing "this is the action" cue, and pressing the row that is already
+live puts everything back and disarms it. Enter in the box does what the button
+does. Sending an empty box is how the message is cleared, and only the fields
+that actually changed go in the request.
+
+Both the staged pick and the typed message live outside the DOM
+(`statusChoice`, `statusDraft`, plus where the caret was) for the same reason
+the print caption does: a snapshot arrives on every friend movement and redraws
+the pane. Null means untouched and shows what VRChat has, so an in-game change
+appears there; once touched, the staged value wins until it is sent or the
+answer comes back. The button's handler reads both at the press rather than
+closing over what was on screen when it was drawn, since typing does not redraw
+the pane. Nothing is applied optimistically -- the tick moves when the `self`
+broadcast says it moved, which is also what makes an in-game status change or
+another browser's edit show up here.
+
+A failure is said twice, on purpose: a toast, and a line under the picker that
+stays. The toast is gone in six seconds, which on a phone is long enough to miss
+while scrolling. The stale-result problem the toast has everywhere else (the
+snapshot carries the last outcome indefinitely) is handled by seeding rather
+than reporting the first snapshot: a result from before this page opened is not
+news. The flag flips on the first snapshot whether or not it carried an outcome,
+or the first real one would be swallowed as though it predated the page.
 
 World thumbnails are stand-in gradients seeded from the world name. The image
 proxy that would replace them exists now, but the roster carries no world image

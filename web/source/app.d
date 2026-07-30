@@ -9,6 +9,7 @@ module app;
 
 import core.thread : Thread;
 import core.time : dur;
+import std.algorithm.searching : canFind;
 import std.conv : ConvException, to;
 import std.getopt;
 import std.json;
@@ -278,6 +279,27 @@ int main(string[] args)
             req.replyJSON(HTTPStatus.ok, `{"requested":true}`);
             return REQUEST_OK;
         })
+        .post(`/api/status`, (ref HTTPRequest req)
+        {
+            if (authorized(req, true) == false)
+                return REQUEST_OK;
+
+            StatusRequest status;
+            if (statusRequest(req.payload, status) == false)
+            {
+                req.replyJSON(HTTPStatus.badRequest,
+                    `{"error":"bad status or nothing to change"}`);
+                return REQUEST_OK;
+            }
+
+            // Fire and forget, like /api/join: waiting for the answer here
+            // would hold ddhttpd's poll thread, and the answer reaches every
+            // browser anyway, as a set_status_result and a fresh self.
+            link.requestStatus(status.status, status.description,
+                status.hasDescription);
+            req.replyJSON(HTTPStatus.ok, `{"requested":true}`);
+            return REQUEST_OK;
+        })
         .get(`/api/content/:section`, (ref HTTPRequest req)
         {
             if (authorized(req, true) == false)
@@ -529,6 +551,78 @@ private bool notificationAction(ubyte[] payload, out NotifyRequest notify)
     if (notify.action == "respond")
         return notify.responseType.length > 0;
     return notify.action == "accept" || notify.action == "hide";
+}
+
+/// The four statuses VRChat accepts. "offline" is not one of them: it is a
+/// state, not a choice.
+private immutable string[4] VRCHAT_STATUSES =
+    [ "active", "join me", "ask me", "busy" ];
+
+/// How many code points VRChat keeps of a custom status message. Anything past
+/// this is cut here rather than refused: the page limits its box to the same
+/// number, so a longer one is a client that did not.
+private enum size_t STATUS_MESSAGE_MAX = 32;
+
+/// One status change, as the page sends it.
+private struct StatusRequest
+{
+    string status;         /// One of VRCHAT_STATUSES. Empty leaves it alone.
+    string description;    /// Custom message. Only read with `hasDescription`.
+    bool hasDescription;   /// Whether the body carried one at all.
+}
+
+/// Pull a status change out of a /api/status request body. Returns false when
+/// the body changes nothing, or names a status VRChat does not have.
+///
+/// An absent `status_description` leaves the message as it is and an empty one
+/// clears it, which is the distinction `hasDescription` carries: the two cannot
+/// both be an empty string by the time this reaches vrcd-server.
+private bool statusRequest(ubyte[] payload, out StatusRequest status)
+{
+    if (payload.length == 0)
+        return false;
+
+    JSONValue body_;
+    try body_ = parseJSON(cast(const(char)[])payload);
+    catch (JSONException ex)
+    {
+        logWarn("Malformed status request: %s", ex.msg);
+        return false;
+    }
+
+    if (body_.type != JSONType.object)
+        return false;
+
+    if (const(JSONValue) *v = "status" in body_)
+        if (v.type == JSONType.string)
+            status.status = v.str;
+    if (const(JSONValue) *v = "status_description" in body_)
+        if (v.type == JSONType.string)
+        {
+            status.description = trimCodePoints(v.str.strip, STATUS_MESSAGE_MAX);
+            status.hasDescription = true;
+        }
+
+    // vrcd-server checks the status too, being the one that answers to VRChat;
+    // this only keeps a typo from becoming a round trip.
+    if (status.status.length > 0 && canFind(VRCHAT_STATUSES[], status.status) == false)
+        return false;
+
+    return status.status.length > 0 || status.hasDescription;
+}
+
+/// First `max` code points of `text`, whole: cutting UTF-8 by the byte would
+/// leave a partial sequence, and VRChat counts characters, not bytes.
+private string trimCodePoints(string text, size_t max)
+{
+    size_t seen;
+    foreach (size_t offset, dchar _; text)
+    {
+        if (seen >= max)
+            return text[0 .. offset];
+        ++seen;
+    }
+    return text;
 }
 
 /// Pull a content action out of a /api/content request body. Returns false

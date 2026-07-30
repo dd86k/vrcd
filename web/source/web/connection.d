@@ -98,6 +98,23 @@ struct JoinResult
     string error;
 }
 
+/// Outcome of the most recent status change, for feedback on the page.
+struct StatusUpdate
+{
+    /// False until a status change has been asked for this session.
+    bool attempted;
+    /// True while vrcd-server has yet to answer for one. Held here rather than
+    /// in the browser because the answer arrives as a broadcast: every browser
+    /// showing the profile has to be able to tell that one is on its way.
+    bool pending;
+    /// What was asked for, which the reply does not carry. Empty for a field
+    /// the request left alone.
+    string status;
+    string statusDescription;
+    bool success;
+    string error;
+}
+
 /// A VRChat sign-in prompt vrcd-server has delegated to its front-ends.
 ///
 /// vrcd-server holds the VRChat session. When it runs headless and needs
@@ -272,6 +289,13 @@ class ServerLink
     {
         synchronized (stateMutex)
             return lastJoin;
+    }
+
+    /// Outcome of the most recent status change.
+    StatusUpdate statusResult()
+    {
+        synchronized (stateMutex)
+            return lastStatus;
     }
 
     /// Pending notifications, oldest first. Empty until the server's
@@ -611,6 +635,55 @@ class ServerLink
         logWarn("Self-invite for %s dropped: no link to vrcd-server", location);
     }
 
+    /// Set our own VRChat status, custom message, or both. Safe to call from an
+    /// HTTP thread; the reply arrives asynchronously as a `set_status_result`,
+    /// preceded by a fresh `self` for every front-end.
+    ///
+    /// Params:
+    ///   status = One of "active", "join me", "ask me", "busy". Empty leaves
+    ///            the status as it is.
+    ///   description = Custom status message. Only sent with `setDescription`.
+    ///   setDescription = Whether to send the description at all. Separate from
+    ///                    it being empty, which is how the message is cleared.
+    void requestStatus(string status, string description, bool setDescription)
+    {
+        logInfo("Setting status%s%s",
+            status.length > 0 ? " to " ~ status : "",
+            setDescription ? ` with message "` ~ description ~ `"` : "");
+
+        JSONValue message = JSONValue([ "type": JSONValue("set_status") ]);
+        if (status.length > 0)
+            message["status"] = JSONValue(status);
+        if (setDescription)
+            message["status_description"] = JSONValue(description);
+
+        // Published before the send, not after: this is what the page draws
+        // "saving" from, and it should be up while the request is on the wire.
+        StatusUpdate asked;
+        asked.attempted = true;
+        asked.pending = true;
+        asked.status = status;
+        asked.statusDescription = description;
+
+        synchronized (stateMutex)
+            lastStatus = asked;
+        notifyChange();
+
+        if (sendMessage(message))
+            return;
+
+        // Nothing carried it, so answer here: the page is waiting on a
+        // set_status_result that no one is going to send.
+        asked.pending = false;
+        asked.error = "Not connected to vrcd-server";
+
+        synchronized (stateMutex)
+            lastStatus = asked;
+        notifyChange();
+
+        logWarn("Status change dropped: no link to vrcd-server");
+    }
+
     /// Answer a notification: `accept` or `hide` on a v1 one, `respond` or
     /// `hide` on a v2 one. Safe to call from an HTTP thread; the reply
     /// arrives asynchronously as a `notification_action_result`.
@@ -674,6 +747,7 @@ private:
     /// friend request gets accepted.
     NotificationInfo[] inbox;
     NotifyActionResult lastNotifyAction;
+    StatusUpdate lastStatus;
     AuthPrompt pendingAuth;
     /// One per entry in CONTENT_SECTIONS, in that order.
     ContentSnapshot[CONTENT_SECTIONS.length] sections;
@@ -806,6 +880,15 @@ private:
                 // still-pending prompt after the next auth_ok. Leaving the
                 // modal up would collect a password for a socket that is gone.
                 pendingAuth = AuthPrompt.init;
+
+                // Same for a status change: the set_status_result it is waiting
+                // on died with the socket, and a picker stuck on "saving" is
+                // worse than one that can be pressed again.
+                if (lastStatus.pending)
+                {
+                    lastStatus.pending = false;
+                    lastStatus.error = "Not connected to vrcd-server";
+                }
 
                 // A request that was in flight died with the socket. The
                 // entries themselves stay: they are worth reading while
@@ -1144,6 +1227,31 @@ private:
                 logInfo("Self-invite sent for %s", result.location);
             else
                 logWarn("Self-invite for %s failed: %s", result.location, result.error);
+            break;
+
+        case "set_status_result":
+            string statusError = jsonString(message, "error");
+            bool statusOK;
+            if (const(JSONValue) *v = "success" in message)
+                statusOK = v.type == JSONType.true_;
+
+            // The reply says only how it went, so what was asked for stays as
+            // requestStatus left it: the page names it in the failure. A
+            // success has already arrived as a `self` of its own, which is what
+            // moves the picker.
+            synchronized (stateMutex)
+            {
+                lastStatus.attempted = true;
+                lastStatus.pending = false;
+                lastStatus.success = statusOK;
+                lastStatus.error = statusError;
+            }
+            notifyChange();
+
+            if (statusOK)
+                logInfo("Status updated");
+            else
+                logWarn("Status update failed: %s", statusError);
             break;
 
         case "auth_request":

@@ -17,6 +17,19 @@ var STATUS_COLORS = {
     "offline": "#8a8a99"
 };
 
+/* The four statuses VRChat lets you set, in the order it offers them. Offline
+   is in STATUS_COLORS but not here: it is a state, not a choice. */
+var STATUS_CHOICES = [
+    { value: "join me", label: "Join Me" },
+    { value: "active",  label: "Active" },
+    { value: "ask me",  label: "Ask Me" },
+    { value: "busy",    label: "Busy" }
+];
+
+/* VRChat counts characters, not bytes, and cuts a longer message off. Matched
+   on the box so the limit is visible while typing rather than after saving. */
+var STATUS_MESSAGE_MAX = 32;
+
 var PLATFORMS = {
     "standalonewindows": "PC",
     "android": "Quest",
@@ -168,6 +181,23 @@ var view = { tab: "online", sel: null, filter: "", section: "gallery" };
 var lastJoinKey = "";
 var lastNotifyKey = "";
 var lastActionKey = "";
+var lastStatusKey = "";
+
+/* The staged status change: the row that has been picked, what has been typed
+   into the message box, and where the caret was in it. Null means untouched, so
+   the picker and the box show what VRChat has; a redraw arrives on every friend
+   movement, which is why none of this lives in the DOM. `statusPending` covers
+   the gap between the press and the first snapshot that says a change is in
+   flight; the snapshot's own `pending` takes over. */
+var statusChoice = null;
+var statusDraft = null;
+var statusCaret = -1;
+var statusPending = false;
+/* False until a snapshot has been through the reporters. The snapshot carries
+   the last outcome indefinitely, so a page that just opened would otherwise
+   announce a change somebody made an hour ago; the line under the picker still
+   says it, which is the right weight for old news. */
+var statusSeeded = false;
 /* Notification IDs with a request in flight. A snapshot replaces `state`
    wholesale, so the in-flight mark cannot live on the entry itself. */
 var pendingNotifications = {};
@@ -1783,8 +1813,14 @@ function renderProfile(body, person, opts) {
     hero.appendChild(sub);
     body.appendChild(hero);
 
+    // Directly under the hero, above the fields nobody came here to read: on
+    // your own profile this is the reason the tab is open.
+    if (opts.editStatus) statusEditor(body, person);
+
     var kv = el("dl", "kv");
-    pair(kv, "Status", person.status || "unknown");
+    // The picker already says which one is on, and says it larger.
+    if (opts.editStatus === undefined)
+        pair(kv, "Status", person.status || "unknown");
     if (person.platform)
         pair(kv, "Platform", PLATFORMS[person.platform] || person.platform);
     if (person.pronouns) pair(kv, "Pronouns", person.pronouns);
@@ -1817,11 +1853,106 @@ function renderProfile(body, person, opts) {
     body.appendChild(actions);
 }
 
+/* Your own status, on your own profile. The four are always open rather than
+   behind a dropdown: this pane has the room, and hiding them trades one press
+   for two plus a smaller target to find first. They are the same rows the
+   friends list is built from, which is what a dropdown's opened menu looks like
+   anyway.
+
+   A press selects rather than sends. Two reasons, and both are about this being
+   a list inside a scrolling pane: a stationary mis-tap on the way to the message
+   box would otherwise reach VRChat, and a status and a message picked together
+   would cost two calls instead of the one `set_status` that carries both. The
+   SDL client stages the same way.
+
+   Which means two states have to be legible at once, and the two the app already
+   draws split cleanly: the accent band is what SET STATUS will send, the tick is
+   what VRChat has. They sit on the same row until a pick separates them. */
+function statusEditor(body, self) {
+    var busy = statusPending ||
+        (state.status_action !== undefined && state.status_action.pending === true);
+    var offline = state.connected === false;
+    var liveStatus = self.status;
+    var live = self.statusDescription || "";
+    var picked = statusChoice === null ? liveStatus : statusChoice;
+    var typed = statusDraft === null ? live : statusDraft;
+    var dirty = picked !== liveStatus || typed !== live;
+
+    body.appendChild(el("div", "section", "Status"));
+
+    var list = el("div", "flat status-list");
+    STATUS_CHOICES.forEach(function (choice) {
+        var row = el("button", "row" + (picked === choice.value ? " on" : ""));
+        row.appendChild(statusDot(choice.value, true));
+
+        var who = el("div", "who");
+        who.appendChild(el("div", "n", choice.label));
+        row.appendChild(who);
+
+        if (liveStatus === choice.value) row.appendChild(el("span", "tick", "✓"));
+
+        row.disabled = busy || offline;
+        // Staged, not sent. A redraw is what moves the accent, and it also puts
+        // the caret back in the message box (see renderList), so typing a
+        // message and then picking a status does not lose the typing.
+        row.onclick = function () {
+            statusChoice = choice.value;
+            renderList();
+        };
+        list.appendChild(row);
+    });
+    body.appendChild(list);
+
+    var box = el("input", "note-input status-message");
+    box.id = "statusMessage";
+    box.type = "text";
+    box.placeholder = "Custom status message";
+    box.maxLength = STATUS_MESSAGE_MAX;
+    box.value = typed;
+    box.disabled = busy || offline;
+    body.appendChild(box);
+
+    var ready = busy === false && offline === false && dirty;
+    var save = el("button", "act" + (ready ? " primary" : ""),
+        busy ? "SENDING..." : "SET STATUS");
+    save.disabled = ready === false;
+    // Read at the press rather than closed over: typing does not redraw the
+    // pane, so `typed` is already out of date by the time this runs. Only what
+    // actually changed is sent, so the request says what was asked for.
+    save.onclick = function () {
+        var choice = statusChoice === null ? liveStatus : statusChoice;
+        var message = statusDraft === null ? live : statusDraft;
+        sendStatus(choice === liveStatus ? "" : choice,
+            message === live ? null : message);
+    };
+    body.appendChild(save);
+
+    // The button is armed from here rather than through a redraw: a redraw per
+    // keypress would take the caret with it.
+    box.oninput = function (ev) {
+        statusDraft = ev.target.value;
+        save.disabled = busy || offline ||
+            (picked === liveStatus && statusDraft === live);
+        save.classList.toggle("primary", save.disabled === false);
+    };
+    box.onkeydown = function (ev) {
+        if (ev.key === "Enter" && save.disabled === false) save.onclick();
+    };
+
+    if (busy === false && state.status_action !== undefined &&
+        state.status_action.error)
+        body.appendChild(el("div", "err", state.status_action.error));
+}
+
 function renderProfileTab(body) {
-    if (state.self)
-        renderProfile(body, state.self, {});
-    else
+    if (state.self) {
+        renderProfile(body, state.self, { editStatus: true });
+        // The box is in the document by now; focus does nothing to a node that
+        // is not.
+        restoreStatusCaret();
+    } else {
         body.appendChild(placeholder("Not signed in to VRChat yet."));
+    }
 
     body.appendChild(el("div", "section", "Connection"));
     var conn = el("dl", "kv");
@@ -1849,11 +1980,14 @@ function renderList() {
     var body = document.getElementById("listBody");
     var search = document.getElementById("search");
 
-    // Read off the print caption box before the redraw drops it, so the caret
-    // can be put back where the typing was. -1 means it did not have focus and
-    // must not be given it.
+    // Read off the print caption and status message boxes before the redraw
+    // drops them, so the caret can be put back where the typing was. -1 means
+    // it did not have focus and must not be given it.
     var note = document.getElementById("printNote");
     printCaret = note && document.activeElement === note ? note.selectionStart : -1;
+    var message = document.getElementById("statusMessage");
+    statusCaret = message && document.activeElement === message
+        ? message.selectionStart : -1;
 
     body.textContent = "";
     document.getElementById("listTitle").textContent = TITLES[tab.id];
@@ -2045,6 +2179,44 @@ function showToast(message, bad) {
     toast.classList.toggle("bad", !!bad);
     if (toastTimer) clearTimeout(toastTimer);
     toastTimer = setTimeout(function () { toast.classList.add("hidden"); }, 6000);
+}
+
+/* Put the status message box back the way the redraw found it. */
+function restoreStatusCaret() {
+    if (statusCaret < 0) return;
+
+    var box = document.getElementById("statusMessage");
+    if (box === null) return;
+
+    box.focus();
+    box.setSelectionRange(statusCaret, statusCaret);
+}
+
+/* Send a status change. `status` empty leaves the status alone, `message` null
+   leaves the message alone; an empty message clears it, which is why the two
+   are not the same thing. The outcome comes back in the next snapshot. */
+function sendStatus(status, message) {
+    var body = {};
+    if (status) body.status = status;
+    if (message !== null) body.status_description = message;
+
+    statusPending = true;
+    if (view.tab === "profile") renderList();
+
+    fetch("/api/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+    }).then(function (r) {
+        if (r.ok) return;
+        statusPending = false;
+        showToast("The vrcd web server refused that status", true);
+        if (view.tab === "profile") renderList();
+    }).catch(function () {
+        statusPending = false;
+        showToast("Could not reach the vrcd web server", true);
+        if (view.tab === "profile") renderList();
+    });
 }
 
 function join(location, button) {
@@ -2258,11 +2430,51 @@ function applyState(message) {
         if (stillThere === false) delete pendingNotifications[id];
     });
 
+    // A link that went down takes the answer with it, so the picker goes back
+    // to being pressable rather than sitting on "SAVING..." for an answer that
+    // is never coming.
+    if (state.connected === false) statusPending = false;
+
     render();
     reportJoin();
     reportNotifyAction();
     reportContentAction();
+    // Told whether this is the first snapshot this page has seen, which is
+    // flipped here rather than in there: a first snapshot carrying no outcome
+    // at all still counts as seen, or the first real one would be swallowed as
+    // though it predated the page.
+    reportStatus(statusSeeded === false);
+    statusSeeded = true;
     syncContent();
+}
+
+function reportStatus(seeding) {
+    var result = state.status_action;
+    if (!result || !result.attempted || result.pending) return;
+
+    // Like the join result, the snapshot carries the last one indefinitely, so
+    // only say something when it actually changed.
+    var key = result.status + "|" + result.statusDescription + "|" +
+        result.success + "|" + result.error;
+    if (key === lastStatusKey) return;
+    lastStatusKey = key;
+
+    // Already there when the page opened, so it is not news, and whoever did it
+    // has been told once already.
+    if (seeding) return;
+
+    statusPending = false;
+    // What was staged is what VRChat now has, so both go back to following the
+    // snapshot; either one left behind would keep SET STATUS armed against it.
+    if (result.success) {
+        statusChoice = null;
+        statusDraft = null;
+    }
+    if (view.tab === "profile") renderList();
+
+    showToast(result.success
+        ? "Status updated"
+        : "Status change failed: " + result.error, !result.success);
 }
 
 /* The snapshot carries only that a section moved, not its entries. A bump

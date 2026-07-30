@@ -339,6 +339,23 @@ button.head { cursor: pointer; }
 .act.primary:hover { background: #3d5f94; }
 .act:disabled { opacity: .45; cursor: default; }
 
+/* Your own status, on the profile tab: the same rows the friends list is built
+   from (.flat, .row, .row.on), which is what a dropdown's opened menu looks
+   like without the press that opens it. Only the disabled state and the tick
+   are new -- no other .row is ever disabled, so both stay scoped to here.
+
+   The accent is what SET STATUS will send and the tick is what VRChat has, so
+   the tick has to read on a plain row as well as an accented one: muted while
+   the two are separated by a pick, and light once they are back together. */
+.status-list .row:disabled { opacity: .45; cursor: default; }
+.status-list .row:disabled:hover { background: var(--panel); }
+.status-list .row.on:disabled:hover { background: var(--accent); }
+.status-list .tick { flex: none; color: var(--muted); font-size: 1.1rem; }
+.status-list .row.on .tick { color: #cfd9ea; }
+/* Standalone rather than in a .bar, where flex-basis does the sizing: an input
+   left to itself is about twenty characters wide. */
+.status-message { width: 100%; margin-bottom: .5rem; }
+
 .placeholder { color: var(--dim); text-align: center; padding: 4rem 1rem; font-size: .9rem; }
 .placeholder b { display: block; color: var(--muted); margin-bottom: .5rem; }
 

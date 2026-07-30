@@ -26,6 +26,7 @@ string buildStateJSON(ServerLink link)
     JoinResult join = link.joinResult();
     NotificationInfo[] inbox = link.notifications();
     NotifyActionResult notifyAction = link.notifyResult();
+    StatusUpdate statusUpdate = link.statusResult();
     AuthPrompt signin = link.authPrompt();
     ContentActionResult contentAction = link.contentResult();
 
@@ -130,6 +131,21 @@ string buildStateJSON(ServerLink link)
             "id":        JSONValue(contentAction.id),
             "success":   JSONValue(contentAction.success),
             "error":     JSONValue(contentAction.error),
+        ]);
+    }
+
+    // The status picker on the profile tab. `pending` is in the snapshot rather
+    // than in the browser because the answer is broadcast: a second browser
+    // watching the same profile has to show the change going out too.
+    if (statusUpdate.attempted)
+    {
+        root["status_action"] = JSONValue([
+            "attempted":         JSONValue(true),
+            "pending":           JSONValue(statusUpdate.pending),
+            "status":            JSONValue(statusUpdate.status),
+            "statusDescription": JSONValue(statusUpdate.statusDescription),
+            "success":           JSONValue(statusUpdate.success),
+            "error":             JSONValue(statusUpdate.error),
         ]);
     }
 
