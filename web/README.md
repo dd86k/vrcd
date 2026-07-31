@@ -122,6 +122,7 @@ appears.
 | GET | `/api/content/:section` | cookie | One section's entries, and the fetch that fills them. `?refresh=1` re-lists, `?more=1` asks for the next page |
 | POST | `/api/content` | cookie | `{"action":"...","id":"...","slot":"drone"}` -- see below |
 | POST | `/api/upload` | cookie | `{"tag":"gallery"\|"icon"\|"sticker"\|"emoji"\|"print","data_base64":"...","note":"..."}` |
+| POST | `/api/moderation` | cookie | `{"action":"mute"\|"unmute"\|"block"\|"unblock"\|"unfriend","user_id":"usr_..."}`, or `{"action":"refresh"}` to re-list |
 | GET | `/api/image/:file_id` | cookie | One proxied VRChat image, `?v=` version and `?size=` edge |
 | POST | `/api/auth` | cookie | Answers a delegated VRChat sign-in prompt |
 | WS | `/ws/:ticket` | ticket | State snapshots and feed events |
@@ -166,14 +167,22 @@ behind.
 | `delete_print` | `prnt_...` | Deletes a print |
 | `set_icon` | `file_...` | Sets the profile icon, or clears it when the ID is empty |
 
+`/api/moderation` takes one action per request. `refresh` re-lists the mutes and
+blocks and names nobody; the rest name a `user_id`, which is checked for shape
+here because it lands in a path vrcd-server builds. Only the characters are
+checked, not the `usr_` prefix: VRChat accounts old enough predate it and can
+still be muted. `unfriend` is not a player moderation and takes a different call
+on the other side, but it comes back through the same result slot: both are
+"something was done to a person", and the page offers one at a time.
+
 Browser-to-server actions go over plain HTTP rather than up the socket, which
 keeps the WebSocket unidirectional. They are fire and forget: the outcome comes
 back from vrcd-server as a `join_instance_result`, a
-`notification_action_result`, a `set_status_result` or one of the content
-results, and reaches the page in the next state broadcast, which is also what
-drops an answered notification from the inbox. An action other than the ones
-listed is refused here rather than travelling down to vrcd-server to be refused
-there.
+`notification_action_result`, a `set_status_result`, a `moderate_result`, an
+`unfriend_result` or one of the content results, and reaches the page in the
+next state broadcast, which is also what drops an answered notification from the
+inbox. An action other than the ones listed is refused here rather than
+travelling down to vrcd-server to be refused there.
 
 Fire and forget is not only about the page: ddhttpd runs handlers on its poll
 thread, so a handler that waited for the link to answer would hold every other
@@ -328,6 +337,58 @@ step yet, so a non-square sticker comes back refused rather than trimmed.
 Animated emoji upload as a still: the sprite-sheet fields exist in the API but
 this page has nothing to describe them with.
 
+### Tools
+
+The TOOLS tab is friend management: one flat list of everyone on the friends
+list, and VRChat's two player moderation lists.
+
+| Section | Source | Actions |
+|---------|--------|---------|
+| Friends | The roster already in the snapshot | Mute, block, unfriend, from the detail pane |
+| Muted | `get_moderations` | Unmute, from the row |
+| Blocked | `get_moderations` | Unblock, from the row |
+
+The friends section is the same roster the ONLINE tab draws, flattened and
+sorted by name: grouped by instance is the right shape for seeing where
+everybody is and the wrong one for looking somebody up.
+
+Unlike the STUFF sections, the mute and block lists ride in the state snapshot.
+An entry is a name and an ID, and the roster travelling in the same message is
+many times their size, so fetching them separately would buy nothing and cost a
+round trip per change. They are asked for once per link connection rather than
+when the tab is opened, because a friend's pane draws mute and block as toggles
+and a toggle that does not know which way it is pointing is worse than one call
+per connection. Until they land, the pane says so instead of guessing.
+
+VRChat sends no WebSocket events for player moderations at all, so nothing keeps
+them current: a mute made in-game shows up when REFRESH is pressed, or on the
+next reconnect. A moderation made from here does not need either, since
+vrcd-server re-broadcasts both lists after its own successful call, and that
+reaches every browser rather than only the one that pressed the button.
+
+Mute is one tap either way -- it is invisible from the other side and undone by
+pressing the same button again. Block and unfriend arm first, and the confirm is
+not where the first tap landed: Cancel takes that spot, because both are visible
+to the other person and neither is undone by a second press. Unblock and unmute
+are single taps for the same reason mute is.
+
+A moderation is not limited to friends and outlives the friendship it started
+in, so a row in either list may name somebody who is not in the roster. Those
+rows carry the display name VRChat gave the moderation and open a thinner pane:
+a name, an ID, and the moderation buttons, with no unfriend among them. The rows
+in these two lists hold their own undo button rather than sending it to the
+detail pane -- a list of blocked people is read in order to unblock somebody --
+which is why the row is a container with the name as a button inside it.
+
+The same mute, block and unfriend buttons appear at the foot of a friend's pane
+wherever that pane is opened from, not only under TOOLS: it is the same pane
+either way, and muting somebody is usually decided while looking at where they
+are. They sit last, below the self-invite and the copy button, so the two worth
+a mis-tap are as far down as the pane goes.
+
+Protocol v3 is the floor. On an older vrcd-server the lists say so and the
+buttons are replaced by the same line.
+
 ### Image proxy
 
 A browser cannot fetch a VRChat file: the session lives on vrcd-server. So an
@@ -432,16 +493,19 @@ TCP client for the vrcd-server JSON-L API, on its own thread.
   `notification_action_result`, `files`, `prints`, `inventory`,
   `inventory_action_result`, `delete_file_result`, `delete_print_result`,
   `set_user_icon_result`, `upload_image_result`, `upload_print_result`,
-  `image`, `set_status_result`, `auth_request`, `ping`, `error`.
+  `image`, `set_status_result`, `moderations`, `moderate_result`,
+  `unfriend_result`, `auth_request`, `ping`, `error`.
   Everything else is logged and dropped.
 - `self()`, `status()`, `roster()`, `joinResult()`, `notifications()`,
   `notifyResult()`, `statusResult()`, `authPrompt()`, `content(section)`,
-  `contentResult()` -- mutex-guarded snapshots for HTTP threads.
+  `contentResult()`, `moderations()`, `moderationResult()` -- mutex-guarded
+  snapshots for HTTP threads.
 - `requestJoin(location)`, `requestNotificationAction(id, action)`,
   `requestStatus(status, description, setDescription)`,
   `requestContent(section, force)`, `requestMoreContent(section)`,
   `requestInventoryAction(action, id, slot)`, `requestContentAction(action,
-  id)`, `requestUpload(tag, base64, note)`, `image(fileId, version, size)`,
+  id)`, `requestUpload(tag, base64, note)`, `requestModerations(force)`,
+  `requestModeration(action, userId)`, `image(fileId, version, size)`,
   `submitCredentials(user, pass)`, `submitTwoFactor(code)`, `cancelAuth()` --
   safe from any thread; sends are serialized, and none of them block on a
   reply.
@@ -452,7 +516,8 @@ TCP client for the vrcd-server JSON-L API, on its own thread.
   socket.
 - Types: `SelfInfo`, `LinkStatus`, `FeedEntry`, `JoinResult`,
   `NotifyActionResult`, `StatusUpdate`, `AuthPrompt`, `ContentSnapshot`,
-  `ContentActionResult`, plus `CONTENT_SECTIONS` and the two helpers that
+  `ContentActionResult`, `ModeratedUser`, `ModerationSnapshot`,
+  `ModerationActionResult`, plus `CONTENT_SECTIONS` and the two helpers that
   validate a section name arriving over HTTP.
 
 ### `web/hub.d`
@@ -542,6 +607,15 @@ State snapshot, sent on every change and also returned by `/api/state`:
     "attempted": true, "action": "equip", "id": "inv_...",
     "success": true, "error": ""
   },
+  "moderations": {
+    "loading": false, "loaded": true, "error": "",
+    "muted": [{ "user_id": "usr_...", "display_name": "..." }],
+    "blocked": []
+  },
+  "moderation_action": {
+    "attempted": true, "action": "block", "user_id": "usr_...",
+    "display_name": "...", "success": true, "error": ""
+  },
   "status_action": {
     "attempted": true, "pending": false, "status": "busy",
     "statusDescription": "at the club", "success": true, "error": ""
@@ -569,7 +643,16 @@ acknowledgement. `status_action` carries what was asked for, since the
 `set_status_result` that answers it does not, and `pending` is true while the
 answer is outstanding: it lives in the snapshot rather than in the browser
 because the answer is broadcast, so a second browser on the same profile has to
-be able to show the change going out too. `server_version` is the protocol
+be able to show the change going out too. `moderations` is always
+there, empty lists included, for the same reason `notifications` is: "nobody is
+blocked" and "the link has not answered yet" are different things, and `loaded`
+is what tells them apart. Its entries do ride along, unlike the content
+sections: a name and an ID each, against a roster in the same message that is
+many times their size. `moderation_action` is absent until a mute, block or
+unfriend has been asked for this session, and carries the display name because
+the toast names whoever it was aimed at -- vrcd-server fills that in from its
+roster or from VRChat's answer, so it survives a name this side never had.
+`server_version` is the protocol
 version from `auth_ok` as a number, zero when unknown. `n_users` and `capacity`
 are -1 when unknown. Friend entries carry no `bio` or `bioLinks` on purpose:
 the roster does not show them and they would bloat every broadcast.
@@ -614,7 +697,7 @@ Tabs:
 | Online | Live. Friends grouped by instance, with instance and friend detail |
 | Inbox | Live. Friend requests and invites, oldest first, with a count badge on the rail |
 | Stuff | Live. Gallery, icons, stickers, emoji, prints and inventory items as grids, with uploads, deletes, the profile icon, and equip/unequip/consume |
-| Tools | Placeholder. Most client tools are local and cannot appear here |
+| Tools | Live. The whole friends list, plus the mute and block lists, with mute, block, unmute, unblock and unfriend |
 | Profile | Live. Self profile, the status picker, plus the connection block |
 
 The inbox draws its buttons in the row rather than the detail pane: answering a
@@ -632,12 +715,13 @@ VRChat's accept endpoint only means anything for a friend request, so an invite
 is answered by going where it points instead. The sender opens in the detail
 pane when they are already a friend.
 
-Placeholders are the `soon` flag in the `TABS` table at the top of `app.js`, and
-each renders a line naming what it is waiting on. One profile layout serves both
+One profile layout serves both
 your own profile and a friend's; rows appear only when the field is present, so
 the difference between you and a friend is which fields the record carries. The
-one deliberate difference is the status picker, which the profile tab asks for
-with `editStatus` and a friend's detail pane never does.
+two deliberate differences are the status picker, which the profile tab asks for
+with `editStatus` and a friend's detail pane never does, and the moderation
+buttons, which a friend's pane asks for with `moderate` and your own never does:
+none of them are aimed at yourself.
 
 ### Status
 

@@ -347,6 +347,30 @@ int main(string[] args)
             req.replyJSON(HTTPStatus.ok, `{"requested":true}`);
             return REQUEST_OK;
         })
+        .post(`/api/moderation`, (ref HTTPRequest req)
+        {
+            if (authorized(req, true) == false)
+                return REQUEST_OK;
+
+            string action, userId;
+            if (moderationAction(req.payload, action, userId) == false)
+            {
+                req.replyJSON(HTTPStatus.badRequest,
+                    `{"error":"bad moderation action"}`);
+                return REQUEST_OK;
+            }
+
+            // Fire and forget, like /api/join: a moderation reaches every
+            // browser as a fresh mute and block list, and an unfriend as a
+            // fresh roster.
+            if (action == "refresh")
+                link.requestModerations(true);
+            else
+                link.requestModeration(action, userId);
+
+            req.replyJSON(HTTPStatus.ok, `{"requested":true}`);
+            return REQUEST_OK;
+        })
         .post(`/api/upload`, (ref HTTPRequest req)
         {
             if (authorized(req, true) == false)
@@ -669,6 +693,63 @@ private bool contentAction(ubyte[] payload, out string action, out string id,
     case "set_icon":                     return true;
     default:                             return false;
     }
+}
+
+/// Pull a moderation out of a /api/moderation request body. Returns false when
+/// the action is not one this front-end offers, or when it names nobody and is
+/// not the refresh.
+///
+/// The user ID lands in a path vrcd-server builds (`/auth/user/friends/<id>`),
+/// so its shape is checked here. Only the characters are checked, not the
+/// `usr_` prefix: VRChat accounts old enough predate it and can still be
+/// muted.
+private bool moderationAction(ubyte[] payload, out string action, out string userId)
+{
+    import std.ascii : isAlphaNum;
+
+    if (payload.length == 0)
+        return false;
+
+    JSONValue body_;
+    try body_ = parseJSON(cast(const(char)[])payload);
+    catch (JSONException ex)
+    {
+        logWarn("Malformed moderation request: %s", ex.msg);
+        return false;
+    }
+
+    if (body_.type != JSONType.object)
+        return false;
+
+    if (const(JSONValue) *v = "action" in body_)
+        if (v.type == JSONType.string)
+            action = v.str;
+    if (const(JSONValue) *v = "user_id" in body_)
+        if (v.type == JSONType.string)
+            userId = v.str;
+
+    switch (action)
+    {
+    // Re-listing is aimed at nobody, so it carries no ID.
+    case "refresh":
+        return true;
+
+    case "mute", "unmute", "block", "unblock", "unfriend":
+        break;
+
+    default:
+        return false;
+    }
+
+    if (userId.length < 3 || userId.length > 64)
+        return false;
+
+    foreach (char c; userId)
+    {
+        if (isAlphaNum(c) == false && c != '-' && c != '_')
+            return false;
+    }
+    return true;
 }
 
 /// Pull an upload out of a /api/upload request body. The picture itself is

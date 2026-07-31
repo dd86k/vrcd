@@ -59,7 +59,6 @@ button { font: inherit; color: inherit; }
 }
 .rail button:hover { background: var(--panel); }
 .rail button.on { color: var(--text); background: var(--accent); border-color: var(--accent-hi); }
-.rail button.soon { color: var(--dim); }
 .rail .icon { flex: none; }
 .rail .badge {
     margin-left: auto; flex: none;
@@ -147,6 +146,15 @@ button { font: inherit; color: inherit; }
 .row .d { color: var(--muted); font-size: .8rem;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row.on .d { color: #cfd9ea; }
+/* A mute or block row carries its own undo, which makes the row a container
+   and the name a button inside it: a button inside a button is not a thing.
+   The name still fills the row, so the press that opens the pane is the whole
+   width rather than the text. */
+.row .who.bare {
+    background: none; border: 0; padding: 0; text-align: left; cursor: pointer;
+    align-self: stretch;
+}
+.row > .act { flex: none; width: auto; }
 
 .flat { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin-bottom: 1rem; }
 .section {
@@ -500,7 +508,6 @@ button.head { cursor: pointer; }
         font-size: .6rem; font-weight: 700; letter-spacing: .04em;
         color: var(--muted); background: none; border: 0; cursor: pointer;
     }
-    .bottom button.soon { color: var(--dim); opacity: .6; }
     .bottom button.on { color: var(--text); opacity: 1; }
     .bottom button.on::before {
         content: ""; position: absolute; top: 0; left: 20%; right: 20%; height: 3px;

@@ -39,6 +39,10 @@ private enum long PROTOCOL_NOTIFICATIONS = 4;
 /// `inventory_action`, `get_image`).
 private enum long PROTOCOL_CONTENT = 2;
 
+/// Protocol version that added the moderation API (`get_moderations`,
+/// `moderate_user`, `unfriend`).
+private enum long PROTOCOL_MODERATION = 3;
+
 /// Byte budget for proxied images. Thumbnails run tens of kilobytes each, so
 /// this holds a few hundred of them; past that the oldest are dropped and
 /// re-fetched if they are looked at again.
@@ -221,6 +225,50 @@ struct ContentActionResult
     string error;
 }
 
+/// One muted or blocked user.
+///
+/// A player moderation is not limited to friends, so the entry carries the
+/// display name VRChat last had for them: there may be no roster entry to look
+/// it up in.
+struct ModeratedUser
+{
+    string userId;
+    string displayName;
+}
+
+/// The mute and block lists, as vrcd-server last gave them.
+///
+/// These ride in the state broadcast rather than being fetched like the STUFF
+/// sections: an entry is a name and an ID, and nothing asks for them until a
+/// browser has already been sent a roster many times their size.
+struct ModerationSnapshot
+{
+    /// True while a `get_moderations` is outstanding.
+    bool loading;
+    /// True once a reply has landed. Stays true across a refresh, so the lists
+    /// on screen are not blanked while newer ones are on their way.
+    bool loaded;
+    ModeratedUser[] muted;
+    ModeratedUser[] blocked;
+    string error;
+}
+
+/// Outcome of the most recent moderation: a mute, a block, or an unfriend.
+struct ModerationActionResult
+{
+    /// False until one has been taken this session.
+    bool attempted;
+    /// "mute", "unmute", "block", "unblock" or "unfriend".
+    string action;
+    string userId;
+    /// Who that was, for the page's toast. vrcd-server fills it in from the
+    /// roster or from VRChat's answer, so it survives a name this side never
+    /// had.
+    string displayName;
+    bool success;
+    string error;
+}
+
 /// TCP client for the vrcd-server JSON-L API.
 ///
 /// Only the messages the web front-end renders are interpreted (`self`,
@@ -337,6 +385,109 @@ class ServerLink
     {
         synchronized (stateMutex)
             return lastContentAction;
+    }
+
+    /// The mute and block lists. Empty until the first reply lands.
+    ModerationSnapshot moderations()
+    {
+        synchronized (stateMutex)
+            return moderationList;
+    }
+
+    /// Outcome of the most recent mute, block or unfriend.
+    ModerationActionResult moderationResult()
+    {
+        synchronized (stateMutex)
+            return lastModeration;
+    }
+
+    /// Ask vrcd-server for the mute and block lists. Safe to call from an HTTP
+    /// thread.
+    ///
+    /// VRChat sends no WebSocket events for player moderations, so nothing
+    /// else keeps these current: they are asked for once per connection and
+    /// then only when the page presses refresh, which is what `force` is. A
+    /// moderation made from here updates them without a refetch, since
+    /// vrcd-server re-broadcasts the lists after its own successful calls.
+    ///
+    /// Params:
+    ///   force = Re-fetch even when the lists are already held.
+    void requestModerations(bool force)
+    {
+        bool ask;
+        synchronized (stateMutex)
+        {
+            if (moderationList.loading)
+                return;
+            if (force == false && moderationList.loaded)
+                return;
+
+            // Fills in the reason when it says no, so the page hears why
+            // rather than sitting on "Loading...".
+            ask = moderationsUnavailable() == false;
+            if (ask)
+            {
+                moderationList.loading = true;
+                moderationList.error = null;
+            }
+        }
+        notifyChange();
+
+        if (ask == false)
+            return;
+
+        logInfo("Requesting moderations");
+        if (sendMessage(JSONValue([ "type": JSONValue("get_moderations") ])))
+            return;
+
+        failModerations("Not connected to vrcd-server");
+    }
+
+    /// Mute, unmute, block, unblock or unfriend someone.
+    ///
+    /// Params:
+    ///   action = "mute", "unmute", "block", "unblock" or "unfriend".
+    ///   userId = Who it is aimed at. Not necessarily a friend: a moderation
+    ///            outlives the friendship it started in.
+    void requestModeration(string action, string userId)
+    {
+        logInfo("Moderation %s: %s", action, userId);
+
+        // Connected first: a link that is down reports version zero, and
+        // "too old" would be the wrong thing to say about a server that has
+        // not been asked yet.
+        LinkStatus current = status();
+        if (current.connected == false)
+        {
+            failModeration(action, userId, "Not connected to vrcd-server");
+            return;
+        }
+
+        if (current.serverVersion < PROTOCOL_MODERATION)
+        {
+            failModeration(action, userId, "This vrcd-server is too old to " ~
+                "moderate (needs protocol v3)");
+            return;
+        }
+
+        // Unfriending is not a player moderation and has its own call, but it
+        // reaches the page through the same result slot: both are "something
+        // was done to a person", and one at a time is all the page offers.
+        JSONValue message;
+        if (action == "unfriend")
+            message = JSONValue([
+                "type":    JSONValue("unfriend"),
+                "user_id": JSONValue(userId),
+            ]);
+        else
+            message = JSONValue([
+                "type":    JSONValue("moderate_user"),
+                "action":  JSONValue(action),
+                "user_id": JSONValue(userId),
+            ]);
+
+        if (sendMessage(message) == false)
+            failModeration(action, userId, "Not connected to vrcd-server");
     }
 
     /// Ask vrcd-server for one section. Safe to call from an HTTP thread.
@@ -752,6 +903,8 @@ private:
     /// One per entry in CONTENT_SECTIONS, in that order.
     ContentSnapshot[CONTENT_SECTIONS.length] sections;
     ContentActionResult lastContentAction;
+    ModerationSnapshot moderationList;
+    ModerationActionResult lastModeration;
     /// Proxied VRChat images. Has its own lock: HTTP threads look images up
     /// while this thread stores them, and neither needs the state lock.
     ImageCache images;
@@ -828,6 +981,81 @@ private:
         logWarn("Content %s for %s dropped: no link to vrcd-server", action,
             id.length > 0 ? id : "(none)");
     }
+
+    /// Whether the link cannot serve the moderation lists right now, filling
+    /// in the reason as it says so. Caller holds the state lock.
+    bool moderationsUnavailable()
+    {
+        if (linkStatus.connected == false)
+        {
+            moderationList.error = "Not connected to vrcd-server";
+            return true;
+        }
+
+        if (linkStatus.serverVersion < PROTOCOL_MODERATION)
+        {
+            moderationList.error = "This vrcd-server is too old to list mutes " ~
+                "and blocks (needs protocol v3)";
+            return true;
+        }
+        return false;
+    }
+
+    /// Give up on a listing that could not be asked for.
+    void failModerations(string error)
+    {
+        synchronized (stateMutex)
+        {
+            moderationList.loading = false;
+            moderationList.error = error;
+        }
+        notifyChange();
+    }
+
+    /// Answer a moderation here, when nothing carried it. As with a content
+    /// action: the button that was pressed gets an answer rather than waiting
+    /// on a result no one is going to send.
+    void failModeration(string action, string userId, string error)
+    {
+        ModerationActionResult result;
+        result.attempted = true;
+        result.action = action;
+        result.userId = userId;
+        result.displayName = displayNameFor(userId);
+        result.error = error;
+
+        synchronized (stateMutex)
+            lastModeration = result;
+        notifyChange();
+
+        logWarn("Moderation %s for %s dropped: %s", action, userId, error);
+    }
+
+    /// Best-known name for a user: the roster first, then the moderation
+    /// lists, which is where someone who is not a friend is named.
+    string displayNameFor(string userId)
+    {
+        synchronized (stateMutex)
+        {
+            string name = displayNameOf(userId);
+            if (name.length > 0)
+                return name;
+
+            foreach (ref ModeratedUser entry; moderationList.muted)
+            {
+                if (entry.userId == userId)
+                    return entry.displayName;
+            }
+
+            foreach (ref ModeratedUser entry; moderationList.blocked)
+            {
+                if (entry.userId == userId)
+                    return entry.displayName;
+            }
+        }
+        return null;
+    }
+
     /// vrcd-server's image cache when it shares this host, else null. Set
     /// once before the link starts and only read after, so it needs no lock.
     string imageCacheDir;
@@ -901,6 +1129,14 @@ private:
                     snapshot.loading = false;
                     snapshot.error = "Not connected to vrcd-server";
                     ++snapshot.revision;
+                }
+
+                // Same for the mute and block lists, which the reconnect asks
+                // for again.
+                if (moderationList.loading)
+                {
+                    moderationList.loading = false;
+                    moderationList.error = "Not connected to vrcd-server";
                 }
             }
             notifyChange();
@@ -996,6 +1232,27 @@ private:
             logWarn("Server protocol is too old for the inbox " ~
                 "(needs v%d, server is v%d)",
                 PROTOCOL_NOTIFICATIONS, status().serverVersion);
+        }
+
+        // Player moderations have no WebSocket events of any kind, so this is
+        // the only thing that ever fills the mute and block lists. Asked for
+        // on connect rather than when the tab opens: a friend's pane draws
+        // mute and block as toggles, and a toggle that does not know which way
+        // it is pointing is worse than one call per connection.
+        if (status().serverVersion >= PROTOCOL_MODERATION)
+            requestModerations(true);
+        else
+        {
+            synchronized (stateMutex)
+            {
+                moderationList = ModerationSnapshot.init;
+                moderationsUnavailable();
+            }
+            notifyChange();
+
+            logWarn("Server protocol is too old for mutes and blocks " ~
+                "(needs v%d, server is v%d)",
+                PROTOCOL_MODERATION, status().serverVersion);
         }
 
         // Seed the feed with the newest events. `fetch_older` is the right
@@ -1152,6 +1409,18 @@ private:
             else
                 logWarn("Notification %s for %s failed: %s",
                     result.action, result.notificationId, result.error);
+            break;
+
+        case "moderations":
+            applyModerations(message);
+            break;
+
+        case "moderate_result":
+            applyModerationResult(message, jsonString(message, "action"));
+            break;
+
+        case "unfriend_result":
+            applyModerationResult(message, "unfriend");
             break;
 
         case "inventory":
@@ -1362,6 +1631,92 @@ private:
         notifyChange();
 
         logInfo("Notification: %s from %s", added.notificationType, added.senderName);
+    }
+
+    /// Fold the mute and block lists in.
+    ///
+    /// A failure is reported inside the message rather than as an `error`, so
+    /// this is also where a refresh that did not work resolves. The lists that
+    /// are on screen survive it: they are still the last thing VRChat said.
+    void applyModerations(ref JSONValue message)
+    {
+        static ModeratedUser[] parseList(ref JSONValue message, string key)
+        {
+            ModeratedUser[] users;
+            if (const(JSONValue) *v = key in message)
+            {
+                if (v.type != JSONType.array)
+                    return users;
+
+                users.reserve(v.array.length);
+                foreach (const(JSONValue) entry; v.array)
+                {
+                    if (entry.type != JSONType.object)
+                        continue;
+
+                    ModeratedUser user;
+                    user.userId = jsonString(entry, "user_id");
+                    user.displayName = jsonString(entry, "display_name");
+                    if (user.userId.length > 0)
+                        users ~= user;
+                }
+            }
+            return users;
+        }
+
+        string error = jsonString(message, "error");
+        ModeratedUser[] muted = parseList(message, "muted");
+        ModeratedUser[] blocked = parseList(message, "blocked");
+
+        synchronized (stateMutex)
+        {
+            moderationList.loading = false;
+            if (error.length > 0)
+                moderationList.error = error;
+            else
+            {
+                moderationList.error = null;
+                moderationList.loaded = true;
+                moderationList.muted = muted;
+                moderationList.blocked = blocked;
+            }
+        }
+        notifyChange();
+
+        if (error.length > 0)
+            logWarn("Could not fetch moderations: %s", error);
+        else
+            logInfo("Moderations: %d muted, %d blocked", muted.length, blocked.length);
+    }
+
+    /// Fold one moderation reply into the last-moderation slot.
+    ///
+    /// Nothing is re-listed here: vrcd-server broadcasts fresh `moderations`
+    /// and `friends` snapshots of its own after a successful call, which reach
+    /// every browser rather than only the one that pressed the button.
+    void applyModerationResult(ref JSONValue message, string action)
+    {
+        ModerationActionResult result;
+        result.attempted = true;
+        result.action = action;
+        result.userId = jsonString(message, "user_id");
+        result.displayName = jsonString(message, "display_name");
+        result.error = jsonString(message, "error");
+        if (const(JSONValue) *v = "success" in message)
+            result.success = v.type == JSONType.true_;
+
+        if (result.displayName.length == 0)
+            result.displayName = displayNameFor(result.userId);
+
+        synchronized (stateMutex)
+            lastModeration = result;
+        notifyChange();
+
+        if (result.success)
+            logInfo("Moderation %s done: %s", action, result.userId);
+        else
+            logWarn("Moderation %s for %s failed: %s", action, result.userId,
+                result.error);
     }
 
     /// Fold one listing reply into its section.

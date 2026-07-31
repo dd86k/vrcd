@@ -123,6 +123,31 @@ string buildStateJSON(ServerLink link)
     }
     root["content"] = content;
 
+    // Carried whole, unlike the content sections: an entry is a name and an
+    // ID, and the roster in the same message is many times their size. Always
+    // present so the page can tell "nobody is muted" from "not asked yet".
+    ModerationSnapshot moderation = link.moderations();
+    root["moderations"] = JSONValue([
+        "loading": JSONValue(moderation.loading),
+        "loaded":  JSONValue(moderation.loaded),
+        "error":   JSONValue(moderation.error),
+        "muted":   moderatedJSON(moderation.muted),
+        "blocked": moderatedJSON(moderation.blocked),
+    ]);
+
+    ModerationActionResult moderationAction = link.moderationResult();
+    if (moderationAction.attempted)
+    {
+        root["moderation_action"] = JSONValue([
+            "attempted":    JSONValue(true),
+            "action":       JSONValue(moderationAction.action),
+            "user_id":      JSONValue(moderationAction.userId),
+            "display_name": JSONValue(moderationAction.displayName),
+            "success":      JSONValue(moderationAction.success),
+            "error":        JSONValue(moderationAction.error),
+        ]);
+    }
+
     if (contentAction.attempted)
     {
         root["content_action"] = JSONValue([
@@ -197,6 +222,23 @@ string encodeFeedEntry(FeedEntry entry)
         "detail":      JSONValue(entry.detail),
         "received_at": JSONValue(entry.receivedAt),
     ]).toString();
+}
+
+/// Mute or block list as JSON. Keys are the server's own, since these entries
+/// pass through unchanged: vrcd-server is where a display name for a
+/// non-friend comes from.
+private JSONValue moderatedJSON(ModeratedUser[] users)
+{
+    JSONValue[] items;
+    items.reserve(users.length);
+    foreach (ref ModeratedUser user; users)
+    {
+        items ~= JSONValue([
+            "user_id":      JSONValue(user.userId),
+            "display_name": JSONValue(user.displayName),
+        ]);
+    }
+    return JSONValue(items);
 }
 
 /// Friend list as JSON. Bio and links are left out: the roster view does not

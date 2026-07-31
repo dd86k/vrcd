@@ -37,24 +37,17 @@ var PLATFORMS = {
     "web": "Web"
 };
 
-/* Tabs the rail offers. `soon` marks the ones the web link does not carry
-   data for yet: the server API has the calls, this front-end does not use
-   them. Drop the flag once it does. */
+/* Tabs the rail offers. */
 var TABS = [
     { id: "feed",     label: "FEED",     icon: "i-feed",    search: true },
     { id: "online",   label: "ONLINE",   icon: "i-online",  search: true },
     { id: "inbox",    label: "INBOX",    icon: "i-inbox",   badge: true },
     { id: "stuff",    label: "STUFF",    icon: "i-stuff",   search: true },
-    { id: "tools",    label: "TOOLS",    icon: "i-tools",   soon: true },
+    { id: "tools",    label: "TOOLS",    icon: "i-tools",   search: true },
     /* The rail opens the profile through the self card at its foot, so only
        the bottom bar, which has no foot, draws a button for it. */
     { id: "profile",  label: "PROFILE",  icon: "i-profile", foot: true }
 ];
-
-var SOON_TEXT = {
-    tools: "Screenshot and log tools belong to the local client; only the " +
-           "ones that go through the server can appear here."
-};
 
 /* What each v1 notification type is called, and what can be done about it.
    `accept` is VRChat's accept endpoint, which only means anything for a
@@ -106,7 +99,41 @@ var TITLES = {
 var PLACEHOLDERS = {
     feed: "Filter events...",
     online: "Filter friends and worlds...",
-    stuff: "Filter your stuff..."
+    stuff: "Filter your stuff...",
+    tools: "Filter people..."
+};
+
+/* The TOOLS sections, in the order the switcher shows them. Friends is the
+   roster the page already has, flat and whole rather than grouped by where
+   everyone is; the other two are VRChat's player moderations, which are not
+   limited to friends and so are lists of their own.
+
+   `undo` is what the row's own button does, which is the one action worth
+   having without a trip through the detail pane: a list of blocked people is
+   read in order to unblock somebody. */
+var TOOL_SECTIONS = [
+    { id: "friends", label: "FRIENDS" },
+    { id: "muted",   label: "MUTED",   undo: "unmute",  undoLabel: "UNMUTE" },
+    { id: "blocked", label: "BLOCKED", undo: "unblock", undoLabel: "UNBLOCK" }
+];
+
+/* What each section is, under its list. Both moderation lists say where they
+   come from: VRChat sends no events for them, so what is on screen is what was
+   true when it was last asked for. */
+var TOOL_HINTS = {
+    friends: "Everyone on your friends list, online or not. Pick someone to " +
+             "mute, block or unfriend them.",
+    muted: "People you have muted. VRChat reports no changes to this, so a " +
+           "mute made in-game shows up after a refresh.",
+    blocked: "People you have blocked. VRChat reports no changes to this, so " +
+             "a block made in-game shows up after a refresh."
+};
+
+/* What to say once a moderation went through. Keyed by the action, and the
+   name of whoever it was aimed at is appended. */
+var MOD_DONE = {
+    mute: "Muted", unmute: "Unmuted", block: "Blocked", unblock: "Unblocked",
+    unfriend: "Unfriended"
 };
 
 /* The STUFF sections, in the order the switcher shows them. The first four are
@@ -174,14 +201,17 @@ var state = {
     server_version: "",
     last_error: "",
     roster: { instances: [], active_elsewhere: [], offline: [] },
-    notifications: []
+    notifications: [],
+    moderations: { loading: false, loaded: false, error: "", muted: [], blocked: [] }
 };
 var feed = [];
-var view = { tab: "online", sel: null, filter: "", section: "gallery" };
+var view = { tab: "online", sel: null, filter: "", section: "gallery",
+             tool: "friends" };
 var lastJoinKey = "";
 var lastNotifyKey = "";
 var lastActionKey = "";
 var lastStatusKey = "";
+var lastModKey = "";
 
 /* The staged status change: the row that has been picked, what has been typed
    into the message box, and where the caret was in it. Null means untouched, so
@@ -222,6 +252,12 @@ SECTIONS.forEach(function (section) {
 var pendingItems = {};
 var armedAction = "";
 var uploading = {};
+
+/* User IDs with a moderation in flight, and whether a refresh of the lists is.
+   Same reason as the two above: the snapshot that arrives while one is going
+   out redraws the button that sent it. */
+var pendingModerations = {};
+var refreshingModerations = false;
 
 /* ------------------------------------------------------------- helpers */
 
@@ -346,10 +382,43 @@ function findFriendByName(name) {
     return null;
 }
 
+/* Every friend in one list, sorted by name: the roster arrives grouped by
+   where everyone is, which is what the online tab is for and the wrong shape
+   for looking somebody up. */
+function allFriends() {
+    var roster = state.roster;
+    var all = roster.active_elsewhere.concat(roster.offline);
+    roster.instances.forEach(function (group) { all = all.concat(group.friends); });
+    return all.sort(function (a, b) {
+        return a.displayName.toLowerCase() < b.displayName.toLowerCase() ? -1 : 1;
+    });
+}
+
 function tabInfo(id) {
     for (var i = 0; i < TABS.length; i++)
         if (TABS[i].id === id) return TABS[i];
     return TABS[0];
+}
+
+function toolInfo(id) {
+    for (var i = 0; i < TOOL_SECTIONS.length; i++)
+        if (TOOL_SECTIONS[i].id === id) return TOOL_SECTIONS[i];
+    return TOOL_SECTIONS[0];
+}
+
+/* One of the two moderation lists. Never undefined, so a page drawing before
+   the first snapshot lands is a list with nothing in it rather than a crash. */
+function moderated(section) {
+    var mod = state.moderations;
+    if (!mod) return [];
+    return (section === "muted" ? mod.muted : mod.blocked) || [];
+}
+
+function isModerated(section, id) {
+    var list = moderated(section);
+    for (var i = 0; i < list.length; i++)
+        if (list[i].user_id === id) return true;
+    return false;
 }
 
 function matches(text) {
@@ -385,8 +454,7 @@ function renderRail() {
 }
 
 function tabButton(tab) {
-    var cls = tab.id === view.tab ? "on" : (tab.soon ? "soon" : null);
-    var button = el("button", cls);
+    var button = el("button", tab.id === view.tab ? "on" : null);
 
     // Your own face reads faster than a generic person glyph.
     if (tab.id === "profile" && state.self) {
@@ -1125,28 +1193,34 @@ function itemActions(item) {
     }
 
     if (hasFlag(item, "consumable"))
-        appendArmed(actions, item.id, "consume", "", "CONSUME", "CONFIRM CONSUME", busy);
+        appendArmed(actions, "consume|" + item.id, "CONSUME", "CONFIRM CONSUME",
+            busy, function (label) {
+                return actionButton(item.id, "consume", "", label, false, busy);
+            });
 
     actions.appendChild(copyButton("Copy item ID", item.id));
     return actions;
 }
 
 function appendDelete(actions, id, action, busy) {
-    appendArmed(actions, id, action, "", "DELETE", "CONFIRM DELETE", busy);
+    appendArmed(actions, action + "|" + id, "DELETE", "CONFIRM DELETE", busy,
+        function (label) { return actionButton(id, action, "", label, false, busy); });
 }
 
 /* Two taps, and the second one is not where the first landed: Cancel takes
-   that spot, because none of these can be undone. */
-function appendArmed(actions, id, action, slot, label, confirmLabel, busy) {
-    if (armedAction === action + "|" + id) {
+   that spot, because none of these can be undone. `make` builds the confirm
+   button, since what one sends is not what the next one does: a delete and a
+   block do not go to the same place. */
+function appendArmed(actions, key, label, confirmLabel, busy, make) {
+    if (armedAction === key) {
         actions.appendChild(cancelButton(""));
-        actions.appendChild(actionButton(id, action, slot, confirmLabel, false, busy));
+        actions.appendChild(make(confirmLabel));
         return;
     }
 
     var arm = el("button", "act", label);
     arm.disabled = busy;
-    arm.onclick = function () { armedAction = action + "|" + id; renderDetail(); };
+    arm.onclick = function () { armedAction = key; renderDetail(); };
     actions.appendChild(arm);
 }
 
@@ -1799,6 +1873,246 @@ function dropTarget() {
     return { info: info, hint: "Drop to crop and upload to " + info.label };
 }
 
+/* --------------------------------------------------------------- tools */
+
+/* Friend management: the whole friends list, and the two lists of people
+   VRChat calls player moderations. The friends list is the roster the page
+   already holds, flattened; the other two come down the link and are only
+   filled in on connect and on refresh, since VRChat sends no events for
+   them. */
+function renderTools(body) {
+    var info = toolInfo(view.tool);
+    body.appendChild(toolSwitcher());
+
+    if (info.id === "friends") renderFriendList(body);
+    else renderModerated(body, info);
+
+    body.appendChild(el("div", "hint", TOOL_HINTS[info.id]));
+}
+
+function toolSwitcher() {
+    var row = el("div", "chips");
+    TOOL_SECTIONS.forEach(function (section) {
+        var chip = el("button", "chip" + (section.id === view.tool ? " on" : ""),
+            section.label);
+
+        // A count only once the list it counts has actually arrived: a zero
+        // that means "not asked yet" reads as "nobody".
+        var count = section.id === "friends"
+            ? allFriends().length
+            : (state.moderations.loaded ? moderated(section.id).length : 0);
+        if (count) chip.appendChild(el("span", "n", String(count)));
+
+        chip.onclick = function () { showTool(section.id); };
+        row.appendChild(chip);
+    });
+    return row;
+}
+
+function renderFriendList(body) {
+    var friends = allFriends().filter(function (f) { return matches(f.displayName); });
+
+    var bar = el("div", "bar");
+    bar.appendChild(el("div", "count",
+        friends.length + (friends.length === 1 ? " friend" : " friends")));
+    body.appendChild(bar);
+
+    if (friends.length === 0) {
+        body.appendChild(placeholder(view.filter
+            ? "Nothing matches that filter."
+            : "No friend data yet."));
+        return;
+    }
+
+    var list = el("div", "flat");
+    friends.forEach(function (friend) { list.appendChild(friendRow(friend)); });
+    body.appendChild(list);
+}
+
+function renderModerated(body, info) {
+    var mod = state.moderations;
+    var entries = moderated(info.id).filter(function (entry) {
+        return matches(moderatedName(entry)) || matches(entry.user_id);
+    });
+
+    var bar = el("div", "bar");
+    bar.appendChild(el("div", "count", moderationStatus(info)));
+    var refresh = el("button", "act small", "REFRESH");
+    refresh.disabled = mod.loading || refreshingModerations || state.connected === false;
+    refresh.onclick = function () { refreshModerations(refresh); };
+    bar.appendChild(refresh);
+    body.appendChild(bar);
+
+    if (mod.error) body.appendChild(el("div", "err", mod.error));
+
+    if (entries.length === 0) {
+        var why = "Nobody is " + (info.id === "muted" ? "muted" : "blocked") + ".";
+        if (mod.loaded === false)
+            why = mod.error ? "That list could not be fetched." : "Loading...";
+        else if (view.filter) why = "Nothing matches that filter.";
+        body.appendChild(placeholder(why));
+        return;
+    }
+
+    var list = el("div", "flat");
+    entries.forEach(function (entry) { list.appendChild(moderatedRow(entry, info)); });
+    body.appendChild(list);
+}
+
+function moderationStatus(info) {
+    var mod = state.moderations;
+    if (mod.loading || refreshingModerations) return "Loading...";
+    if (mod.loaded === false) return "";
+
+    var count = moderated(info.id).length;
+    return count + (count === 1 ? " person" : " people");
+}
+
+/* The list carries the name VRChat had for them, which is the only one there
+   is when they are not a friend. */
+function moderatedName(entry) {
+    if (entry.display_name) return entry.display_name;
+
+    var hit = findFriend(entry.user_id);
+    return hit ? hit.friend.displayName : entry.user_id;
+}
+
+/* Unlike a friend row, this one holds a button of its own: a list of blocked
+   people is read in order to unblock somebody, and sending them through the
+   detail pane for it is a tap that buys nothing. Which makes the row a
+   container and the name its own button - a button inside a button is not a
+   thing. */
+function moderatedRow(entry, info) {
+    var id = entry.user_id;
+    var name = moderatedName(entry);
+    var hit = findFriend(id);
+
+    var row = el("div", "row");
+    if (view.sel && view.sel.id === id) row.classList.add("on");
+    row.appendChild(avatar(name, false, hit ? hit.friend : null));
+
+    var who = el("button", "who bare");
+    who.appendChild(el("div", "n", name));
+    who.appendChild(el("div", "d", hit
+        ? (hit.friend.statusDescription || hit.friend.status)
+        : "not on your friends list"));
+    who.onclick = function () {
+        select(hit
+            ? { kind: "friend", id: id }
+            : { kind: "person", id: id, name: name });
+    };
+    row.appendChild(who);
+
+    var undo = el("button", "act small", info.undoLabel);
+    undo.disabled = pendingModerations[id] === true || state.connected === false;
+    undo.onclick = function () { moderate(info.undo, id, undo); };
+    row.appendChild(undo);
+    return row;
+}
+
+/* Mute, block and unfriend for one person, at the foot of their pane: the two
+   that are worth a mis-tap sit as far down as the pane goes.
+
+   Mute is one tap either way - it is invisible from the other side and undone
+   by pressing the same button again - while block and unfriend arm first:
+   both are visible to the other person, and neither is undone by a second
+   press. */
+function moderationActions(actions, id, canUnfriend) {
+    var mod = state.moderations;
+    var busy = pendingModerations[id] === true;
+
+    // Which way the toggles point is not known until the lists land, and a
+    // MUTE that is really an unmute is worse than no button at all.
+    if (mod.loaded === false) {
+        actions.appendChild(el("div", "hint", mod.error ||
+            "Mute and block state has not arrived yet."));
+        return;
+    }
+
+    if (isModerated("muted", id))
+        actions.appendChild(modButton(id, "unmute", "UNMUTE", busy));
+    else
+        actions.appendChild(modButton(id, "mute", "MUTE", busy));
+
+    if (isModerated("blocked", id))
+        actions.appendChild(modButton(id, "unblock", "UNBLOCK", busy));
+    else
+        appendArmed(actions, "block|" + id, "BLOCK", "CONFIRM BLOCK", busy,
+            function (label) { return modButton(id, "block", label, busy); });
+
+    if (canUnfriend)
+        appendArmed(actions, "unfriend|" + id, "UNFRIEND", "CONFIRM UNFRIEND",
+            busy, function (label) { return modButton(id, "unfriend", label, busy); });
+}
+
+function modButton(id, action, label, busy) {
+    var button = el("button", "act", label);
+    button.disabled = busy || state.connected === false;
+    button.onclick = function () { moderate(action, id, button); };
+    return button;
+}
+
+function showTool(section) {
+    view.tool = section;
+    view.sel = null;
+    armedAction = "";
+    render();
+}
+
+/* Fire and forget, like every other action: the outcome arrives in the next
+   snapshot, as a result and as lists that have already moved. */
+function moderate(action, id, button) {
+    var label = button.textContent;
+    // In the map rather than on the button: a snapshot redraws the row or the
+    // pane from scratch and would hand back an enabled button otherwise.
+    pendingModerations[id] = true;
+    armedAction = "";
+    button.disabled = true;
+    button.textContent = "SENDING...";
+
+    fetch("/api/moderation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: action, user_id: id })
+    }).then(function (r) {
+        if (r.ok) return;
+        delete pendingModerations[id];
+        showToast("The vrcd web server refused that", true);
+        button.disabled = false;
+        button.textContent = label;
+    }).catch(function () {
+        delete pendingModerations[id];
+        showToast("Could not reach the vrcd web server", true);
+        button.disabled = false;
+        button.textContent = label;
+    });
+}
+
+/* The lists are asked for once per link connection, so this is what picks up a
+   mute or block made in-game: VRChat reports neither. */
+function refreshModerations(button) {
+    refreshingModerations = true;
+    button.disabled = true;
+
+    fetch("/api/moderation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "refresh" })
+    }).then(function (r) {
+        if (r.ok) return;
+        showToast("The vrcd web server refused that", true);
+    }).catch(function () {
+        showToast("Could not reach the vrcd web server", true);
+    }).then(function () {
+        // The snapshot that carries `loading` takes over from here; this only
+        // covers the gap between the press and it arriving.
+        refreshingModerations = false;
+        if (view.tab === "tools") renderList();
+    });
+}
+
+/* ------------------------------------------------------------- profile */
+
 /* One profile layout, two callers: your own on the profile tab and a friend in
    the detail pane. Rows appear only when the field is there, which is what
    keeps the two honest - a friend entry is a thinner record than self, not a
@@ -1850,6 +2164,9 @@ function renderProfile(body, person, opts) {
     var actions = el("div", "actions");
     if (opts.location) actions.appendChild(joinButton(opts.location, "SELF-INVITE"));
     actions.appendChild(copyButton("Copy user ID", person.id));
+    // Last, and only for someone else: nothing here is aimed at yourself, and
+    // the pane's own order is what keeps a block away from a self-invite.
+    if (opts.moderate) moderationActions(actions, person.id, true);
     body.appendChild(actions);
 }
 
@@ -2003,8 +2320,8 @@ function renderList() {
     else if (tab.id === "feed")    renderFeed(body);
     else if (tab.id === "inbox")   renderInbox(body);
     else if (tab.id === "stuff")   renderStuff(body);
+    else if (tab.id === "tools")   renderTools(body);
     else if (tab.id === "profile") renderProfileTab(body);
-    else body.appendChild(placeholder(SOON_TEXT[tab.id], "Not wired up yet"));
 }
 
 /* --------------------------------------------------------- detail pane */
@@ -2063,8 +2380,34 @@ function detailFriend(body, friend, group) {
         where: group
             ? groupName(group)
             : (friend.status === "offline" ? "offline" : "not in a world"),
-        location: group ? group.location : ""
+        location: group ? group.location : "",
+        // Offered wherever a friend's pane is, not only under the tools tab:
+        // the pane is the same one either way, and muting somebody is usually
+        // decided while looking at where they are.
+        moderate: true
     });
+}
+
+/* Someone in the mute or block list who is not a friend. A moderation outlives
+   the friendship it started in, and can be aimed at somebody who never was
+   one, so there is no profile behind the name: only what the list carries. */
+function detailPerson(body, id, name) {
+    document.getElementById("detailTitle").textContent = name;
+
+    var hero = el("div", "hero");
+    hero.appendChild(avatar(name, true));
+    hero.appendChild(el("div", "name", name));
+    hero.appendChild(el("div", "sub", "Not on your friends list"));
+    body.appendChild(hero);
+
+    var kv = el("dl", "kv");
+    pair(kv, "User ID", id);
+    body.appendChild(kv);
+
+    var actions = el("div", "actions");
+    actions.appendChild(copyButton("Copy user ID", id));
+    moderationActions(actions, id, false);
+    body.appendChild(actions);
 }
 
 function joinButton(location, label) {
@@ -2101,7 +2444,13 @@ function renderDetail() {
         var nothing = "Pick a world or a friend.";
         if (view.tab === "inbox") nothing = "Pick a sender you are already friends with.";
         else if (view.tab === "stuff") nothing = "Pick something.";
+        else if (view.tab === "tools") nothing = "Pick someone.";
         body.appendChild(placeholder(nothing));
+        return;
+    }
+
+    if (view.sel.kind === "person") {
+        detailPerson(body, view.sel.id, view.sel.name);
         return;
     }
 
@@ -2421,6 +2770,9 @@ function applyState(message) {
         state.roster = { instances: [], active_elsewhere: [], offline: [] };
     if (!state.notifications)
         state.notifications = [];
+    if (!state.moderations)
+        state.moderations = { loading: false, loaded: false, error: "",
+                              muted: [], blocked: [] };
 
     // A notification that left the snapshot is answered, however it was
     // answered: by us, by another client, or by VRChat itself. Pruned before
@@ -2433,12 +2785,20 @@ function applyState(message) {
     // A link that went down takes the answer with it, so the picker goes back
     // to being pressable rather than sitting on "SAVING..." for an answer that
     // is never coming.
-    if (state.connected === false) statusPending = false;
+    if (state.connected === false) {
+        statusPending = false;
+        // Same for a moderation: the result it is waiting on died with the
+        // link, and a button stuck on "SENDING..." is worse than one that can
+        // be pressed again.
+        pendingModerations = {};
+        refreshingModerations = false;
+    }
 
     render();
     reportJoin();
     reportNotifyAction();
     reportContentAction();
+    reportModeration();
     // Told whether this is the first snapshot this page has seen, which is
     // flipped here rather than in there: a first snapshot carrying no outcome
     // at all still counts as seen, or the first real one would be swallowed as
@@ -2525,6 +2885,32 @@ function reportContentAction() {
         // one, which would otherwise inherit it silently.
         if (result.action === "upload_print") printNote = "";
         showToast(ACTION_DONE[result.action] || "Done", false);
+        return;
+    }
+    showToast("That failed: " + result.error, true);
+}
+
+function reportModeration() {
+    var result = state.moderation_action;
+    if (!result || !result.attempted) return;
+
+    // Same as the rest: the snapshot carries the last one indefinitely, so
+    // only say something when it actually changed.
+    var key = result.user_id + "|" + result.action + "|" +
+        result.success + "|" + result.error;
+    if (key === lastModKey) return;
+    lastModKey = key;
+
+    delete pendingModerations[result.user_id];
+    armedAction = "";
+    // The pane redraws whichever tab it is on: a friend's buttons are the same
+    // ones under online as under tools.
+    if (view.tab === "tools") renderList();
+    renderDetail();
+
+    var who = result.display_name || result.user_id;
+    if (result.success) {
+        showToast((MOD_DONE[result.action] || "Done") + " " + who, false);
         return;
     }
     showToast("That failed: " + result.error, true);
