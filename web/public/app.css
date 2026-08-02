@@ -310,6 +310,52 @@ button.head { cursor: pointer; }
 }
 .hero .name { font-size: 1.4rem; font-weight: 700; }
 .hero .sub { color: var(--muted); font-size: .9rem; }
+/* Tight under the name, and dimmer: part of how somebody is addressed rather
+   than another field. The negative margin pulls it inside the hero's gap. */
+.hero .pronouns { color: var(--dim); font-size: .8rem; margin-top: -.4rem; }
+
+/* Trust rank and the marks that qualify it. Centred like the rest of the hero,
+   and allowed to wrap: a flagged staff account with every mark going would
+   otherwise push the row off a phone. */
+.marks { display: flex; gap: .35rem; flex-wrap: wrap; justify-content: center; }
+/* The five ranks, coldest to warmest, following the game's own order. Colour
+   is on the text and the border rather than a fill: a row of solid badges
+   under a name reads as decoration, and these are meant to be read. */
+.pill.rank.r1 { color: #a8a8b8; }
+.pill.rank.r2 { color: #7fb2ff; border-color: #3d5f96; }
+.pill.rank.r3 { color: #6fd98f; border-color: #326b45; }
+.pill.rank.r4 { color: #ffb066; border-color: #8a5726; }
+.pill.rank.r5 { color: #c69bff; border-color: #6a4a9c; }
+.pill.staff { color: #ffe08a; border-color: #8a7326; }
+.pill.bad { color: #ffb3b3; border-color: var(--bad); }
+
+/* Badges wrap into a grid rather than scrolling sideways: a horizontal strip
+   in a pane this narrow hides most of them behind a gesture, and the count is
+   small enough that two or three rows is the worst case. */
+.badges {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(4.5rem, 1fr));
+    gap: .5rem; margin-bottom: 1rem;
+}
+.badge {
+    display: flex; flex-direction: column; align-items: center; gap: .3rem;
+    padding: .5rem .25rem; text-align: center;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px;
+}
+/* What the owner chose to show, marked without adding a row to say so. */
+.badge.showcased { border-color: var(--line-hi); background: var(--panel-hi); }
+.badge img { width: 2.5rem; height: 2.5rem; object-fit: contain; }
+.badge .bn { font-size: .65rem; color: var(--muted); line-height: 1.2;
+    overflow-wrap: anywhere; }
+
+/* A paragraph, not a field: VRChat allows 512 characters over as many lines as
+   somebody felt like, and the newlines they typed are part of what they wrote. */
+.bio {
+    white-space: pre-wrap; overflow-wrap: anywhere;
+    font-size: .85rem; line-height: 1.5; color: var(--text);
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; padding: .7rem .8rem; margin-bottom: 1rem;
+}
 
 /* Stand-in for the world thumbnail until an image proxy exists: a gradient
    seeded from the world name, so the same world always looks the same. */

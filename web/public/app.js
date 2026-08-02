@@ -259,6 +259,10 @@ var uploading = {};
 var pendingModerations = {};
 var refreshingModerations = false;
 
+/* Whether the last snapshot said the link to vrcd-server was down, so the
+   moment it comes back can be told from every other snapshot. */
+var linkWasDown = false;
+
 /* ------------------------------------------------------------- helpers */
 
 function el(tag, cls, text) {
@@ -653,10 +657,16 @@ function notifyCard(entry) {
 
     var card = el("div", "notify");
 
-    // A button, not a div, so the sender opens in the detail pane the way a
-    // feed row does. The action buttons are siblings of it, never inside it.
-    var friend = fromUser ? findFriend(entry.sender_user_id) : null;
-    var head = el(friend ? "button" : "div", "head");
+    /* A button, not a div, so the sender opens in the detail pane the way a
+       feed row does. The action buttons are siblings of it, never inside it.
+
+       Anybody with a user ID opens, friend or not. A stranger is the one whose
+       pane is worth opening: a friend request is a name and nothing else until
+       their profile is fetched, and accepting one is exactly the decision that
+       needs a bio and a trust rank to make. */
+    var hit = fromUser ? findFriend(entry.sender_user_id) : null;
+    var friend = hit ? hit.friend : null;
+    var head = el(fromUser ? "button" : "div", "head");
     head.appendChild(avatar(who, false, friend));
     var text = el("div", "who");
     text.appendChild(el("div", "n", who));
@@ -664,8 +674,12 @@ function notifyCard(entry) {
     head.appendChild(text);
     if (entry.received_at_unix)
         head.appendChild(el("div", "when", whenText(entry.received_at_unix)));
-    if (friend)
-        head.onclick = function () { select({ kind: "friend", id: entry.sender_user_id }); };
+    if (fromUser)
+        head.onclick = function () {
+            select(friend
+                ? { kind: "friend", id: entry.sender_user_id }
+                : { kind: "person", id: entry.sender_user_id, name: who });
+        };
     card.appendChild(head);
 
     // Only when it says something the two lines above did not: VRChat's
@@ -815,6 +829,41 @@ function imageWhenVisible(img, fileId, version, size) {
 
     img.imageWanted = { id: fileId, version: version, size: size };
     imageObserver.observe(img);
+}
+
+/* Badge art, through the same proxy and the same object-URL bookkeeping. The
+   URL is the key: it names one picture forever, the way a file and version do.
+
+   Not deferred to the viewport like a face. A profile holds a handful of these
+   and they are all on the one screen somebody opened deliberately, so waiting
+   for an observer would only make them appear late. */
+function badgeInto(img, url) {
+    var key = "badge:" + url;
+    if (imageURLs[key]) { img.src = imageURLs[key]; return; }
+    if (imageFailed[key]) return;
+
+    if (imageWaiting[key]) { imageWaiting[key].push(img); return; }
+    imageWaiting[key] = [img];
+    fetchBadge(key, url, IMAGE_TRIES);
+}
+
+function fetchBadge(key, url, tries) {
+    fetch("/api/badge?url=" + encodeURIComponent(url)).then(function (r) {
+        if (r.status === 202) {
+            if (tries > 0)
+                setTimeout(function () { fetchBadge(key, url, tries - 1); },
+                    IMAGE_RETRY_MS);
+            else
+                imageDone(key, null);
+            return null;
+        }
+        if (r.ok === false) { imageDone(key, null); return null; }
+        return r.blob();
+    }).then(function (blob) {
+        if (blob) imageDone(key, URL.createObjectURL(blob));
+    }).catch(function () {
+        imageDone(key, null);
+    });
 }
 
 function fetchImage(key, fileId, version, size, tries) {
@@ -1242,6 +1291,17 @@ function actionButton(id, action, slot, label, primary, busy) {
 function whenDate(text) {
     var when = new Date(text);
     return isNaN(when.getTime()) ? text : when.toLocaleString();
+}
+
+/* A date with no time of day, which is what VRChat sends for the day somebody
+   joined. Built from the parts rather than parsed: "2019-04-01" is read as UTC
+   midnight, which west of Greenwich is the day before. */
+function whenDay(text) {
+    var parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text || "");
+    if (parts === null) return whenDate(text);
+
+    var when = new Date(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]));
+    return isNaN(when.getTime()) ? text : when.toLocaleDateString();
 }
 
 /* -------------------------------------------------------- stuff actions */
@@ -2113,42 +2173,201 @@ function refreshModerations(button) {
 
 /* ------------------------------------------------------------- profile */
 
-/* One profile layout, two callers: your own on the profile tab and a friend in
-   the detail pane. Rows appear only when the field is there, which is what
-   keeps the two honest - a friend entry is a thinner record than self, not a
-   different kind of thing. */
+/* A profile is fetched, not broadcast. Bio, links, badges and the rest change
+   on a different timescale than where somebody is standing, so carrying them
+   in the snapshot would fan a few kilobytes per friend out to every browser on
+   every friend movement, for a page opened one person at a time.
+
+   It is also the only way to see somebody who is not a friend, which is the
+   case this exists for: a friend request arrives as a name and an ID, and
+   there is nothing else to decide on.
+
+   Kept per user ID across redraws, the same way images are: the shell redraws
+   on every snapshot, and a pane that re-fetched each time would keep both ends
+   busy for nothing. The web server holds these too, and expires them, so
+   asking again after a while is what refreshes one. */
+var profiles = {};
+var profileErrors = {};
+var profileWaiting = {};
+
+/* IDs that visibly belong to something other than a person. The `usr_` prefix
+   is not required the other way round: accounts old enough predate it, and the
+   mute and block lists are full of them. */
+var NOT_A_USER = /^(grp|wrld|avtr|file|inst|prnt|inv|not)_/;
+
+var PROFILE_RETRY_MS = 700;
+/* Roughly 20 seconds. A cold profile is one VRChat call, so this only has to
+   outlast a rate-limit pause, not a queue of downloads. */
+var PROFILE_TRIES = 30;
+/* How long a failure stands before the next look tries again. Most of what
+   fails here is temporary - a rate limit, a link that was down - and there is
+   no button on this pane to retry with, so the next look is the retry. Long
+   enough that a redraw per snapshot does not turn into a fetch per snapshot. */
+var PROFILE_ERROR_MS = 30000;
+
+/* What we hold for this person, and a fetch started if we hold nothing. Null
+   until one lands, which is what the pane draws its loading line from. */
+function profileFor(userId) {
+    if (!userId || NOT_A_USER.test(userId)) return null;
+    if (profiles[userId]) return profiles[userId];
+    if (profileWaiting[userId]) return null;
+
+    var failed = profileErrors[userId];
+    if (failed && Date.now() - failed.at < PROFILE_ERROR_MS) return null;
+
+    profileWaiting[userId] = true;
+    fetchProfile(userId, PROFILE_TRIES);
+    return null;
+}
+
+/* What went wrong last time, once it is worth saying. A fetch on its way is
+   drawn as loading even when an older failure is still remembered: the retry
+   is the more useful thing to report. */
+function profileError(userId) {
+    if (profileWaiting[userId]) return "";
+    var failed = profileErrors[userId];
+    return failed ? failed.error : "";
+}
+
+function fetchProfile(userId, tries) {
+    fetch("/api/user/" + encodeURIComponent(userId)).then(function (r) {
+        if (r.status === 202) {
+            if (tries > 0) {
+                setTimeout(function () { fetchProfile(userId, tries - 1); },
+                    PROFILE_RETRY_MS);
+            } else {
+                profileDone(userId, null, "vrcd-server did not answer in time");
+            }
+            return null;
+        }
+        return r.json().then(function (body) {
+            if (r.ok) profileDone(userId, body, null);
+            else profileDone(userId, null, body.error || "Profile unavailable");
+            return null;
+        });
+    }).catch(function () {
+        profileDone(userId, null, "Could not reach the vrcd web server");
+    });
+}
+
+function profileDone(userId, profile, error) {
+    delete profileWaiting[userId];
+    if (profile) {
+        profiles[userId] = profile;
+        delete profileErrors[userId];
+    } else {
+        profileErrors[userId] = { error: error, at: Date.now() };
+    }
+
+    // Only the pane that is waiting on it, and only when it still is: a
+    // profile that landed after the user moved on redraws nothing.
+    if (view.sel && view.sel.id === userId) renderDetail();
+    else if (view.tab === "profile" && state.self && state.self.id === userId)
+        renderList();
+}
+
+/* A dropped link is not a reason to forget a profile, but a new one is a
+   reason to stop remembering that a fetch failed while it was down. */
+function forgetProfileErrors() {
+    profileErrors = {};
+}
+
+/* Fields the snapshot is the authority on, even when it says nothing. These
+   are the ones that move: a status cleared a second ago is empty on purpose,
+   and letting a profile fetched five minutes back fill it back in would put a
+   stale message under a live dot. An offline friend's blank platform is the
+   same kind of deliberate silence.
+
+   Everything outside this list follows the opposite rule, since the snapshot
+   is the thinner record: what it leaves out, the profile answers.
+
+   `displayName` is not one of them: it is live in the roster but the roster
+   never leaves it blank, so the general rule already picks the same value --
+   and staying out of the live list is what lets a pane seeded with nothing but
+   an ID take the real name from the profile when it lands. */
+var LIVE_FIELDS = {
+    status: true, statusDescription: true, platform: true, location: true
+};
+
+/* The snapshot and the profile describe the same person at two speeds. */
+function mergeProfile(person, full) {
+    if (!full) return person;
+
+    var merged = {};
+    var key;
+    for (key in full) if (full.hasOwnProperty(key)) merged[key] = full[key];
+    for (key in person) {
+        if (person.hasOwnProperty(key) === false) continue;
+        if (person[key] === undefined) continue;
+
+        if (LIVE_FIELDS[key] === true) { merged[key] = person[key]; continue; }
+
+        if (person[key] === "") continue;
+        if (key === "bioLinks" && person[key].length === 0) continue;
+        // The picture is a file and a version together. Taking the version
+        // from a record that carries no file would point it at the profile's
+        // file at the wrong version, which fetches nothing.
+        if (key === "imageVersion" && !person.imageFileId) continue;
+        merged[key] = person[key];
+    }
+    return merged;
+}
+
+/* One profile layout for everybody: your own on the profile tab, a friend from
+   the roster, and a stranger who sent a friend request. Rows appear only when
+   the field is there, which is what lets one layout serve all three - a friend
+   request sender is a thinner record than a friend, not a different kind of
+   thing. */
 function renderProfile(body, person, opts) {
+    var full = profileFor(person.id);
+    var p = mergeProfile(person, full);
+
     var hero = el("div", "hero");
-    hero.appendChild(avatar(person.displayName, true, person));
-    hero.appendChild(el("div", "name", person.displayName));
+    hero.appendChild(avatar(p.displayName || "?", true, p));
+    hero.appendChild(el("div", "name", p.displayName || p.id));
+
+    // Pronouns ride with the name rather than sitting in a row further down:
+    // they are part of how somebody is addressed, and a row would put them
+    // below the fold on a phone.
+    if (p.pronouns) hero.appendChild(el("div", "pronouns", p.pronouns));
+
     var sub = el("div", "sub");
-    sub.appendChild(statusDot(person.status));
-    sub.appendChild(document.createTextNode(" " + (person.statusDescription || person.status)));
+    sub.appendChild(statusDot(p.status));
+    sub.appendChild(document.createTextNode(" " +
+        (p.statusDescription || p.status || "unknown")));
     hero.appendChild(sub);
+
+    var marks = profileMarks(p, opts);
+    if (marks) hero.appendChild(marks);
     body.appendChild(hero);
 
-    // Directly under the hero, above the fields nobody came here to read: on
-    // your own profile this is the reason the tab is open.
+    // Directly under the hero, above everything else: on your own profile this
+    // is the reason the tab is open. It comes before the two things below that
+    // arrive late, so neither can push the picker down under a thumb already
+    // on its way to it.
     if (opts.editStatus) statusEditor(body, person);
 
-    var kv = el("dl", "kv");
-    // The picker already says which one is on, and says it larger.
-    if (opts.editStatus === undefined)
-        pair(kv, "Status", person.status || "unknown");
-    if (person.platform)
-        pair(kv, "Platform", PLATFORMS[person.platform] || person.platform);
-    if (person.pronouns) pair(kv, "Pronouns", person.pronouns);
-    if (opts.where) pair(kv, "Where", opts.where);
-    // Friend entries carry no bio or links: the roster broadcast leaves them
-    // out on purpose, so these two rows only fill in for self.
-    if (person.bio) pair(kv, "Bio", person.bio);
-    pair(kv, "User ID", person.id);
-    body.appendChild(kv);
+    // Not on your own profile: nothing there is waiting on the fetch, and a
+    // line that appears and then goes is only a shift.
+    if (full === null && person.id && opts.editStatus === undefined) {
+        var why = profileError(person.id);
+        body.appendChild(el("div", "hint", why || "Loading profile..."));
+    }
 
-    if (person.bioLinks && person.bioLinks.length) {
+    if (p.badges && p.badges.length) body.appendChild(badgeStrip(p.badges));
+
+    // Its own block rather than a row in the list: a bio runs to 512
+    // characters over as many lines as somebody felt like, and a definition
+    // list is the wrong shape for a paragraph.
+    if (p.bio) {
+        body.appendChild(el("div", "section", "Bio"));
+        body.appendChild(el("div", "bio", p.bio));
+    }
+
+    if (p.bioLinks && p.bioLinks.length) {
         body.appendChild(el("div", "section", "Links"));
         var links = el("dl", "kv");
-        person.bioLinks.forEach(function (url, index) {
+        p.bioLinks.forEach(function (url, index) {
             var dd = el("dd");
             var a = el("a", null, url);
             a.href = url;
@@ -2161,13 +2380,119 @@ function renderProfile(body, person, opts) {
         body.appendChild(links);
     }
 
+    body.appendChild(el("div", "section", "Details"));
+    var kv = el("dl", "kv");
+    // The picker already says which one is on, and says it larger.
+    if (opts.editStatus === undefined)
+        pair(kv, "Status", p.status || "unknown");
+    if (p.platform)
+        pair(kv, "Platform", PLATFORMS[p.platform] || p.platform);
+    if (opts.where) pair(kv, "Where", opts.where);
+    if (p.languages && p.languages.length)
+        pair(kv, "Languages", p.languages.map(languageName).join(", "));
+    if (p.dateJoined) pair(kv, "Joined", whenDay(p.dateJoined));
+    // Only for somebody who is not standing somewhere we can already see, and
+    // never for yourself: "last seen" about the person reading it is noise.
+    if (p.lastActivity && opts.where === undefined && opts.editStatus === undefined)
+        pair(kv, "Last seen", whenDate(p.lastActivity));
+    // VRChat's own private memo about this person, which only you can see.
+    if (p.note) pair(kv, "Note", p.note);
+    pair(kv, "User ID", p.id);
+    body.appendChild(kv);
+
     var actions = el("div", "actions");
     if (opts.location) actions.appendChild(joinButton(opts.location, "SELF-INVITE"));
-    actions.appendChild(copyButton("Copy user ID", person.id));
+    actions.appendChild(copyButton("Copy user ID", p.id));
     // Last, and only for someone else: nothing here is aimed at yourself, and
     // the pane's own order is what keeps a block away from a self-invite.
-    if (opts.moderate) moderationActions(actions, person.id, true);
+    if (opts.moderate) moderationActions(actions, p.id, opts.friend === true);
     body.appendChild(actions);
+}
+
+/* The row of pills under the name: trust rank, and the marks that qualify it.
+   Together they are most of what there is to go on when a friend request
+   arrives from a name nobody recognises, so they sit in the hero rather than
+   in the list of fields below it. */
+function profileMarks(p, opts) {
+    var marks = el("div", "marks");
+
+    if (p.trustRank)
+        marks.appendChild(el("span", "pill rank " + rankClass(p.trustRank),
+            p.trustRank.toUpperCase()));
+    if (p.moderator) marks.appendChild(el("span", "pill staff", "VRCHAT TEAM"));
+    // VRChat's own word for an account it has flagged. Worth the space on the
+    // one screen where somebody is deciding whether to let a stranger in.
+    if (p.troll) marks.appendChild(el("span", "pill bad", "FLAGGED"));
+    if (p.ageVerified) marks.appendChild(el("span", "pill", "18+ VERIFIED"));
+    /* Only said when it is news: every friend's pane would otherwise carry a
+       pill saying they are a friend. Taken from the caller, which read the
+       roster, rather than from the profile's own `isFriend`: accepting a
+       request makes somebody a friend within a snapshot, while the profile
+       saying so is a fetch away. */
+    if (opts.friend === false)
+        marks.appendChild(el("span", "pill", "NOT A FRIEND"));
+
+    return marks.childNodes.length ? marks : null;
+}
+
+function rankClass(rank) {
+    switch (rank) {
+    case "Trusted User": return "r5";
+    case "Known User":   return "r4";
+    case "User":         return "r3";
+    case "New User":     return "r2";
+    default:             return "r1";
+    }
+}
+
+/* Badge art is the one picture with no file behind it: badges live on a public
+   CDN rather than behind VRChat's authenticated files API, so the proxy is
+   handed the URL instead. It still goes through the proxy - this page makes no
+   external requests, since one that phoned out would break behind a tunnel and
+   would tell VRChat's CDN who is looking at whom. A badge whose art does not
+   arrive keeps its name, which is the part that means something. */
+function badgeStrip(badges) {
+    var strip = el("div", "badges");
+
+    // Showcased first: that flag is the user saying which of these they want
+    // seen, and a profile with a dozen of them scrolls otherwise.
+    var sorted = badges.slice().sort(function (a, b) {
+        return (b.showcased === true) - (a.showcased === true);
+    });
+
+    sorted.forEach(function (badge) {
+        var box = el("div", "badge" + (badge.showcased ? " showcased" : ""));
+        box.title = badge.description
+            ? badge.name + " - " + badge.description
+            : badge.name;
+
+        if (badge.imageUrl) {
+            var img = document.createElement("img");
+            img.alt = "";
+            box.appendChild(img);
+            badgeInto(img, badge.imageUrl);
+        }
+        box.appendChild(el("div", "bn", badge.name));
+        strip.appendChild(box);
+    });
+    return strip;
+}
+
+/* VRChat tags languages with ISO 639-3 codes. The common ones are named; the
+   rest keep their code, which is at least what the game shows. */
+var LANGUAGES = {
+    eng: "English",  jpn: "Japanese", kor: "Korean",   zho: "Chinese",
+    cmn: "Chinese",  spa: "Spanish",  por: "Portuguese", fra: "French",
+    deu: "German",   rus: "Russian",  ita: "Italian",  nld: "Dutch",
+    pol: "Polish",   swe: "Swedish",  dan: "Danish",   nor: "Norwegian",
+    fin: "Finnish",  ces: "Czech",    tur: "Turkish",  ara: "Arabic",
+    tha: "Thai",     vie: "Vietnamese", ind: "Indonesian", ukr: "Ukrainian",
+    hun: "Hungarian", ron: "Romanian", heb: "Hebrew",  hin: "Hindi",
+    fil: "Filipino", ell: "Greek",    tok: "Toki Pona"
+};
+
+function languageName(code) {
+    return LANGUAGES[code] || code.toUpperCase();
 }
 
 /* Your own status, on your own profile. The four are always open rather than
@@ -2377,6 +2702,7 @@ function detailInstance(body, group) {
 function detailFriend(body, friend, group) {
     document.getElementById("detailTitle").textContent = friend.displayName;
     renderProfile(body, friend, {
+        friend: true,
         where: group
             ? groupName(group)
             : (friend.status === "offline" ? "offline" : "not in a world"),
@@ -2388,26 +2714,23 @@ function detailFriend(body, friend, group) {
     });
 }
 
-/* Someone in the mute or block list who is not a friend. A moderation outlives
-   the friendship it started in, and can be aimed at somebody who never was
-   one, so there is no profile behind the name: only what the list carries. */
+/* Somebody who is not on the friends list: whoever sent a friend request, and
+   whoever is in the mute or block list (a moderation outlives the friendship
+   it started in, and can be aimed at somebody who never was one).
+
+   The roster has nothing on them at all, so the pane is the fetched profile
+   and nothing else - which is the whole point of it. Until it lands there is
+   the name the list or the notification came with, which is what the hero is
+   seeded with here. */
 function detailPerson(body, id, name) {
     document.getElementById("detailTitle").textContent = name;
-
-    var hero = el("div", "hero");
-    hero.appendChild(avatar(name, true));
-    hero.appendChild(el("div", "name", name));
-    hero.appendChild(el("div", "sub", "Not on your friends list"));
-    body.appendChild(hero);
-
-    var kv = el("dl", "kv");
-    pair(kv, "User ID", id);
-    body.appendChild(kv);
-
-    var actions = el("div", "actions");
-    actions.appendChild(copyButton("Copy user ID", id));
-    moderationActions(actions, id, false);
-    body.appendChild(actions);
+    // A notification whose sender vrcd-server could not name arrives as the ID
+    // over again. Passing that as a display name would keep it there after the
+    // profile lands with the real one.
+    renderProfile(body, { id: id, displayName: name === id ? "" : name }, {
+        friend: false,
+        moderate: true
+    });
 }
 
 function joinButton(location, label) {
@@ -2442,7 +2765,7 @@ function renderDetail() {
 
     if (view.sel === null) {
         var nothing = "Pick a world or a friend.";
-        if (view.tab === "inbox") nothing = "Pick a sender you are already friends with.";
+        if (view.tab === "inbox") nothing = "Pick a sender to see their profile.";
         else if (view.tab === "stuff") nothing = "Pick something.";
         else if (view.tab === "tools") nothing = "Pick someone.";
         body.appendChild(placeholder(nothing));
@@ -2450,7 +2773,13 @@ function renderDetail() {
     }
 
     if (view.sel.kind === "person") {
-        detailPerson(body, view.sel.id, view.sel.name);
+        // Somebody opened as a stranger who has since turned up in the roster:
+        // accepting their friend request is the way that happens, and the pane
+        // they are looking at should become the friend's, where they are and
+        // how to reach them. The snapshot after the accept is what does it.
+        var known = findFriend(view.sel.id);
+        if (known) detailFriend(body, known.friend, known.group);
+        else detailPerson(body, view.sel.id, view.sel.name);
         return;
     }
 
@@ -2792,6 +3121,12 @@ function applyState(message) {
         // be pressed again.
         pendingModerations = {};
         refreshingModerations = false;
+        linkWasDown = true;
+    } else if (linkWasDown) {
+        // Profiles that failed while the link was down failed for a reason
+        // that has just gone away. What was actually fetched stays.
+        linkWasDown = false;
+        forgetProfileErrors();
     }
 
     render();

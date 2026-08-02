@@ -24,7 +24,10 @@ import web.auth;
 import web.connection;
 import web.hub;
 import web.images;
+import web.profiles;
 import web.state;
+
+import vrcd.badgeurl : isBadgeImageURL;
 
 /// Web front-end version.
 immutable string VERSION = import("VERSION");
@@ -388,6 +391,85 @@ int main(string[] args)
             // stickers and emoji) and has to answer for them anyway.
             link.requestUpload(tag, data, note);
             req.replyJSON(HTTPStatus.ok, `{"requested":true}`);
+            return REQUEST_OK;
+        })
+        .get(`/api/user/:user_id`, (ref HTTPRequest req)
+        {
+            if (authorized(req, true) == false)
+                return REQUEST_OK;
+
+            string *userId = "user_id" in req.params;
+            if (userId is null || isUserId(*userId) == false)
+            {
+                req.replyJSON(HTTPStatus.badRequest, `{"error":"bad user id"}`);
+                return REQUEST_OK;
+            }
+
+            // Not in the snapshot: a bio, links and a badge list per friend
+            // would be fanned out to every browser on every friend movement,
+            // and this is a page somebody opens one person at a time.
+            ProfileLookup found = link.profile(*userId);
+            final switch (found.state) with (ProfileState)
+            {
+            case ready:
+                // No caching: a bio or a status changes with no event to say
+                // so, and the two caches behind this already decide how often
+                // VRChat is actually asked.
+                req.addHeader("Cache-Control", "no-store");
+                req.replyJSON(HTTPStatus.ok, found.json);
+                break;
+
+            case pending:
+                // 202, like an image: it is on its way down the link, and the
+                // page comes back for it rather than this handler blocking,
+                // which in ddhttpd would stall every other request on the same
+                // poll thread.
+                req.replyJSON(202, `{"pending":true}`);
+                break;
+
+            case failed:
+                req.replyJSON(502,
+                    JSONValue([ "error": JSONValue(found.error) ]).toString());
+                break;
+            }
+            return REQUEST_OK;
+        })
+        .get(`/api/badge`, (ref HTTPRequest req)
+        {
+            if (authorized(req, true) == false)
+                return REQUEST_OK;
+
+            // A URL rather than an ID: badge art is the one picture in a
+            // profile that is not a VRChat file, so there is no file to name.
+            // It is checked here as well as on the other side, because this is
+            // the side that decides whether to put it on the link at all.
+            string url = req.param("url");
+            if (isBadgeImageURL(url) == false)
+            {
+                req.replyJSON(HTTPStatus.badRequest, `{"error":"bad badge url"}`);
+                return REQUEST_OK;
+            }
+
+            ImageLookup found = link.badgeImage(url);
+            final switch (found.state) with (ImageState)
+            {
+            case ready:
+                // A badge URL names one picture forever, the same way a file
+                // and version do.
+                req.addHeader("Cache-Control", "private, max-age=86400, immutable");
+                req.reply(HTTPStatus.ok, HTTPReply.copyBuffer(found.data),
+                    toStringz(found.mimeType));
+                break;
+
+            case pending:
+                req.replyJSON(202, `{"pending":true}`);
+                break;
+
+            case failed:
+                req.replyJSON(502,
+                    JSONValue([ "error": JSONValue(found.error) ]).toString());
+                break;
+            }
             return REQUEST_OK;
         })
         .get(`/api/image/:file_id`, (ref HTTPRequest req)
@@ -804,6 +886,36 @@ private bool isFileId(string value)
         return false;
 
     foreach (char c; value[5 .. $])
+    {
+        if (isAlphaNum(c) == false && c != '-' && c != '_')
+            return false;
+    }
+    return true;
+}
+
+/// Whether this looks like a VRChat user ID. Checked here for the same reason
+/// as a file ID: vrcd-server builds a path out of it.
+///
+/// The `usr_` prefix is not required, on the same terms as `/api/moderation`:
+/// accounts old enough predate it. What is refused is an ID that visibly
+/// belongs to something else -- a group ID above all, which is what a v2 group
+/// notification puts where a sender's user ID goes.
+private bool isUserId(string value)
+{
+    import std.ascii : isAlphaNum;
+    import std.string : startsWith;
+
+    if (value.length < 3 || value.length > 64)
+        return false;
+
+    foreach (string prefix; [ "grp_", "wrld_", "avtr_", "file_", "inst_",
+                              "prnt_", "inv_", "not_" ])
+    {
+        if (startsWith(value, prefix))
+            return false;
+    }
+
+    foreach (char c; value)
     {
         if (isAlphaNum(c) == false && c != '-' && c != '_')
             return false;

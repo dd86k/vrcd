@@ -13,4 +13,6 @@ stringImportPaths ".."
 
 // Friend bucketing and ordering is presentation shared with the SDL client:
 // both front-ends compile the same module so the two rosters cannot drift.
-sourceFiles "../common/source/vrcd/friends.d" "../common/source/vrcd/events.d" "../common/source/vrcd/notifications.d"
+// badgeurl.d is shared with vrcd-server: badge art is the one request where a
+// client names a URL rather than an object, and both sides check the same rule.
+sourceFiles "../common/source/vrcd/friends.d" "../common/source/vrcd/events.d" "../common/source/vrcd/notifications.d" "../common/source/vrcd/badgeurl.d"

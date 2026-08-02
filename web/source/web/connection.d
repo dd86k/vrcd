@@ -21,6 +21,7 @@ import vrcd.events;
 import vrcd.friends;
 import vrcd.notifications;
 import web.images;
+import web.profiles;
 
 /// First reconnect delay; doubles on every consecutive failure.
 private enum Duration RECONNECT_BASE = dur!"seconds"(2);
@@ -42,6 +43,9 @@ private enum long PROTOCOL_CONTENT = 2;
 /// Protocol version that added the moderation API (`get_moderations`,
 /// `moderate_user`, `unfriend`).
 private enum long PROTOCOL_MODERATION = 3;
+
+/// Protocol version that added full user profiles (`get_user`).
+private enum long PROTOCOL_PROFILES = 7;
 
 /// Byte budget for proxied images. Thumbnails run tens of kilobytes each, so
 /// this holds a few hundred of them; past that the oldest are dropped and
@@ -285,6 +289,7 @@ class ServerLink
         this.stateMutex = new Mutex();
         this.sendMutex = new Mutex();
         this.images = new ImageCache(IMAGE_CACHE_BYTES);
+        this.profiles = new ProfileCache();
     }
 
     /// Set the callback fired after any state change worth re-rendering.
@@ -725,6 +730,104 @@ class ServerLink
         return found;
     }
 
+    /// Look one user profile up, asking vrcd-server for it when it is not held
+    /// yet. Never blocks: a caller that gets `pending` back replies 202 and the
+    /// browser comes for it again.
+    ///
+    /// This is the only way to see anything about somebody who is not a friend
+    /// -- most of all whoever just sent a friend request, who is a name and an
+    /// ID until this answers.
+    ProfileLookup profile(string userId)
+    {
+        bool startFetch;
+        ProfileLookup found = profiles.lookup(userId, startFetch);
+        if (startFetch == false)
+            return found;
+
+        long version_;
+        bool connected;
+        synchronized (stateMutex)
+        {
+            version_ = linkStatus.serverVersion;
+            connected = linkStatus.connected;
+        }
+
+        // Both of these are answers, not failures to fetch, so they are given
+        // straight back rather than remembered: a reconnect or a server upgrade
+        // should not have to wait out a cached error. A stale-but-readable
+        // entry outranks either: what we have beats saying nothing.
+        string unavailable;
+        if (connected == false)
+            unavailable = "Not connected to vrcd-server";
+        else if (version_ < PROTOCOL_PROFILES)
+            unavailable = "This vrcd-server is too old to serve profiles " ~
+                "(needs protocol v7)";
+
+        if (unavailable.length > 0)
+        {
+            if (found.state == ProfileState.ready)
+                return found;
+
+            // Nothing was sent, so the mark the lookup left has to come off:
+            // the next look should try again, not wait out a reply that is not
+            // coming. Not stored as a failure either, for the reason above.
+            profiles.forget(userId);
+            return ProfileLookup(ProfileState.failed, null, unavailable);
+        }
+
+        logDebugging("Fetching profile for %s", userId);
+        bool sent = sendMessage(JSONValue([
+            "type":    JSONValue("get_user"),
+            "user_id": JSONValue(userId),
+        ]));
+
+        if (sent == false)
+        {
+            if (found.state == ProfileState.ready)
+                return found;
+            profiles.storeFailure(userId, "Not connected to vrcd-server");
+            return ProfileLookup(ProfileState.failed, null,
+                "Not connected to vrcd-server");
+        }
+        return found;
+    }
+
+    /// Look one badge image up, asking vrcd-server for it when it is not held
+    /// yet. Never blocks, on the same terms as `image`.
+    ///
+    /// Badges are the one picture in a profile that is not a VRChat file: they
+    /// sit on a public CDN, so there is no file ID and the request names a URL.
+    /// It still goes through vrcd-server rather than the browser, because this
+    /// page makes no external requests -- one that phoned out would break
+    /// behind a tunnel and would tell VRChat's CDN who is looking at whom.
+    ///
+    /// Shares the image cache, keyed by the URL. Badge art is small, there is
+    /// little of it, and it never changes under a given URL, so it belongs in
+    /// the same byte budget as everything else with a picture in it.
+    ImageLookup badgeImage(string url)
+    {
+        string cacheKey = "badge:" ~ url;
+
+        bool startFetch;
+        ImageLookup found = images.lookup(cacheKey, startFetch);
+        if (startFetch == false)
+            return found;
+
+        logTrace("Fetching badge image %s", url);
+        bool sent = sendMessage(JSONValue([
+            "type": JSONValue("get_badge_image"),
+            "url":  JSONValue(url),
+        ]));
+
+        if (sent == false)
+        {
+            images.storeFailure(cacheKey, "Not connected to vrcd-server");
+            return ImageLookup(ImageState.failed, null, null,
+                "Not connected to vrcd-server");
+        }
+        return found;
+    }
+
     /// Answer a credentials prompt. Safe to call from an HTTP thread; the
     /// server either signs in or asks again with an error.
     bool submitCredentials(string username, string password)
@@ -908,6 +1011,8 @@ private:
     /// Proxied VRChat images. Has its own lock: HTTP threads look images up
     /// while this thread stores them, and neither needs the state lock.
     ImageCache images;
+    /// Fetched user profiles, on the same terms as `images`.
+    ProfileCache profiles;
 
     /// Whether the link cannot serve this section right now, filling in the
     /// reason as it says so. Caller holds the state lock.
@@ -1139,6 +1244,10 @@ private:
                     moderationList.error = "Not connected to vrcd-server";
                 }
             }
+
+            // On the same terms as the content lists: profiles already fetched
+            // stay readable, a request that died with the socket does not.
+            profiles.dropUnresolved();
             notifyChange();
 
             logInfo("Reconnecting in %d second(s)", backoff.total!"seconds");
@@ -1478,6 +1587,14 @@ private:
 
         case "image":
             applyImage(message);
+            break;
+
+        case "user":
+            applyUser(message);
+            break;
+
+        case "badge_image":
+            applyBadgeImage(message);
             break;
 
         case "join_instance_result":
@@ -1868,6 +1985,73 @@ private:
     /// File one proxied image away. No state change is published: the browser
     /// is already coming back for it, and a broadcast per thumbnail would put
     /// a whole grid's worth of snapshots on every socket.
+    /// Take in one `user` reply. A failure is stored as one: the page has a
+    /// pane open waiting on this, and it needs to be told there is nothing
+    /// coming rather than retrying until it gives up.
+    void applyUser(ref JSONValue message)
+    {
+        string userId = jsonString(message, "user_id");
+        if (userId.length == 0)
+            return;
+
+        bool success;
+        if (const(JSONValue) *v = "success" in message)
+            success = v.type == JSONType.true_;
+
+        const(JSONValue) *user = "user" in message;
+        if (success == false || user is null || user.type != JSONType.object)
+        {
+            string error = jsonString(message, "error");
+            profiles.storeFailure(userId, error.length > 0 ? error : "Profile unavailable");
+            logDebugging("Profile for %s failed: %s", userId, error);
+            return;
+        }
+
+        // Stored as it arrived: the page is the only thing that reads it, and
+        // re-parsing on the way out would only be to build the same bytes.
+        profiles.store(userId, user.toString());
+        logDebugging("Profile for %s cached", userId);
+    }
+
+    /// Take in one `badge_image` reply, into the same cache as everything else
+    /// with a picture in it, under the URL that was asked for.
+    void applyBadgeImage(ref JSONValue message)
+    {
+        string url = jsonString(message, "url");
+        if (url.length == 0)
+            return;
+
+        string cacheKey = "badge:" ~ url;
+
+        bool success;
+        if (const(JSONValue) *v = "success" in message)
+            success = v.type == JSONType.true_;
+
+        if (success == false)
+        {
+            string error = jsonString(message, "error");
+            images.storeFailure(cacheKey,
+                error.length > 0 ? error : "Badge image unavailable");
+            logDebugging("Badge image %s failed: %s", url, error);
+            return;
+        }
+
+        string encoded = jsonString(message, "data_base64");
+        ubyte[] data;
+        try data = Base64.decode(encoded);
+        catch (Exception ex)
+        {
+            images.storeFailure(cacheKey, "Malformed image data");
+            logWarn("Badge image %s came back malformed: %s", url, ex.msg);
+            return;
+        }
+
+        string mimeType = jsonString(message, "mime_type");
+        images.store(cacheKey, data,
+            mimeType.length > 0 ? mimeType : "application/octet-stream");
+        logTrace("Badge image %s cached (%u bytes)", url, data.length);
+    }
+
     void applyImage(ref JSONValue message)
     {
         string fileId = jsonString(message, "file_id");

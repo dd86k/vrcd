@@ -123,6 +123,8 @@ appears.
 | POST | `/api/content` | cookie | `{"action":"...","id":"...","slot":"drone"}` -- see below |
 | POST | `/api/upload` | cookie | `{"tag":"gallery"\|"icon"\|"sticker"\|"emoji"\|"print","data_base64":"...","note":"..."}` |
 | POST | `/api/moderation` | cookie | `{"action":"mute"\|"unmute"\|"block"\|"unblock"\|"unfriend","user_id":"usr_..."}`, or `{"action":"refresh"}` to re-list |
+| GET | `/api/user/:user_id` | cookie | One person's full profile, and the fetch that fills it |
+| GET | `/api/badge?url=` | cookie | One proxied badge image, by the URL a profile carries |
 | GET | `/api/image/:file_id` | cookie | One proxied VRChat image, `?v=` version and `?size=` edge |
 | POST | `/api/auth` | cookie | Answers a delegated VRChat sign-in prompt |
 | WS | `/ws/:ticket` | ticket | State snapshots and feed events |
@@ -389,6 +391,67 @@ a mis-tap are as far down as the pane goes.
 Protocol v3 is the floor. On an older vrcd-server the lists say so and the
 buttons are replaced by the same line.
 
+### Profiles
+
+The roster is a thin record: enough to draw a row and say where somebody is.
+The rest of a person -- bio, links, badges, trust rank, languages, the day they
+joined -- is fetched one at a time from `GET /api/user/:user_id`, not carried
+in the snapshot, since a few kilobytes per friend would be fanned out to every
+browser on every friend movement for a page opened one person at a time.
+
+It is also the only way to see somebody who is **not** a friend, which is the
+case it exists for. A friend request arrives as a name and an ID; deciding on
+it means looking at the person behind them. So any notification from a user
+opens a pane, friend or not, and the mute and block lists open one too.
+
+The route answers on the same terms as the image proxy, and for the same reason
+(ddhttpd runs handlers on its poll thread): **200** with the profile, **202**
+while it is on the link, **502** when VRChat or vrcd-server refused it. The page
+retries a 202 at 700 ms for about 20 seconds, and a failure stands for 30
+seconds before the next look tries again -- most of what fails here is
+temporary, and this pane has no refresh button to press.
+
+There are two caches behind it, both 5 minutes: one here, one in vrcd-server.
+Neither is a performance trick so much as rate-limit arithmetic -- a profile is
+one `GET /users/{id}`, and two front-ends flipping between friend requests
+would otherwise spend one per open. An entry that has gone stale is still
+served, with the refetch started underneath it, so a reopened pane never blanks.
+A dropped link forgets what was in flight and what failed, and keeps what was
+fetched.
+
+The user ID is checked for shape here, since vrcd-server builds a path out of
+it. As with `/api/moderation`, the `usr_` prefix is not required -- accounts
+old enough predate it -- but an ID that visibly belongs to something else
+(`grp_` above all, which is what a v2 group notification puts in its sender
+field) is refused without a call.
+
+The page merges the profile with the snapshot rather than replacing one with
+the other: status, custom message, platform and location come from the
+snapshot even when it says nothing, because those are the fields that move and
+a blank one is usually deliberate. Everything else comes from the profile,
+because the snapshot does not carry it.
+
+Badge art is the one picture with no file behind it. Badges live on a public
+CDN rather than behind VRChat's authenticated files API, so `GET /api/badge`
+takes the URL a profile carries rather than a file ID. It still goes through
+vrcd-server, because this page makes no external requests: one that phoned out
+would break behind a tunnel and would tell VRChat's CDN who is looking at whom.
+
+Which makes it the one route where the browser names *what* to fetch rather
+than which object, so the URL is pinned to HTTPS, host `assets.vrchat.com` and
+a path under `/badges/`, with what is left checked character by character. That
+rule is `common/source/vrcd/badgeurl.d`, compiled into both this and
+vrcd-server, since a rule two sides check separately is really whichever of
+them is looser. A badge whose art does not arrive keeps its name, which is the
+part that means something.
+
+The bytes share the image cache, keyed by the URL: badge art is small, there is
+little of it, and a URL names one picture forever, so it belongs in the same
+byte budget as everything else with a picture in it. Unlike a face it is not
+deferred to the viewport -- a profile holds a handful, all on the one screen
+somebody opened deliberately, so waiting for the observer would only make them
+appear late.
+
 ### Image proxy
 
 A browser cannot fetch a VRChat file: the session lives on vrcd-server. So an
@@ -542,6 +605,14 @@ directory, and `findServerImageCache()` picks that directory (the flag, else
 vrcd-server's own default, else null for link-only). Both refuse anything that
 could climb out of the directory, since the file ID lands in a path.
 
+### `web/profiles.d`
+`ProfileCache`: the same shape as `ImageCache` -- `lookup()` answers ready,
+pending or failed and tells the caller when it has to start the fetch -- with
+one difference. A profile goes stale where an image cannot, so entries expire
+after 5 minutes, and a stale one is still handed back with the refetch started
+underneath it. `dropUnresolved()` clears what a dropped link left in flight or
+failed, and keeps what was fetched.
+
 ### `web/auth.d`
 `SessionStore` (login, session validation, ticket issue and redeem, expiry
 sweep) plus `sessionFromCookies()`, `formField()`, `constantTimeEquals()` and
@@ -554,9 +625,10 @@ the browser revalidates rather than sitting on an edited stylesheet.
 
 Shared via `sourceFiles`: `common/source/vrcd/friends.d` (bucketing and
 ordering) and `common/source/vrcd/events.d` (labels and field extraction) with
-the SDL client, and `common/source/vrcd/notifications.d` (the notification
-shape, in both the wire forms VRChat uses) with the SDL client *and*
-vrcd-server, so none of the three can drift.
+the SDL client, `common/source/vrcd/notifications.d` (the notification shape,
+in both the wire forms VRChat uses) with the SDL client *and* vrcd-server, and
+`common/source/vrcd/badgeurl.d` (what may be fetched as badge art) with
+vrcd-server, so none of them can drift.
 
 ## Wire format
 
@@ -654,8 +726,9 @@ the toast names whoever it was aimed at -- vrcd-server fills that in from its
 roster or from VRChat's answer, so it survives a name this side never had.
 `server_version` is the protocol
 version from `auth_ok` as a number, zero when unknown. `n_users` and `capacity`
-are -1 when unknown. Friend entries carry no `bio` or `bioLinks` on purpose:
-the roster does not show them and they would bloat every broadcast.
+are -1 when unknown. Friend entries carry no `bio`, `bioLinks` or badges on
+purpose: they would bloat every broadcast, and a pane that wants them fetches
+the profile from `/api/user/:user_id` instead.
 
 Feed frame:
 
@@ -712,16 +785,28 @@ what vrcd-server can actually do appears:
 | `requestInvite` | DISMISS, and a line saying why there is nothing else - sending an invite back needs an API the server does not expose |
 
 VRChat's accept endpoint only means anything for a friend request, so an invite
-is answered by going where it points instead. The sender opens in the detail
-pane when they are already a friend.
+is answered by going where it points instead. Any sender with a user ID opens
+in the detail pane, friend or not -- the stranger is the one whose pane is worth
+opening, since accepting a friend request is exactly the decision that needs a
+bio and a trust rank to make.
 
-One profile layout serves both
-your own profile and a friend's; rows appear only when the field is present, so
-the difference between you and a friend is which fields the record carries. The
-two deliberate differences are the status picker, which the profile tab asks for
-with `editStatus` and a friend's detail pane never does, and the moderation
-buttons, which a friend's pane asks for with `moderate` and your own never does:
-none of them are aimed at yourself.
+One profile layout serves all three callers: your own profile, a friend's pane,
+and a stranger's. Rows appear only when the field is present, so the difference
+between them is which fields the record carries -- a friend request sender is a
+thinner record than a friend, not a different kind of thing. It draws the
+snapshot merged with the fetched profile (see [Profiles](#profiles)): the hero
+with the face, the name, pronouns and status, then the pills that qualify it
+(trust rank, VRChat Team, flagged, 18+ verified, not a friend), the badge grid,
+the bio as a paragraph with its own line breaks kept, the links, and only then
+the field list.
+
+The deliberate differences are the status picker, which the profile tab asks
+for with `editStatus` and nobody else does, and the moderation buttons, which a
+friend's or a stranger's pane asks for with `moderate` and your own never does:
+none of them are aimed at yourself. `friend` tells the pane whether UNFRIEND
+belongs in that set, and is read from the roster rather than from the profile's
+`isFriend`, so accepting a request promotes the pane within a snapshot instead
+of waiting on a fetch.
 
 ### Status
 
