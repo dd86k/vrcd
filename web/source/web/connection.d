@@ -20,6 +20,7 @@ import ddlogger;
 import vrcd.events;
 import vrcd.friends;
 import vrcd.notifications;
+import web.debugging;
 import web.images;
 import web.profiles;
 
@@ -739,6 +740,16 @@ class ServerLink
     /// ID until this answers.
     ProfileLookup profile(string userId)
     {
+        // An invented person, answered here. Without this the one pane a fake
+        // friend request exists to open would be a spinner and then an error,
+        // which is the least useful thing it could be.
+        if (debugFakes && isDebugUser(userId))
+        {
+            JSONValue fake = buildFakeProfile(userId);
+            if (fake.type == JSONType.object)
+                return ProfileLookup(ProfileState.ready, fake.toString());
+        }
+
         bool startFetch;
         ProfileLookup found = profiles.lookup(userId, startFetch);
         if (startFetch == false)
@@ -951,6 +962,20 @@ class ServerLink
     void requestNotificationAction(string notificationId, string action,
         int apiVersion = 1, string responseType = null, string responseData = null)
     {
+        // A fake notification has nowhere to go: VRChat has never heard of it,
+        // and sending it down the link would only come back a 404. Answering
+        // it here is also the point -- the row has to be dismissable, or the
+        // inbox fills up with debris that only a restart clears.
+        //
+        // Gated on debug being on rather than on the ID alone, so a crafted ID
+        // can never talk a normal build into reporting success for something
+        // that never happened.
+        if (debugFakes && isDebugNotification(notificationId))
+        {
+            answerFake(notificationId, action);
+            return;
+        }
+
         logInfo("Notification %s: %s", action, notificationId);
         if (sendMessage(JSONValue([
             "type":            JSONValue("notification_action"),
@@ -978,8 +1003,82 @@ class ServerLink
             action, notificationId);
     }
 
+    /// Turn the fake-notification catalogue on. Set once at startup and only
+    /// read after, so it needs no lock.
+    void setDebugFakes(bool on)
+    {
+        this.debugFakes = on;
+    }
+
+    /// Whether fakes are on, which is what puts the `debug` key in the state
+    /// snapshot and the chip on the page.
+    bool debugEnabled() const
+    {
+        return debugFakes;
+    }
+
+    /// Put one fake notification in the inbox.
+    ///
+    /// It goes in where a real one would, so everything downstream -- the
+    /// snapshot, the badge count, the row, its buttons -- is the real path.
+    ///
+    /// The sender is invented rather than taken from the roster. Borrowing a
+    /// friend gave the row a real face, but it tested the wrong thing: a
+    /// request from somebody already on the roster opens the *friend* pane,
+    /// and the reason a friend request is worth faking is that its sender is a
+    /// stranger. `profile()` answers for the invented ones, so the pane it
+    /// opens is a full one.
+    ///
+    /// Returns: false when the action is not one of the catalogue's.
+    bool addFakeNotification(string action)
+    {
+        if (debugFakes == false || isDebugFake(action) == false)
+            return false;
+
+        synchronized (stateMutex)
+        {
+            NotificationInfo fake = buildFakeNotification(action, ++fakeSequence);
+            if (fake.id.length == 0)
+                return false;
+
+            inbox ~= fake; // Appends, like a real arrival: see the field comment.
+        }
+
+        notifyChange();
+        logInfo("Debug: added a fake %s notification", action);
+        return true;
+    }
+
+    /// Take every fake back out, leaving real notifications where they are.
+    void clearFakeNotifications()
+    {
+        if (debugFakes == false)
+            return;
+
+        size_t removed;
+        synchronized (stateMutex)
+        {
+            NotificationInfo[] kept;
+            foreach (ref NotificationInfo entry; inbox)
+            {
+                if (isDebugNotification(entry.id))
+                    ++removed;
+                else
+                    kept ~= entry;
+            }
+            inbox = kept;
+        }
+
+        notifyChange();
+        logInfo("Debug: cleared %u fake notification(s)", removed);
+    }
+
 private:
     void delegate() onChange;
+    /// Whether the fake-notification catalogue is on. Startup-only.
+    bool debugFakes;
+    /// Counter behind each fake's ID, so two presses make two rows.
+    long fakeSequence;
     void delegate(FeedEntry[] entries, bool reset) onFeed;
     /// Backlog accumulating between `event_older` messages and the
     /// `older_fetched` that terminates them. Only touched on this thread.
@@ -2103,6 +2202,32 @@ private:
                 kept ~= entry;
         }
         inbox = kept;
+    }
+
+    /// Answer a fake notification, here rather than down the link.
+    ///
+    /// The outcome is written into the same slot a real answer's
+    /// `notification_action_result` lands in, so the page's toast, its button
+    /// bookkeeping and the row leaving the list all happen exactly as they
+    /// would for a real one. That is the point: the parts being exercised are
+    /// the page's, not VRChat's.
+    void answerFake(string notificationId, string action)
+    {
+        NotifyActionResult result;
+        result.attempted = true;
+        result.notificationId = notificationId;
+        result.action = action;
+        result.success = true;
+
+        synchronized (stateMutex)
+        {
+            removeFromInbox(notificationId);
+            lastNotifyAction = result;
+        }
+        notifyChange();
+
+        logInfo("Debug: answered fake notification %s with %s",
+            notificationId, action);
     }
 
     /// Roster display name for a user ID, empty when they are not a friend.

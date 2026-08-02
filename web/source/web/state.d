@@ -16,6 +16,7 @@ import std.json;
 import vrcd.friends;
 import vrcd.notifications;
 import web.connection;
+import web.debugging;
 
 /// Build the state snapshot broadcast to browsers and served by /api/state.
 string buildStateJSON(ServerLink link)
@@ -88,7 +89,23 @@ string buildStateJSON(ServerLink link)
     JSONValue[] pending;
     pending.reserve(inbox.length);
     foreach (ref NotificationInfo entry; inbox)
-        pending ~= buildNotificationJSON(entry);
+    {
+        JSONValue encoded = buildNotificationJSON(entry);
+
+        // Marked here rather than in the shared notification shape: a fake is
+        // this front-end's own idea, and nothing else on the link has any
+        // business carrying the field.
+        //
+        // The row it marks says ACCEPT and DECLINE like any other, and the
+        // danger runs both ways -- accepting a real request while thinking it
+        // is a fake, or leaving a real one sitting because it looked like one.
+        // So the page draws a badge off this, rather than the two being told
+        // apart by whoever is looking.
+        if (isDebugNotification(entry.id))
+            encoded["debug"] = JSONValue(true);
+
+        pending ~= encoded;
+    }
     root["notifications"] = JSONValue(pending);
 
     // Present only while the server is actually asking: the page drives its
@@ -101,6 +118,25 @@ string buildStateJSON(ServerLink link)
             "method": JSONValue(signin.method),
             "error":  JSONValue(signin.error),
         ]);
+    }
+
+    // Present only when --debug (or VRCD_WEB_DEBUG) is on, which is what the
+    // page tests to decide whether to draw the chip at all. The catalogue
+    // rides along rather than living in the page: adding a fake should be one
+    // edit, and the labels belong next to the thing that builds them.
+    if (link.debugEnabled)
+    {
+        JSONValue[] fakes;
+        fakes.reserve(DEBUG_FAKES.length);
+        foreach (ref const DebugFake fake; DEBUG_FAKES)
+        {
+            fakes ~= JSONValue([
+                "action": JSONValue(fake.action),
+                "label":  JSONValue(fake.label),
+                "hint":   JSONValue(fake.hint),
+            ]);
+        }
+        root["debug"] = JSONValue([ "fakes": JSONValue(fakes) ]);
     }
 
     // Only what the page needs to know *that* a section moved. The entries

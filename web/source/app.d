@@ -22,6 +22,7 @@ import ddlogger;
 import web.assets;
 import web.auth;
 import web.connection;
+import web.debugging;
 import web.hub;
 import web.images;
 import web.profiles;
@@ -49,6 +50,9 @@ int main(string[] args)
     bool noImageCache;
     bool verbose;
     bool showVersion;
+    // Env var first so the flag can still win: a shell that exports this for a
+    // working session should not be arguing with the command in front of it.
+    bool debugTools = envFlag("VRCD_WEB_DEBUG");
 
     GetoptResult opts = void;
     try opts = getopt(args,
@@ -67,6 +71,8 @@ int main(string[] args)
         "image-cache", "vrcd-server's image cache directory, when it shares this host", &imageCache,
         "no-image-cache", "Never read vrcd-server's image cache, even on one host", &noImageCache,
         "verbose|v", "Enable verbose logging", &verbose,
+        "debug",     "Enable the debugging tools, including fake notifications " ~
+                     "(also VRCD_WEB_DEBUG=1)", &debugTools,
         "version",   "Show version and exit", &showVersion,
     );
     catch (Exception ex)
@@ -106,6 +112,16 @@ int main(string[] args)
             "reach %s:%u", listenAddr, listenPort);
 
     ServerLink link = new ServerLink(serverHost, serverPort, secret);
+
+    // Said out loud, because it puts a route and a panel on the page that are
+    // not there in a normal run, and an environment variable is easy to forget
+    // you exported.
+    if (debugTools)
+    {
+        link.setDebugFakes(true);
+        logWarn("Debugging tools are on: the TOOLS tab can put fake " ~
+            "notifications in the inbox");
+    }
 
     // A shortcut for images vrcd-server has already downloaded, when it is on
     // this host. Everything still works without it, only slower: a miss goes
@@ -432,6 +448,41 @@ int main(string[] args)
                     JSONValue([ "error": JSONValue(found.error) ]).toString());
                 break;
             }
+            return REQUEST_OK;
+        })
+        .post(`/api/debug`, (ref HTTPRequest req)
+        {
+            if (authorized(req, true) == false)
+                return REQUEST_OK;
+
+            // Registered either way, and refused here rather than left out of
+            // the router: a page that somehow asks in a normal build should be
+            // told no, not handed the 404 that a typo in a path also gets.
+            if (debugTools == false)
+            {
+                req.replyJSON(403, `{"error":"debugging tools are off"}`);
+                return REQUEST_OK;
+            }
+
+            string action;
+            if (debugAction(req.payload, action) == false)
+            {
+                req.replyJSON(HTTPStatus.badRequest, `{"error":"bad debug action"}`);
+                return REQUEST_OK;
+            }
+
+            // Not fire and forget, unlike the actions that travel down the
+            // link: this one is answered entirely on this side, so there is
+            // nothing to wait for and the broadcast has already gone out.
+            if (action == "clear")
+                link.clearFakeNotifications();
+            else if (link.addFakeNotification(action) == false)
+            {
+                req.replyJSON(HTTPStatus.badRequest, `{"error":"unknown fake"}`);
+                return REQUEST_OK;
+            }
+
+            req.replyJSON(HTTPStatus.ok, `{"ok":true}`);
             return REQUEST_OK;
         })
         .get(`/api/badge`, (ref HTTPRequest req)
@@ -891,6 +942,51 @@ private bool isFileId(string value)
             return false;
     }
     return true;
+}
+
+/// Pull a debugging action out of a `/api/debug` request body. Returns false
+/// when there is nothing usable in it.
+private bool debugAction(ubyte[] payload, out string action)
+{
+    if (payload.length == 0)
+        return false;
+
+    JSONValue body_;
+    try body_ = parseJSON(cast(const(char)[])payload);
+    catch (JSONException ex)
+    {
+        logWarn("Malformed debug request: %s", ex.msg);
+        return false;
+    }
+
+    if (body_.type != JSONType.object)
+        return false;
+
+    if (const(JSONValue) *v = "action" in body_)
+        if (v.type == JSONType.string)
+            action = v.str;
+
+    // "clear" takes every fake back out; the rest name one to add, and the
+    // catalogue is what says which those are.
+    return action == "clear" || isDebugFake(action);
+}
+
+/// Whether an environment variable is set to something that reads as on.
+///
+/// Anything set but empty is off, so `VRCD_WEB_DEBUG=` in a shell profile
+/// turns the tools off rather than on -- which is what somebody clearing it
+/// that way meant.
+private bool envFlag(string name)
+{
+    import std.process : environment;
+    import std.uni : toLower;
+
+    string value = environment.get(name, "");
+    switch (toLower(value))
+    {
+    case "1", "true", "yes", "on": return true;
+    default:                       return false;
+    }
 }
 
 /// Whether this looks like a VRChat user ID. Checked here for the same reason

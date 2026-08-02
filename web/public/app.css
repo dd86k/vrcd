@@ -207,13 +207,26 @@ button { font: inherit; color: inherit; }
     display: flex; align-items: center; gap: .7rem;
     width: 100%; text-align: left; background: none; border: 0; padding: 0;
 }
-/* Only when it is a button, which it is only for a sender already in the
-   roster; the div form has nothing to open. */
+/* Only when it is a button, which it is for any sender with a user ID behind
+   it; the div form -- a notification from a group -- has nobody to open. */
 button.head { cursor: pointer; }
 .notify .who { flex: 1; min-width: 0; }
 .notify .n { font-weight: 600;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .notify .d { color: var(--muted); font-size: .8rem; }
+
+/* A fake notification, which exists only under --debug. It answers the same
+   buttons as a real one, so it is marked twice over: a tag next to the type,
+   where the eye already is, and a stripe down the card that is visible without
+   reading anything. Both matter in the other direction too -- a real request
+   left sitting because it looked like a fake is the worse mistake. */
+.notify.fake { border-color: #6a5a2a; border-left: 3px solid #d8b24a; }
+.tag {
+    display: inline-block; margin-right: .4rem; padding: .05rem .35rem;
+    border-radius: 4px; font-size: .65rem; font-weight: 700;
+    letter-spacing: .06em; vertical-align: .05em;
+}
+.tag.fake { color: #1c1810; background: #d8b24a; }
 .notify .when { flex: none; color: var(--dim); font-size: .75rem; }
 .notify .ntitle { margin-top: .6rem; font-weight: 600; overflow-wrap: anywhere; }
 .notify .msg { margin-top: .6rem; font-size: .9rem; overflow-wrap: anywhere; }

@@ -126,8 +126,20 @@ var TOOL_HINTS = {
     muted: "People you have muted. VRChat reports no changes to this, so a " +
            "mute made in-game shows up after a refresh.",
     blocked: "People you have blocked. VRChat reports no changes to this, so " +
-             "a block made in-game shows up after a refresh."
+             "a block made in-game shows up after a refresh.",
+    debug: "Only here because this vrcd-web was started with --debug or " +
+           "VRCD_WEB_DEBUG. Nothing below touches VRChat: the rows are made " +
+           "here and answered here."
 };
+
+/* The tools on offer. DEBUG is in the list only when the snapshot carries a
+   `debug` key, which it does only when the web server was started with the
+   debugging tools on. Built per draw rather than being a constant, since that
+   key can arrive after the page has. */
+function toolSections() {
+    if (state.debug === undefined) return TOOL_SECTIONS;
+    return TOOL_SECTIONS.concat([{ id: "debug", label: "DEBUG" }]);
+}
 
 /* What to say once a moderation went through. Keyed by the action, and the
    name of whoever it was aimed at is appended. */
@@ -405,9 +417,12 @@ function tabInfo(id) {
 }
 
 function toolInfo(id) {
-    for (var i = 0; i < TOOL_SECTIONS.length; i++)
-        if (TOOL_SECTIONS[i].id === id) return TOOL_SECTIONS[i];
-    return TOOL_SECTIONS[0];
+    var sections = toolSections();
+    for (var i = 0; i < sections.length; i++)
+        if (sections[i].id === id) return sections[i];
+    // Also what puts somebody back on the friends list when a page left on
+    // the debug tool reconnects to a server that no longer offers it.
+    return sections[0];
 }
 
 /* One of the two moderation lists. Never undefined, so a page drawing before
@@ -655,7 +670,7 @@ function notifyCard(entry) {
     var who = entry.sender_name || (fromUser ? entry.sender_user_id : "") ||
         entry.title || "VRChat";
 
-    var card = el("div", "notify");
+    var card = el("div", "notify" + (entry.debug ? " fake" : ""));
 
     /* A button, not a div, so the sender opens in the detail pane the way a
        feed row does. The action buttons are siblings of it, never inside it.
@@ -670,7 +685,16 @@ function notifyCard(entry) {
     head.appendChild(avatar(who, false, friend));
     var text = el("div", "who");
     text.appendChild(el("div", "n", who));
-    text.appendChild(el("div", "d", kind.label));
+
+    /* A fake row says ACCEPT and DECLINE like any other, and the danger runs
+       both ways: accepting a real request believing it is a fake, or leaving a
+       real one sitting because it looked like one. So it is marked, next to the
+       type where the eye already is, rather than left to be told apart by
+       whoever is looking. Only ever present under --debug. */
+    var label = el("div", "d");
+    if (entry.debug) label.appendChild(el("span", "tag fake", "FAKE"));
+    label.appendChild(document.createTextNode(kind.label));
+    text.appendChild(label);
     head.appendChild(text);
     if (entry.received_at_unix)
         head.appendChild(el("div", "when", whenText(entry.received_at_unix)));
@@ -1942,25 +1966,103 @@ function dropTarget() {
    them. */
 function renderTools(body) {
     var info = toolInfo(view.tool);
+    // Written back, so a page left on DEBUG that reconnects to a server
+    // without it lands on the friends list with that chip lit, rather than on
+    // the friends list with no chip lit at all.
+    view.tool = info.id;
     body.appendChild(toolSwitcher());
 
-    if (info.id === "friends") renderFriendList(body);
-    else renderModerated(body, info);
+    if (info.id === "friends")     renderFriendList(body);
+    else if (info.id === "debug")  renderDebug(body);
+    else                           renderModerated(body, info);
 
     body.appendChild(el("div", "hint", TOOL_HINTS[info.id]));
 }
 
+/* One button per fake the server offers, drawn from the catalogue in the
+   snapshot rather than a table here: adding a fake should be one edit, on the
+   side that knows how to build one.
+
+   Each press makes a row in the inbox that took the same path a real
+   notification takes, so what appears there is what a real one looks like, and
+   answering it presses the same buttons. Nothing here reaches VRChat. */
+function renderDebug(body) {
+    var fakes = (state.debug && state.debug.fakes) || [];
+
+    body.appendChild(el("div", "section", "Fake notifications"));
+
+    var list = el("div", "actions");
+    fakes.forEach(function (fake) {
+        var button = el("button", "act", fake.label);
+        button.onclick = function () { debugAct(fake.action, button); };
+        list.appendChild(button);
+
+        if (fake.hint) list.appendChild(el("div", "hint", fake.hint));
+    });
+
+    if (fakes.length === 0)
+        list.appendChild(placeholder("This vrcd-web offers no fakes."));
+    body.appendChild(list);
+
+    body.appendChild(el("div", "section", "Clean up"));
+    var clear = el("div", "actions");
+    var wipe = el("button", "act", "CLEAR FAKES");
+    wipe.onclick = function () { debugAct("clear", wipe); };
+    clear.appendChild(wipe);
+    clear.appendChild(el("div", "hint",
+        "Takes every fake back out. Real notifications stay where they are."));
+    body.appendChild(clear);
+
+    var count = (state.notifications || []).filter(function (entry) {
+        return entry.debug === true;
+    }).length;
+    if (count)
+        body.appendChild(el("div", "hint",
+            count + " fake notification(s) in the inbox."));
+}
+
+/* Unlike the actions that travel down the link, this one is answered entirely
+   by the web server, so the reply is all there is to hear. The rows themselves
+   arrive in the next snapshot. */
+function debugAct(action, button) {
+    var label = button.textContent;
+    button.disabled = true;
+    button.textContent = "...";
+
+    function done(message, bad) {
+        button.disabled = false;
+        button.textContent = label;
+        if (message) showToast(message, bad);
+    }
+
+    fetch("/api/debug", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: action })
+    }).then(function (r) {
+        if (r.ok) { done(action === "clear" ? "Fakes cleared" : "Added", false); return; }
+        done(r.status === 403
+            ? "This vrcd-web was not started with --debug"
+            : "The vrcd web server refused that", true);
+    }).catch(function () {
+        done("Could not reach the vrcd web server", true);
+    });
+}
+
 function toolSwitcher() {
     var row = el("div", "chips");
-    TOOL_SECTIONS.forEach(function (section) {
+    toolSections().forEach(function (section) {
         var chip = el("button", "chip" + (section.id === view.tool ? " on" : ""),
             section.label);
 
         // A count only once the list it counts has actually arrived: a zero
-        // that means "not asked yet" reads as "nobody".
-        var count = section.id === "friends"
-            ? allFriends().length
-            : (state.moderations.loaded ? moderated(section.id).length : 0);
+        // that means "not asked yet" reads as "nobody". The debug chip counts
+        // nothing: it is buttons, not a list.
+        var count = 0;
+        if (section.id === "friends")
+            count = allFriends().length;
+        else if (section.id !== "debug")
+            count = state.moderations.loaded ? moderated(section.id).length : 0;
         if (count) chip.appendChild(el("span", "n", String(count)));
 
         chip.onclick = function () { showTool(section.id); };

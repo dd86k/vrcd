@@ -16,12 +16,15 @@ vrcd_web [options]
       --image-cache vrcd-server's image cache directory, when it shares this host
       --no-image-cache  Never read that cache, even on one host
   -v, --verbose     Enable verbose logging
+      --debug       Enable the debugging tools (also VRCD_WEB_DEBUG=1)
       --version     Show version and exit
 ```
 
 There is no config file. Everything is on the command line, since the process
 holds no state of its own: sessions live in memory and the roster comes from
-vrcd-server.
+vrcd-server. `--debug` is the one thing that also reads the environment
+(`VRCD_WEB_DEBUG`), because it is the one thing you turn on for a working
+session rather than for a deployment; the flag wins over the variable.
 
 `--secret` authenticates *this process to vrcd-server*. `--web-secret`
 authenticates *browsers to this process*. They are unrelated and should not be
@@ -126,6 +129,7 @@ appears.
 | GET | `/api/user/:user_id` | cookie | One person's full profile, and the fetch that fills it |
 | GET | `/api/badge?url=` | cookie | One proxied badge image, by the URL a profile carries |
 | GET | `/api/image/:file_id` | cookie | One proxied VRChat image, `?v=` version and `?size=` edge |
+| POST | `/api/debug` | cookie | `{"action":"friend_request"}` puts a fake notification in the inbox; `clear` takes them out. 403 without `--debug` |
 | POST | `/api/auth` | cookie | Answers a delegated VRChat sign-in prompt |
 | WS | `/ws/:ticket` | ticket | State snapshots and feed events |
 
@@ -391,6 +395,61 @@ a mis-tap are as far down as the pane goes.
 Protocol v3 is the floor. On an older vrcd-server the lists say so and the
 buttons are replaced by the same line.
 
+### Debugging tools
+
+Off unless `--debug` or `VRCD_WEB_DEBUG=1`. With them on, a DEBUG chip appears
+in the TOOLS tab with a button per fake notification, and pressing one puts a
+row in the inbox.
+
+The inbox is the hardest screen here to develop against. A friend request
+arrives when somebody sends one, a group announcement when a group makes one, a
+queue-ready when a queue clears; none can be summoned, several cannot be
+un-answered, and the rows that draw most unusually are the rarest. The
+alternative to this is waiting on other people or editing state into the page by
+hand.
+
+A fake goes in where a real one would -- into the link's inbox, out in the state
+snapshot, drawn by the same `notifyCard` -- so what appears is what a real one
+looks like, the badge counts it, and answering it presses the same buttons. The
+catalogue covers every shape that renderer can produce: a v1 type from its
+table, one that answers by joining, one that cannot be answered at all, a v2
+type carrying its own buttons, a v2 type carrying none, one VRChat says it will
+clear itself (so no buttons at all), and one of a type nobody has written code
+for.
+
+Senders are invented, not borrowed from the roster. Borrowing looked better --
+a real face, a profile that really fetches -- but it tested the wrong thing:
+a request from somebody already on the roster opens the *friend* pane, and the
+reason a friend request is worth faking is that its sender is a stranger. So
+there are three invented people, cycled, differing in the fields the profile
+pane draws differently (a Visitor with nothing filled in, a Trusted User with
+everything, one in between). `ServerLink.profile()` answers for them, so the
+pane a fake request opens is a full one rather than a spinner and an error.
+Nothing is lost on the face: initials on a hue picked from the name is what the
+page draws for anyone without a picture anyway. Their badges carry no art --
+that lives on VRChat's CDN and cannot be invented -- so the grid draws names,
+which is its fallback for a badge whose art does not arrive either way.
+
+Fakes are marked. A fake row says ACCEPT and DECLINE like any other, and the
+danger runs both ways: accepting a real request believing it is a fake, or
+leaving a real one sitting because it looked like one. So the snapshot tags them
+(`"debug": true`, added on this side -- a fake is this front-end's own idea and
+does not belong in the shared notification shape) and the card wears a FAKE tag
+next to the type plus a stripe down its edge, one for reading and one for not
+having to.
+
+Answering one never reaches VRChat: the ID is prefixed `not_debug_`, and the
+link recognises its own and answers on the spot, writing the outcome into the
+same slot a real `notification_action_result` lands in. That gate is on the
+debug flag, not on the ID alone -- a crafted `not_debug_` ID sent to a normal
+build takes the real path and fails honestly, rather than being reported as a
+success for something that never happened.
+
+None of it is reachable with the flag off: the snapshot carries no `debug` key
+(which is what the page tests to draw the chip), and `POST /api/debug` answers
+403 rather than 404, so a page that somehow asks is told no rather than being
+handed the same answer a mistyped path gets.
+
 ### Profiles
 
 The roster is a thin record: enough to draw a row and say where somebody is.
@@ -605,6 +664,16 @@ directory, and `findServerImageCache()` picks that directory (the flag, else
 vrcd-server's own default, else null for link-only). Both refuse anything that
 could climb out of the directory, since the file ID lands in a path.
 
+### `web/debugging.d`
+The fake-notification catalogue: `DEBUG_FAKES` (what the page draws buttons
+from, carried in the snapshot so adding one is a single edit),
+`buildFakeNotification()` (one `NotificationInfo` per action) and
+`isDebugNotification()` (the `not_debug_` prefix, which is how an answer for one
+is told apart from an answer for a real notification). Plus the invented people
+a fake comes from: `DEBUG_PEOPLE`, `isDebugUser()` and `buildFakeProfile()`,
+which produces the same payload shape vrcd-server sends for a real profile.
+Knows nothing about the link or HTTP.
+
 ### `web/profiles.d`
 `ProfileCache`: the same shape as `ImageCache` -- `lookup()` answers ready,
 pending or failed and tells the caller when it has to start the fetch -- with
@@ -724,6 +793,10 @@ many times their size. `moderation_action` is absent until a mute, block or
 unfriend has been asked for this session, and carries the display name because
 the toast names whoever it was aimed at -- vrcd-server fills that in from its
 roster or from VRChat's answer, so it survives a name this side never had.
+`debug` is there only when the debugging
+tools are on, and carries the fake-notification catalogue (`action`, `label`,
+`hint` each); the page draws its DEBUG chip off the key existing, so a normal
+build costs nothing and shows nothing.
 `server_version` is the protocol
 version from `auth_ok` as a number, zero when unknown. `n_users` and `capacity`
 are -1 when unknown. Friend entries carry no `bio`, `bioLinks` or badges on
@@ -770,7 +843,7 @@ Tabs:
 | Online | Live. Friends grouped by instance, with instance and friend detail |
 | Inbox | Live. Friend requests and invites, oldest first, with a count badge on the rail |
 | Stuff | Live. Gallery, icons, stickers, emoji, prints and inventory items as grids, with uploads, deletes, the profile icon, and equip/unequip/consume |
-| Tools | Live. The whole friends list, plus the mute and block lists, with mute, block, unmute, unblock and unfriend |
+| Tools | Live. The whole friends list, plus the mute and block lists, with mute, block, unmute, unblock and unfriend. A DEBUG chip joins them under `--debug` |
 | Profile | Live. Self profile, the status picker, plus the connection block |
 
 The inbox draws its buttons in the row rather than the detail pane: answering a
