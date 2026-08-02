@@ -34,8 +34,14 @@ import vrcd.notifications;
 
 /// Protocol version reported in `auth_ok`. 1 = base, 2 = content API,
 /// 3 = moderation API, 4 = notification listing (`get_notifications`),
-/// 5 = v2 notifications (every type, per-notification responses).
-private enum int PROTOCOL_VERSION = 5;
+/// 5 = v2 notifications (every type, per-notification responses),
+/// 6 = forced roster refresh (`refresh_friends`).
+private enum int PROTOCOL_VERSION = 6;
+
+/// Shortest gap between two re-seed passes. A pass paginates the whole
+/// friends list, so this is what keeps a reconnect storm -- or somebody
+/// leaning on the front-end's REFRESH -- from spending the rate limit.
+private enum Duration RESEED_DEBOUNCE = dur!"seconds"(60);
 
 /// How many notifications to pull from each listing for `get_notifications`.
 /// A ceiling rather than a page size: an inbox this deep is one nobody has
@@ -276,28 +282,52 @@ class APIServer
     /// The request is coalesced: multiple calls before the worker wakes
     /// result in a single pass. A 60-second debounce against the last
     /// completed re-seed prevents reconnect storms from amplifying load.
-    void requestReseed()
+    ///
+    /// Returns true when a pass was signaled. When it returns false the
+    /// debounce swallowed the request and `retryAfter` holds the seconds
+    /// left on the window, so a user-driven refresh can say why nothing
+    /// happened instead of leaving a button spinning.
+    bool requestReseed(out long retryAfter)
     {
         reseedSignalMutex.lock();
         scope(exit) reseedSignalMutex.unlock();
 
         MonoTime now = MonoTime.currTime;
-        if (firstReseed == false && (now - lastReseedAt) < dur!"seconds"(60))
+        Duration since = now - lastReseedAt;
+        if (firstReseed == false && since < RESEED_DEBOUNCE)
         {
+            retryAfter = (RESEED_DEBOUNCE - since).total!"seconds" + 1;
             logDebugging("requestReseed: ignored (debounced, last=%d ms ago)",
-                (now - lastReseedAt).total!"msecs");
-            return;
+                since.total!"msecs");
+            return false;
         }
 
         reseedRequested = true;
         reseedSignalCond.notifyAll();
         logDebugging("requestReseed: signaled");
+        return true;
+    }
+
+    /// ditto
+    bool requestReseed()
+    {
+        long ignored;
+        return requestReseed(ignored);
     }
 
     /// Broadcast a fresh friends snapshot to all authenticated clients.
-    void broadcastFriendsSnapshot()
+    ///
+    /// `reseeded` marks the snapshot as the product of a full re-seed. A
+    /// front-end that asked for one holds its REFRESH busy until the roster
+    /// comes back, and snapshots are broadcast on every friend movement, so
+    /// without the mark the next friend to change worlds would release the
+    /// button while the pass was still running.
+    void broadcastFriendsSnapshot(bool reseeded = false)
     {
-        string line = friendsTracker.buildFriendsMessage().toString() ~ "\n";
+        JSONValue snapshot = friendsTracker.buildFriendsMessage();
+        if (reseeded)
+            snapshot["reseeded"] = JSONValue(true);
+        string line = snapshot.toString() ~ "\n";
 
         clientsMutex.lock();
         scope(exit) clientsMutex.unlock();
@@ -524,7 +554,7 @@ private:
             try
             {
                 reseedCallback();
-                broadcastFriendsSnapshot();
+                broadcastFriendsSnapshot(true);
             }
             catch (Exception e)
             {
@@ -708,6 +738,14 @@ private class ClientHandler
                         return;
                     }
                     handleGetFriends();
+                    break;
+                case "refresh_friends":
+                    if (authenticated == false)
+                    {
+                        sendError("Not authenticated");
+                        return;
+                    }
+                    handleRefreshFriends();
                     break;
                 case "get_world":
                     if (authenticated == false)
@@ -1086,6 +1124,15 @@ private class ClientHandler
             sent, beforeId, oldestId);
     }
 
+    /// Reply to `get_friends`: the tracker's current roster, with instance
+    /// occupancy topped up first.
+    ///
+    /// This does *not* re-read the roster from VRChat. The tracker is fed by
+    /// the WebSocket and by the periodic re-seed, and that is what a caller
+    /// gets here; only the n_users/capacity counts are refreshed, for the
+    /// handful of locations whose cache entries have lapsed. It is the cheap
+    /// call, used on connect and whenever a front-end wants the snapshot
+    /// again. `refresh_friends` is the one that goes back to VRChat.
     void handleGetFriends()
     {
         enum int INSTANCE_REFRESH_CAP = 20;
@@ -1141,6 +1188,46 @@ private class ClientHandler
         }
 
         sendLine(server.friendsTracker.buildFriendsMessage().toString() ~ "\n");
+    }
+
+    /// Reply to `refresh_friends`: force a re-seed, the same full pull from
+    /// VRChat the server otherwise only does on WebSocket reconnect and on
+    /// its own timer.
+    ///
+    /// This exists because the tracker can drift. It is built from a stream
+    /// of changes, so a frame missed while the pipeline was down leaves a
+    /// friend parked wherever they last were, and nothing in the event flow
+    /// ever corrects it -- the correction only arrives with the next re-seed,
+    /// hours away. A front-end's REFRESH should mean what refreshing a page
+    /// means, so it gets to ask for that pass.
+    ///
+    /// The pass runs on the re-seed worker, not here: it paginates the whole
+    /// friends list under the API mutex, which is far too long to hold a
+    /// client thread. So this answers immediately with whether a pass was
+    /// signaled, and the roster itself arrives afterwards as the worker's
+    /// `friends` broadcast -- to every front-end, since they all want the
+    /// repaired state, not just the one that asked.
+    ///
+    /// A request turned away by the debounce still gets a snapshot, via the
+    /// `get_friends` path, so the caller has something to draw and its
+    /// spinner resolves rather than waiting on a broadcast that is not coming.
+    void handleRefreshFriends()
+    {
+        long retryAfter;
+        bool started = server.requestReseed(retryAfter);
+
+        JSONValue resp = JSONValue([
+            "type": JSONValue("friends_refresh"),
+            "started": JSONValue(started),
+            "retry_after": JSONValue(retryAfter),
+        ]);
+        sendLine(resp.toString() ~ "\n");
+
+        logDebugging("handleRefreshFriends: started=%s retry_after=%d",
+            started, retryAfter);
+
+        if (started == false)
+            handleGetFriends();
     }
 
     void handleGetWorld(JSONValue msg)

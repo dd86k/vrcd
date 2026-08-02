@@ -41,10 +41,10 @@ Authentication uses a shared secret token. If the server's secret is empty, auth
 
 **Success:**
 ```json
-{"type": "auth_ok", "server_version": 5}
+{"type": "auth_ok", "server_version": 6}
 ```
 
-Protocol versions: `1` = base protocol, `2` = adds the content API (files, prints, inventory, images, uploads), `3` = adds the moderation API (moderations, moderate_user, unfriend), `4` = adds the notification listing (`get_notifications`), `5` = adds VRChat's v2 notifications (every type, each carrying its own responses).
+Protocol versions: `1` = base protocol, `2` = adds the content API (files, prints, inventory, images, uploads), `3` = adds the moderation API (moderations, moderate_user, unfriend), `4` = adds the notification listing (`get_notifications`), `5` = adds VRChat's v2 notifications (every type, each carrying its own responses), `6` = adds the forced roster refresh (`refresh_friends`).
 
 **Failure:**
 ```json
@@ -93,11 +93,37 @@ Request a page of older events (with id strictly less than `before_id`). Server 
 
 ### `get_friends`
 
-Request current friends state snapshot.
+Request the current friends state snapshot. Cheap: the server answers from the
+tracker it already holds, topping up instance occupancy for the handful of
+locations whose cached counts have lapsed. It does **not** re-read the roster
+from VRChat -- see `refresh_friends` for that.
 
 ```json
 {"type": "get_friends"}
 ```
+
+### `refresh_friends`
+
+Ask the server to re-read the roster from VRChat, the full paginated pull it
+otherwise performs only on WebSocket reconnect and on its own timer (2 hours by
+default). This is the repair path: the tracker is built from a stream of
+changes, so a frame missed while the pipeline was down leaves a friend parked
+wherever they last were, and no later event corrects it.
+
+```json
+{"type": "refresh_friends"}
+```
+
+The server replies `friends_refresh` immediately with whether a pass started;
+it does not wait for the pass, which runs on the re-seed worker and holds the
+VRChat API mutex for its duration. The roster follows as a broadcast `friends`
+snapshot carrying `"reseeded": true`, sent to **every** connected client.
+
+Passes are debounced 60 seconds apart. A request inside that window is refused
+(`started: false`) and answered with a `friends` snapshot, as if `get_friends`
+had been sent, so a caller always has something to draw.
+
+Requires protocol version 6.
 
 ### `get_world`
 
@@ -407,6 +433,12 @@ Friends state snapshot. Sent after `get_friends` and when friends state changes.
 | `type`      | string | `"friends"`                             |
 | `instances` | array | Online friends grouped by instance       |
 | `offline`   | array | Offline friends                          |
+| `reseeded`  | bool  | Present and `true` only on the snapshot a re-seed produced |
+
+`reseeded` marks a roster that came from a full pull rather than from accumulated
+WebSocket changes. Snapshots are broadcast on every friend movement, so a
+front-end waiting on a `refresh_friends` it asked for needs this to tell its
+answer from the ordinary traffic.
 
 Each instance entry:
 
@@ -440,6 +472,25 @@ size you want. VRChat describes the same picture with up to five fields
 between them in that order, so every front-end shows the same face. It is empty
 for a friend whose only picture is a legacy CloudFront thumbnail, which is not
 a file, and while VRChat is still serving its robot placeholder.
+
+### `friends_refresh`
+
+Acknowledgement of `refresh_friends`, sent immediately. Says only whether a
+re-seed pass was signaled, not how it went.
+
+| Field         | Type | Description                                                    |
+|---------------|------|----------------------------------------------------------------|
+| `type`        | string | `"friends_refresh"`                                          |
+| `started`     | bool | True when a pass was signaled                                   |
+| `retry_after` | long | Seconds until another may be requested; 0 when `started` is true |
+
+When `started` is true, the roster arrives later as a broadcast `friends`
+snapshot with `"reseeded": true` -- there is no completion message, and a pass
+that fails broadcasts nothing at all, so a caller showing progress needs its own
+ceiling on the wait.
+
+When `started` is false the pass was debounced, and a `friends` snapshot follows
+on this connection only.
 
 ### `self`
 
