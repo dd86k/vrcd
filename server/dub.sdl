@@ -18,7 +18,11 @@ subConfiguration "ddcurl" "static"
 // The notification shape is decoded identically here and in both front-ends:
 // the server normalizes VRChat's REST listing through this module, the
 // front-ends keep the list current from WebSocket events with the same code.
-sourceFiles "../common/source/vrcd/notifications.d"
+//
+// badgeurl.d is the rule for what may be fetched as badge art. Badge art is
+// the one request where a client names a URL rather than an object, so both
+// sides check it: if they disagreed, the looser one would be the real rule.
+sourceFiles "../common/source/vrcd/notifications.d" "../common/source/vrcd/badgeurl.d"
 
 buildType "static-release" {
 	buildOptions "releaseMode" "optimize" "inline"

@@ -19,6 +19,7 @@ import ddlogger;
 import ddcurl;
 
 import server.authdelegate;
+import server.badgeimage;
 import server.content;
 import server.events;
 import server.friends;
@@ -27,6 +28,7 @@ import server.moderations;
 import server.ratelimit;
 import server.database;
 import server.stream;
+import server.userprofile;
 import server.worldcache;
 import server.config : DEFAULT_RESEED_INTERVAL;
 import server.vrchat.auth : postJSON, putJSON;
@@ -35,8 +37,9 @@ import vrcd.notifications;
 /// Protocol version reported in `auth_ok`. 1 = base, 2 = content API,
 /// 3 = moderation API, 4 = notification listing (`get_notifications`),
 /// 5 = v2 notifications (every type, per-notification responses),
-/// 6 = forced roster refresh (`refresh_friends`).
-private enum int PROTOCOL_VERSION = 6;
+/// 6 = forced roster refresh (`refresh_friends`),
+/// 7 = full user profiles (`get_user`).
+private enum int PROTOCOL_VERSION = 7;
 
 /// Shortest gap between two re-seed passes. A pass paginates the whole
 /// friends list, so this is what keeps a reconnect storm -- or somebody
@@ -75,6 +78,8 @@ class APIServer
     private ModerationsTracker moderationsTracker;
     private WorldCache worldCache;
     private InstanceCache instanceCache;
+    private UserProfileCache userProfiles;
+    private BadgeImageService badgeImages;
     private HTTPClient httpClient;
     private ContentService contentService;
     private Mutex apiMutex; // Shared VRChat API serializer, injected via setAPIMutex.
@@ -106,6 +111,8 @@ class APIServer
         this.clientsMutex = new Mutex();
         this.friendsTracker = new FriendsTracker();
         this.moderationsTracker = new ModerationsTracker();
+        this.userProfiles = new UserProfileCache();
+        this.badgeImages = new BadgeImageService();
         this.reseedSignalMutex = new Mutex();
         this.reseedSignalCond = new Condition(this.reseedSignalMutex);
         this.reseedInterval = reseedInterval;
@@ -755,6 +762,14 @@ private class ClientHandler
                     }
                     handleGetWorld(msg);
                     break;
+                case "get_user":
+                    if (authenticated == false)
+                    {
+                        sendError("Not authenticated");
+                        return;
+                    }
+                    handleGetUser(msg);
+                    break;
                 case "get_moderations":
                     if (authenticated == false)
                     {
@@ -886,6 +901,14 @@ private class ClientHandler
                         return;
                     }
                     handleGetImage(msg);
+                    break;
+                case "get_badge_image":
+                    if (authenticated == false)
+                    {
+                        sendError("Not authenticated");
+                        return;
+                    }
+                    handleGetBadgeImage(msg);
                     break;
                 case "delete_file":
                     if (authenticated == false)
@@ -1253,6 +1276,111 @@ private class ClientHandler
             "world_name": JSONValue(worldName),
         ]);
         sendLine(resp.toString() ~ "\n");
+    }
+
+    /// Reply to `get_user`: one person's full profile -- bio, links, badges,
+    /// trust rank, when they joined.
+    ///
+    /// None of this is in the roster. It changes on a different timescale than
+    /// where somebody is standing, so carrying it in a broadcast sent on every
+    /// friend movement would be paying for it hundreds of times over. It is
+    /// asked for when a profile is opened instead.
+    ///
+    /// And it is the only way to see somebody who is not a friend at all,
+    /// which is the case this exists for: a friend request arrives as a name
+    /// and an ID, and there is nothing else to decide on.
+    ///
+    /// Failures are reported inside the `user` message rather than as an
+    /// `error`, so a front-end's loading state resolves either way -- and so a
+    /// front-end can tell which request failed, which a bare `error` cannot
+    /// say.
+    void handleGetUser(JSONValue msg)
+    {
+        string userId;
+        if (const(JSONValue)* v = "user_id" in msg)
+            userId = v.str;
+
+        void sendUser(JSONValue profile, string error)
+        {
+            JSONValue result = JSONValue([
+                "type": JSONValue("user"),
+                "user_id": JSONValue(userId),
+                "success": JSONValue(error.length == 0),
+            ]);
+            if (error.length > 0)
+                result["error"] = JSONValue(error);
+            else
+                result["user"] = profile;
+            sendLine(result.toString() ~ "\n");
+        }
+
+        // A group notification puts a group ID where a user ID goes, so this
+        // is a shape check as much as a path guard.
+        if (isUserId(userId) == false)
+        {
+            sendUser(JSONValue.init, "Not a user ID");
+            return;
+        }
+
+        JSONValue cached;
+        string cachedError;
+        if (server.userProfiles.lookup(userId, cached, cachedError))
+        {
+            sendUser(cached, cachedError);
+            return;
+        }
+
+        if (server.httpClient is null || server.apiMutex is null)
+        {
+            sendUser(JSONValue.init, "Server HTTP client not configured");
+            return;
+        }
+
+        server.apiMutex.lock();
+        scope(exit) server.apiMutex.unlock();
+
+        // Not remembered as a failure: being rate limited says nothing about
+        // this user, and the block lifts on its own.
+        if (server.rateLimiter && server.rateLimiter.isBlocked())
+        {
+            sendUser(JSONValue.init, "Rate limited by VRChat, try again later");
+            return;
+        }
+
+        try
+        {
+            HTTPResponse resp = server.httpClient.get("/users/" ~ userId);
+            logDebugging("handleGetUser: VRC GET /users/%s -> HTTP %d",
+                userId, resp.code);
+            if (server.rateLimiter)
+            {
+                server.rateLimiter.update(resp);
+                server.broadcastStatus();
+            }
+
+            if (resp.code < 200 || resp.code >= 300)
+            {
+                string error = "HTTP " ~ resp.code.to!string;
+                server.userProfiles.storeFailure(userId, error);
+                sendUser(JSONValue.init, error);
+                return;
+            }
+
+            JSONValue user = parseJSON(resp.text);
+            if (user.type != JSONType.object)
+            {
+                sendUser(JSONValue.init, "Unexpected user response");
+                return;
+            }
+
+            JSONValue profile = buildUserProfile(user);
+            server.userProfiles.store(userId, profile);
+            sendUser(profile, null);
+        }
+        catch (Exception e)
+        {
+            sendUser(JSONValue.init, e.msg);
+        }
     }
 
     /// Reply to `get_notifications`: fetch the pending notification list from
@@ -2144,6 +2272,9 @@ private class ClientHandler
             if (success)
             {
                 server.friendsTracker.removeFriend(userId);
+                // Their profile says whether they are a friend, and it just
+                // stopped being true.
+                server.userProfiles.forget(userId);
                 sendResult(true, displayName, null);
                 server.broadcastFriendsSnapshot();
             }
@@ -2337,6 +2468,50 @@ private class ClientHandler
         try
         {
             ImageResult image = requireContent().getImage(fileId, fileVersion, size);
+            resp["success"] = JSONValue(image.success);
+            if (image.success)
+            {
+                resp["mime_type"] = JSONValue(image.mimeType);
+                resp["data_base64"] = JSONValue(cast(string) Base64.encode(image.data));
+            }
+            else
+                resp["error"] = JSONValue(image.error);
+        }
+        catch (Exception e)
+        {
+            resp["success"] = JSONValue(false);
+            resp["error"] = JSONValue(e.msg);
+        }
+        sendLine(resp.toString() ~ "\n");
+    }
+
+    /// Reply to `get_badge_image`: badge art, fetched off VRChat's asset CDN.
+    ///
+    /// Badges are the one picture in a profile that is not a VRChat file, so
+    /// `get_image` has no file ID to be handed and the request names a URL
+    /// instead. That URL is checked against one host and one path prefix
+    /// before anything is fetched -- see `server.badgeimage`.
+    ///
+    /// It goes through the server rather than the browser for the reason the
+    /// front-ends make no external requests at all: a page that phoned out
+    /// would break behind a tunnel, and would tell VRChat's CDN who is looking
+    /// at whom.
+    void handleGetBadgeImage(JSONValue msg)
+    {
+        import std.base64 : Base64;
+
+        string url;
+        if (const(JSONValue)* v = "url" in msg)
+            if (v.type == JSONType.string)
+                url = v.str;
+
+        JSONValue resp = JSONValue([
+            "type": JSONValue("badge_image"),
+            "url": JSONValue(url),
+        ]);
+        try
+        {
+            BadgeImageResult image = server.badgeImages.fetch(url);
             resp["success"] = JSONValue(image.success);
             if (image.success)
             {

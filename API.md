@@ -44,7 +44,14 @@ Authentication uses a shared secret token. If the server's secret is empty, auth
 {"type": "auth_ok", "server_version": 6}
 ```
 
-Protocol versions: `1` = base protocol, `2` = adds the content API (files, prints, inventory, images, uploads), `3` = adds the moderation API (moderations, moderate_user, unfriend), `4` = adds the notification listing (`get_notifications`), `5` = adds VRChat's v2 notifications (every type, each carrying its own responses), `6` = adds the forced roster refresh (`refresh_friends`).
+Protocol versions:
+- `1` = base protocol
+- `2` = adds the content API (files, prints, inventory, images, uploads)
+- `3` = adds the moderation API (moderations, moderate_user, unfriend)
+- `4` = adds the notification listing (`get_notifications`)
+- `5` = adds VRChat's v2 notifications (every type, each carrying its own responses)
+- `6` = adds the forced roster refresh (`refresh_friends`)
+- `7` = adds full user profiles (`get_user`) and badge art (`get_badge_image`).
 
 **Failure:**
 ```json
@@ -133,6 +140,25 @@ Request world name resolution.
 |------------|--------|------------------------------|
 | `type`     | string | `"get_world"`                |
 | `world_id` | string | World ID (e.g. `"wrld_..."`) |
+
+### `get_user`
+
+Request one user's full profile: bio, links, badges, trust rank, languages, the day they joined. Server replies with `user`. Requires `server_version >= 7`.
+
+None of this is in the `friends` snapshot. It changes on a different timescale than where somebody is standing, so carrying it in a broadcast sent on every friend movement would pay for it hundreds of times over; it is asked for when a profile is opened instead.
+
+It is also the only way to see somebody who is **not** a friend, which is the case it exists for: a friend request arrives as a name and an ID, and there is nothing else to decide on.
+
+| Field     | Type   | Description                |
+|-----------|--------|----------------------------|
+| `type`    | string | `"get_user"`               |
+| `user_id` | string | Target user ID (`usr_...`) |
+
+```json
+{"type": "get_user", "user_id": "usr_8b5e4d3c-..."}
+```
+
+The server answers from a 5-minute cache when it can, and a failure is remembered for a minute, so several front-ends looking at the same person cost one `GET /users/{id}`. Anything that is not a user ID (a `grp_...` from a group notification, most of all) is refused without a call. Unfriending someone drops their cached profile, since it carries `isFriend`.
 
 ### `get_moderations`
 
@@ -256,6 +282,25 @@ Request image bytes through the server proxy. The server serves from its disk ca
 | `file_id` | string | File ID (`file_...`)                                           |
 | `version` | int    | Optional. File version (default 1)                             |
 | `size`    | int    | Optional. `0` = original file (default); `128`, `256`, `512`, or `1024` = thumbnail edge |
+
+### `get_badge_image`
+
+Request badge art through the server proxy. Replies with `badge_image`. Requires `server_version >= 7`.
+
+Badges are the one picture in a profile that is not a VRChat file: they sit on a public asset CDN, so there is no file ID for `get_image` to be handed and the request names a URL. A front-end could load that URL itself in six lines; none of them do, because they make no external requests on purpose -- one that phoned out would break behind a tunnel, and would tell VRChat's CDN who is looking at whom.
+
+| Field  | Type   | Description                           |
+|--------|--------|---------------------------------------|
+| `type` | string | `"get_badge_image"`                   |
+| `url`  | string | `imageUrl` from a badge in a `user` reply |
+
+```json
+{"type": "get_badge_image", "url": "https://assets.vrchat.com/badges/fa/bdgai_....png"}
+```
+
+Which makes this the one request where a client names *what* to fetch rather than *which object*, so the URL is pinned hard: HTTPS, host exactly `assets.vrchat.com`, path under `/badges/`, and what is left checked character by character -- no `..`, no userinfo, no query, no fragment, nothing that is not a path character. Anything else is refused without a fetch. The rule lives in `common/source/vrcd/badgeurl.d` because both sides check it; if they disagreed, the looser one would be the real rule.
+
+The CDN is not the VRChat API, so this touches neither the VRChat session, its cookies, its rate limiter, nor the API mutex: a badge fetch and a friend-list refresh have nothing to contend over. Results are cached in memory (8 MB, oldest evicted) and failures for 5 minutes; downloads are spaced 100 ms apart.
 
 ### `delete_file`
 
@@ -610,6 +655,47 @@ Response to `get_world`.
 | `world_id`   | string | World ID             |
 | `world_name` | string | Resolved world name  |
 
+### `user`
+
+Response to `get_user`. A failure is reported here rather than as an `error`, so a front-end's loading state resolves either way and it can tell *which* request failed.
+
+| Field     | Type    | Description                              |
+|-----------|---------|------------------------------------------|
+| `type`    | string  | `"user"`                                 |
+| `user_id` | string  | The user that was asked for              |
+| `success` | bool    | Whether the profile was fetched          |
+| `user`    | object  | The profile, on success                  |
+| `error`   | string  | Why not, on failure                      |
+
+The profile flattens VRChat's user object: `last_platform` becomes `platform`, `date_joined` becomes `dateJoined`, and the tag soup is split into a trust rank, a language list and the moderator/flagged marks, so no front-end has to know the tag vocabulary. Every field is optional on the way in -- VRChat trims a stranger's record thinner than a friend's -- and a missing one arrives empty rather than absent.
+
+```json
+{
+  "type": "user", "user_id": "usr_...", "success": true,
+  "user": {
+    "id": "usr_...", "displayName": "Somebody",
+    "status": "join me", "statusDescription": "come say hi",
+    "bio": "line one\nline two", "bioLinks": ["https://..."],
+    "pronouns": "they/them", "note": "", "state": "online",
+    "location": "wrld_...:12345", "platform": "standalonewindows",
+    "dateJoined": "2019-04-01", "lastActivity": "2026-08-02T12:00:00.000Z",
+    "lastLogin": "2026-08-02T09:00:00.000Z",
+    "isFriend": false, "friendRequestStatus": "incoming",
+    "ageVerified": true, "trustRank": "Known User",
+    "languages": ["eng", "jpn"], "moderator": false, "troll": false,
+    "badges": [{
+      "id": "bdg_...", "name": "Supporter", "description": "Thanks",
+      "imageUrl": "https://assets.vrchat.com/badges/...png", "showcased": true
+    }],
+    "imageFileId": "file_...", "imageVersion": 3
+  }
+}
+```
+
+`trustRank` is one of `"Visitor"`, `"New User"`, `"User"`, `"Known User"`, `"Trusted User"` -- the names the game shows, which are off by one from the tags they come from (`system_trust_trusted` is "Known User"). `imageFileId`/`imageVersion` are picked the same way the roster picks a friend's face, so a profile does not change whose picture it shows.
+
+Badge art is the one picture here that is not a VRChat file: `imageUrl` points at a public CDN, so there is no file ID for `get_image` to be handed. It is fetched with `get_badge_image` instead.
+
 ### `files`
 
 Reply to `get_files`: one page of trimmed file entries.
@@ -707,6 +793,21 @@ Reply to `get_image`. Echoes the request identity so the client can key its cach
 | `mime_type`   | string | Sniffed MIME type (success only)                |
 | `data_base64` | string | Image bytes, base64-encoded (success only)      |
 | `error`       | string | Error description (present only on failure)     |
+
+### `badge_image`
+
+Reply to `get_badge_image`. Echoes the URL so the client can key its cache; a badge URL names one picture forever, the way a file and version do.
+
+| Field         | Type   | Description                                 |
+|---------------|--------|---------------------------------------------|
+| `type`        | string | `"badge_image"`                             |
+| `url`         | string | Requested URL                               |
+| `success`     | bool   | Whether the bytes are included              |
+| `mime_type`   | string | Sniffed MIME type (success only)            |
+| `data_base64` | string | Image bytes, base64-encoded (success only)  |
+| `error`       | string | Error description (present only on failure) |
+
+A response the server cannot sniff as an image is a failure (`"Not an image"`), since a CDN answering with anything else is an error page, not a badge.
 
 ### Action results
 
