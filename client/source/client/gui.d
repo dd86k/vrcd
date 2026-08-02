@@ -11,6 +11,7 @@ import std.json;
 import std.string : fromStringz, indexOf;
 
 import core.thread;
+import core.time : Duration, MonoTime, dur;
 
 import core.stdc.string : memcpy, strlen;
 
@@ -41,6 +42,12 @@ private __gshared uint networkEventType;
 
 /// Timer callback ID.
 private SDL_TimerID timerID;
+
+/// How long a forced friends refresh may run before the button is released.
+/// A re-seed pass walks the whole friends list a page at a time and waits on
+/// the rate limiter between calls, so a large roster is genuinely slow; this
+/// is a ceiling on the wait, not an estimate of it.
+private enum Duration FRIENDS_REFRESH_DEADLINE = dur!"seconds"(120);
 
 /// Application state (main thread only).
 AppState appState;
@@ -629,7 +636,35 @@ private void eventLoop(mu_Context* uictx)
         {
             appState.refreshFriendsRequested = false;
             if (conn && appState.connected)
-                conn.requestFriends();
+            {
+                appState.friendsRefreshRetryAfter = 0;
+                // A forced refresh makes the server re-read the roster from
+                // VRChat, which is what fixes a tracker that drifted while
+                // the pipeline was down. Older servers have no such message
+                // and would answer an unknown type with an error, so they
+                // only get asked for the snapshot they already hold.
+                if (conn.serverVersion >= PROTOCOL_REFRESH)
+                {
+                    conn.refreshFriends();
+                    appState.friendsRefreshing = true;
+                    appState.friendsRefreshDeadline =
+                        MonoTime.currTime + FRIENDS_REFRESH_DEADLINE;
+                }
+                else
+                    conn.requestFriends();
+            }
+        }
+
+        // Release the refreshing label if the pass never came back. The
+        // server answers a started refresh with a broadcast snapshot, but a
+        // pass that throws broadcasts nothing, and a button stuck reading
+        // "Refreshing..." is worse than one that just lets you try again.
+        if (appState.friendsRefreshing &&
+            MonoTime.currTime > appState.friendsRefreshDeadline)
+        {
+            logWarn("Friends refresh: no snapshot within deadline");
+            appState.friendsRefreshing = false;
+            requestRepaint();
         }
 
         // Handle moderations (mute/block lists) refresh request.
@@ -1189,6 +1224,22 @@ private void drainNetworkMessages()
 
             case "friends":
                 applyFriendsSnapshot(msg);
+                break;
+
+            case "friends_refresh":
+                // Whether the server actually started a pass. When it did,
+                // stay busy until its snapshot lands; when it did not, the
+                // roster it sent alongside is all there is, so release the
+                // button now and let the UI report the wait.
+                bool started;
+                if (const(JSONValue)* v = "started" in msg)
+                    started = v.boolean;
+                if (started == false)
+                {
+                    appState.friendsRefreshing = false;
+                    if (const(JSONValue)* v = "retry_after" in msg)
+                        appState.friendsRefreshRetryAfter = v.integer;
+                }
                 break;
 
             case "self":
@@ -1878,6 +1929,14 @@ private void applyFriendsSnapshot(JSONValue msg)
     appState.selectedFriend = null; // Reset selection on refresh.
     // Rows may have moved under an armed confirmation; disarm.
     appState.armedConfirm = ArmedConfirm.init;
+    // Only a re-seed's snapshot answers a forced refresh. Snapshots also
+    // arrive on every friend movement, and one of those landing mid-pass
+    // would release the button before the roster it is waiting on exists.
+    // Any re-seed will do, including one another front-end asked for: the
+    // broadcast goes to everyone and carries the same repaired roster.
+    if (const(JSONValue)* v = "reseeded" in msg)
+        if (v.boolean)
+            appState.friendsRefreshing = false;
 }
 
 /// Apply a `moderations` snapshot: mute and block lists.

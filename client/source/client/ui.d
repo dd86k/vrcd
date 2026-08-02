@@ -1208,7 +1208,7 @@ private mu_Rect selfStatusCircleRect;
 /// Clicking the circle opens a popup with the four VRChat statuses.
 private void drawSelfStatusSection(mu_Context* ctx, AppState* state)
 {
-    enum int refreshW = 80;
+    enum int refreshW = 110; // fits "Refreshing..."
     enum int cancelW  = 40;
     enum int circleW  = 40;
     enum int setW     = 80;
@@ -1233,11 +1233,29 @@ private void drawSelfStatusSection(mu_Context* ctx, AppState* state)
         [refreshW, -(cancelW + circleW + setW + 16), cancelW, circleW, setW];
     mu_layout_row(ctx, 5, cols.ptr, 40);
 
-    // Refresh: asks the server to pull fresh friend state from VRChat.
-    if (mu_button(ctx, "Refresh"))
+    // Refresh: asks the server to re-read the roster from VRChat, the way
+    // reloading a page does, rather than waiting on the server's own timer.
+    // Inert while a pass is running, since a second one would only be
+    // turned away by the server's debounce.
+    if (mu_button(ctx, state.friendsRefreshing ? "Refreshing..." : "Refresh")
+        && state.friendsRefreshing == false)
     {
         state.refreshFriendsRequested = true;
-        setStatusFlash(state, "  Refreshing friends...");
+        setStatusFlash(state, state.connected
+            ? "  Refreshing friends..." : "  Not connected");
+    }
+
+    // The server turned a refresh away because it re-seeded moments ago.
+    // Say so once -- the roster sent with the refusal is already applied, so
+    // there is nothing else to show for the press -- then clear it so the
+    // flash doesn't renew itself every frame.
+    if (state.friendsRefreshRetryAfter > 0)
+    {
+        static char[64] retryBuf;
+        setStatusFlash(state, cast(string) sformat(retryBuf,
+            "  Refreshed just now, again in %ds", state.friendsRefreshRetryAfter),
+            2500);
+        state.friendsRefreshRetryAfter = 0;
     }
 
     // Textbox. mu_textbox shows what's in the buffer, so an empty buffer

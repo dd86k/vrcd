@@ -256,6 +256,16 @@ struct AppState
     bool reconnectRequested;
     bool refreshFriendsRequested;
 
+    // A forced refresh is a round trip through VRChat's REST API on the
+    // server side, so it takes seconds rather than a frame. These carry the
+    // wait: `friendsRefreshing` labels the button, and the deadline releases
+    // it if the pass dies without ever broadcasting a snapshot.
+    bool friendsRefreshing;
+    MonoTime friendsRefreshDeadline;
+    // Seconds left on the server's re-seed debounce, from a refresh it turned
+    // away. Nonzero means the UI owes the user one flash; it clears it.
+    long friendsRefreshRetryAfter;
+
     // Font settings
     char[256] settingsFontPath = '\0';
     float settingsFontSize = 16.0f;

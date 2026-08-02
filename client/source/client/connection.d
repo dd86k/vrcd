@@ -27,6 +27,11 @@ enum long PROTOCOL_MODERATION = 3;
 /// (get_notifications).
 enum long PROTOCOL_NOTIFICATIONS = 4;
 
+/// Minimum server protocol version for the forced roster refresh
+/// (refresh_friends). Below this, REFRESH can only ask for the snapshot
+/// the server already has.
+enum long PROTOCOL_REFRESH = 6;
+
 /// TCP connection to the vrcd server.
 /// Handles auth, catch-up, and live event streaming via JSON-L.
 /// Supports optional TLS encryption when compiled with the openssl dependency.
@@ -198,6 +203,18 @@ class ServerConnection
         logDebugging("requestFriends");
         sendMessage(JSONValue([
             "type": JSONValue("get_friends"),
+        ]));
+    }
+
+    /// Ask the server to re-read the roster from VRChat. Server replies with
+    /// `friends_refresh` saying whether a pass started; the roster itself
+    /// follows as a broadcast `friends` snapshot once the pass completes.
+    /// Requires PROTOCOL_REFRESH.
+    void refreshFriends()
+    {
+        logDebugging("refreshFriends");
+        sendMessage(JSONValue([
+            "type": JSONValue("refresh_friends"),
         ]));
     }
 
