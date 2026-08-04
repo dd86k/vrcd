@@ -2456,7 +2456,10 @@ function renderProfile(body, person, opts) {
         body.appendChild(el("div", "hint", why || "Loading profile..."));
     }
 
-    if (p.badges && p.badges.length) body.appendChild(badgeStrip(p.badges));
+    if (p.badges && p.badges.length) {
+        body.appendChild(el("div", "section", "Badges")); // padding
+        body.appendChild(badgeStrip(p.badges));
+    }
 
     // Its own block rather than a row in the list: a bio runs to 512
     // characters over as many lines as somebody felt like, and a definition
