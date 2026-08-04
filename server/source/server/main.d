@@ -182,6 +182,9 @@ void cmdRun(ref Config config)
     // World name cache for resolving world IDs via VRChat API.
     WorldCache worldCache = new WorldCache(client, rateLimiter);
     worldCache.setAPIMutex(vrcApiMutex);
+    // Backed by cache_world, so a restart does not re-fetch worlds this server
+    // already knows the names of.
+    worldCache.setDatabase(store);
 
     // Instance occupancy cache for "n_users/capacity" in the ONLINE tab.
     InstanceCache instanceCache = new InstanceCache(client, rateLimiter);

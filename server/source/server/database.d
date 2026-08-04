@@ -25,7 +25,11 @@ import server.events;
 //                      Used to detect gaps in the event stream.
 // - server_state     : Key-value store for persistent server state.
 // - cache_world      : VRChat world metadata cache (name, author, thumbnail, etc.).
-// - cache_avatar     : VRChat avatar metadata cache.
+//                      Written through by server.worldcache, which keeps a
+//                      memory tier in front of it. This is the tier that
+//                      survives a restart.
+// - cache_avatar     : VRChat avatar metadata cache. Schema only for now:
+//                      nothing writes to it yet.
 
 /// Server statistics returned by Database.getStats().
 struct DatabaseStats
@@ -34,6 +38,31 @@ struct DatabaseStats
     long worldCacheCount;
     long avatarCacheCount;
     long dbSizeBytes;
+}
+
+/// One row of `cache_world`: VRChat's world metadata as it was last fetched.
+///
+/// `addedAt` is when the row was written, and is what decides whether it is
+/// still worth believing: VRChat sends no events for a world being edited or
+/// deleted, so age is the only thing this side has to go on.
+struct CachedWorld
+{
+    /// False when the world is not in the table. The rest is then unset.
+    bool found;
+    string id;
+    string name;
+    string authorId;
+    string authorName;
+    string createdAt;
+    string description;
+    string imageUrl;
+    string releaseStatus;
+    string thumbnailImageUrl;
+    string updatedAt;
+    /// VRChat's own version counter for the world, not a schema version.
+    long worldVersion;
+    /// When this row was written, as a Unix timestamp. Zero when not found.
+    long addedAt;
 }
 
 // Returns "raw" or "synthetic".
@@ -205,6 +234,86 @@ class Database
         return stats;
     }
 
+    /// Read a world out of the metadata cache. `found` is false when the world
+    /// has never been fetched; freshness is the caller's to judge, since a
+    /// stale name still beats showing a raw ID when VRChat cannot be reached.
+    CachedWorld getCachedWorld(string worldId)
+    {
+        CachedWorld world;
+        if (worldId.length == 0)
+            return world;
+
+        // `added_at` is written by SQLite's own datetime('now') and read back
+        // as a Unix timestamp the same way, so the two never have to agree on
+        // a text format across the language boundary.
+        foreach (row; db.query(
+            "SELECT id, CAST(strftime('%s', added_at) AS INTEGER), " ~
+            "author_id, author_name, created_at, description, " ~
+            "image_url, name, release_status, thumbnail_image_url, updated_at, version " ~
+            "FROM cache_world WHERE id = ?",
+            worldId,
+        ))
+        {
+            world.found             = true;
+            world.id                = row[0];
+            string added = row[1];
+            if (added.length > 0)
+                world.addedAt = added.to!long;
+            world.authorId          = row[2];
+            world.authorName        = row[3];
+            world.createdAt         = row[4];
+            world.description       = row[5];
+            world.imageUrl          = row[6];
+            world.name              = row[7];
+            world.releaseStatus     = row[8];
+            world.thumbnailImageUrl = row[9];
+            world.updatedAt         = row[10];
+            string ver = row[11];
+            if (ver.length > 0)
+                world.worldVersion = ver.to!long;
+            logTrace("getCachedWorld: hit %s -> %s", worldId, world.name);
+            return world;
+        }
+
+        logTrace("getCachedWorld: miss %s", worldId);
+        return world;
+    }
+
+    /// Write (or refresh) a world in the metadata cache. `added_at` is set to
+    /// now, since that is what the row's freshness is measured from.
+    void cacheWorld(ref CachedWorld world)
+    {
+        if (world.id.length == 0)
+            return;
+
+        foreach (_; db.query(
+            "INSERT INTO cache_world (id, added_at, author_id, author_name, created_at, " ~
+            "description, image_url, name, release_status, thumbnail_image_url, " ~
+            "updated_at, version) " ~
+            "VALUES (?, datetime('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " ~
+            "ON CONFLICT(id) DO UPDATE SET " ~
+            "added_at = excluded.added_at, author_id = excluded.author_id, " ~
+            "author_name = excluded.author_name, created_at = excluded.created_at, " ~
+            "description = excluded.description, image_url = excluded.image_url, " ~
+            "name = excluded.name, release_status = excluded.release_status, " ~
+            "thumbnail_image_url = excluded.thumbnail_image_url, " ~
+            "updated_at = excluded.updated_at, version = excluded.version",
+            world.id,
+            world.authorId,
+            world.authorName,
+            world.createdAt,
+            world.description,
+            world.imageUrl,
+            world.name,
+            world.releaseStatus,
+            world.thumbnailImageUrl,
+            world.updatedAt,
+            world.worldVersion.to!string,
+        )) {}
+
+        logDebugging("cacheWorld: stored %s -> %s", world.id, world.name);
+    }
+
     /// Read a value from the persistent key-value store.
     /// Returns null if the key is missing.
     string getState(string key)
@@ -357,4 +466,73 @@ private:
 private string toISO(SysTime t)
 {
     return t.toUTC().toISOExtString();
+}
+
+// The world cache round-trip: the columns, the upsert, and `added_at` coming
+// back as the Unix timestamp the TTL is measured against.
+unittest
+{
+    import std.file : remove, tempDir;
+    import std.path : buildPath;
+    import std.datetime.systime : Clock;
+
+    string path = buildPath(tempDir(), "vrcd-cacheworld-test.db");
+
+    // WAL leaves two companions beside the file, and a leftover from a failed
+    // run would make the next one start with a world already cached.
+    static void scrub(string file)
+    {
+        import std.file : exists;
+
+        foreach (string suffix; [ "", "-wal", "-shm" ])
+            if (exists(file ~ suffix))
+                remove(file ~ suffix);
+    }
+
+    scrub(path);
+    scope(exit) scrub(path);
+
+    Database db = new Database(path);
+    scope(exit) db.close();
+
+    assert(db.getCachedWorld("wrld_nope").found == false);
+
+    CachedWorld world;
+    world.id                = "wrld_test";
+    world.name              = "The Black Cat";
+    world.authorId          = "usr_test";
+    world.authorName        = "somebody";
+    world.createdAt         = "2020-01-01T00:00:00.000Z";
+    world.description       = "a bar";
+    world.imageUrl          = "https://example.invalid/i.png";
+    world.releaseStatus     = "public";
+    world.thumbnailImageUrl = "https://example.invalid/t.png";
+    world.updatedAt         = "2024-01-01T00:00:00.000Z";
+    world.worldVersion      = 42;
+    db.cacheWorld(world);
+
+    CachedWorld read = db.getCachedWorld("wrld_test");
+    assert(read.found);
+    assert(read.id                == world.id);
+    assert(read.name              == world.name);
+    assert(read.authorId          == world.authorId);
+    assert(read.authorName        == world.authorName);
+    assert(read.createdAt         == world.createdAt);
+    assert(read.description       == world.description);
+    assert(read.imageUrl          == world.imageUrl);
+    assert(read.releaseStatus     == world.releaseStatus);
+    assert(read.thumbnailImageUrl == world.thumbnailImageUrl);
+    assert(read.updatedAt         == world.updatedAt);
+    assert(read.worldVersion      == 42);
+
+    // datetime('now') is UTC and so is this, within the second or two the
+    // insert took.
+    long now = Clock.currTime.toUnixTime!long();
+    assert(read.addedAt > now - 60 && read.addedAt <= now + 60);
+
+    // A re-fetch replaces the row rather than adding one.
+    world.name = "The Black Cat (renamed)";
+    db.cacheWorld(world);
+    assert(db.getCachedWorld("wrld_test").name == world.name);
+    assert(db.getStats().worldCacheCount == 1);
 }
