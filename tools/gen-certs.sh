@@ -68,6 +68,11 @@ command -v openssl >/dev/null 2>&1 || {
 [ -n "$HOSTS" ]   || HOSTS="vrcd-server localhost 127.0.0.1 ::1"
 [ -n "$CLIENTS" ] || CLIENTS="client"
 
+# Repeated options accumulate a leading space; drop it so the values read
+# properly where they are echoed back.
+HOSTS=${HOSTS# }
+CLIENTS=${CLIENTS# }
+
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT INT TERM
 
@@ -157,7 +162,7 @@ else
     openssl x509 -req -in "$TMPDIR/server.csr" -sha256 -days "$DAYS" \
         -CA "$CA_CRT" -CAkey "$CA_KEY" -CAcreateserial \
         -extfile "$TMPDIR/server.ext" -out "$SRV_CRT" 2>/dev/null
-    echo "server: $SRV_CRT (SAN:$HOSTS)"
+    echo "server: $SRV_CRT (SAN: $HOSTS)"
 fi
 
 # --- clients --------------------------------------------------------
@@ -215,13 +220,14 @@ server.conf:
 
 Client settings: enable TLS, then
 
+    CA cert:            $ABS/ca.crt
     Client certificate: $ABS/$first.crt
     Client key:         $ABS/$first.key
 
-The client trusts the server through the system store, which does not know
-this CA, so leave "Skip certificate verify" enabled -- or install ca.crt as
-a trusted root on the client machine and connect using one of the names in
-the server certificate's SAN.
+Copy ca.crt and that client pair to the client machine. Set "CA cert" rather
+than installing ca.crt system-wide: the system store would trust this CA for
+every program on that machine, not just vrcd. Connect using one of the names
+in the server certificate's SAN ($HOSTS), since the name is checked too.
 
 Keep ca.key on the machine that issues certificates; the server and clients
 never need it. Give each client its own certificate ($0 -c NAME), so one can

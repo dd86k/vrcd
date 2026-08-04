@@ -115,7 +115,7 @@ openssl req -x509 -newkey rsa:4096 -keyout server.key -out server.crt \
 
 **2. Configure the server** set `tls_cert` / `tls_key` in `server.conf`, or pass `--tls-cert` / `--tls-key` on the CLI.
 
-**3. Configure the client** enable "TLS" in Settings. For a self-signed cert, also check "Skip certificate verify".
+**3. Configure the client** enable "TLS" in Settings. A self-signed certificate is not in any trust store, so either set "CA cert" to a copy of the certificate itself, or check "Skip certificate verify".
 
 #### Separate TLS port
 
@@ -171,7 +171,12 @@ tls_ca   = /srv/vrcd/ca.crt
 tls_verify_client = true
 ```
 
-**3. Client settings** enable "TLS", set "Client certificate" and "Client key" to the paths of `client.crt` and `client.key`. "Skip certificate verify" should be enabled unless the server cert's CN/SAN matches the hostname used to connect.
+**3. Client settings** enable "TLS", then set:
+
+- **CA cert** to `ca.crt`, so the server is verified against your CA. Leaving it empty falls back to the system trust store, which does not know a private CA; installing `ca.crt` there instead would also trust it for every other program on that machine. "Skip certificate verify" turns verification off entirely, which leaves the client certificate as the only thing being checked.
+- **Certificate** and **Key** to `client.crt` and `client.key`.
+
+With "CA cert" set, the host you connect to must appear in the server certificate's SAN -- the name is checked, not just the chain, so a certificate the CA issued to a client cannot pose as the server. `tools/gen-certs.sh` puts `vrcd-server`, `localhost`, `127.0.0.1` and `::1` in there by default; pass `-H` for anything else.
 
 ### Credentials file (`credentials.json`)
 
