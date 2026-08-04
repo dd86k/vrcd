@@ -39,13 +39,94 @@ struct NotificationResponse
     /// Response type, posted back as `responseType`. Also the identity of
     /// the button: it is what the front-end sends when it is pressed.
     string type;
-    /// Button label. VRChat writes these ("Accept", "Decline", "Block").
+    /// Button label as VRChat wrote it -- but often a whole sentence rather
+    /// than a label, so draw `prettyResponseLabel` instead of this.
     string text;
     /// Icon hint: "check", "cancel", "ban", "bell-slash", "reply". Advisory,
     /// and often absent.
     string icon;
     /// Opaque payload posted back as `responseData` alongside the type.
     string data;
+}
+
+/// Longest `text` that is still a button rather than a caption. Bytes, not
+/// code points, which only errs toward the shorter label.
+private enum size_t RESPONSE_LABEL_MAX = 14;
+
+/// What to draw on the button for a v2 notification response.
+///
+/// VRChat writes `text` as a sentence describing the action -- "Acknowledge
+/// and dismiss this notification", "Unsubscribe from this group's event
+/// announcements". The game gets away with that because it draws icons and
+/// the words are only a tooltip; a front-end drawing words gets a caption
+/// where it wanted a button, which microui clips and a browser wraps to
+/// three lines.
+///
+/// The `type` is the action, so it names the button. The table is here to
+/// capitalize the known ones and to word `delete` as the dismiss it is
+/// everywhere else; VRChat's own text wins when it is already button-sized,
+/// since a bare "link" says less than the "View Group" it came with. A type
+/// nobody listed draws raw, which still reads as what it does.
+///
+/// Allocates nothing: the client calls this once per button per frame.
+///
+/// The web front-end mirrors this in `web/public/app.js` (`responseLabel`),
+/// uppercased to match its own buttons.
+string prettyResponseLabel(ref const(NotificationResponse) response)
+{
+    switch (response.type)
+    {
+        case "accept":      return "Accept";
+        case "decline":     return "Decline";
+        case "reject":      return "Decline";
+        case "deny":        return "Decline";
+        case "delete":      return "Dismiss";
+        case "acknowledge": return "Acknowledge";
+        case "unsubscribe": return "Unsubscribe";
+        case "block":       return "Block";
+        case "confirm":     return "Confirm";
+        case "cancel":      return "Cancel";
+        case "yes":         return "Yes";
+        case "no":          return "No";
+        case "join":        return "Join";
+        case "reply":       return "Reply";
+        default:            break;
+    }
+
+    if (response.text.length > 0 && response.text.length <= RESPONSE_LABEL_MAX)
+        return response.text;
+
+    // A response with neither is broken -- it cannot be posted back either --
+    // but a row with a button beats a row with a gap in it.
+    return response.type.length > 0 ? response.type : "Respond";
+}
+
+unittest
+{
+    // The two that started this: sentences, replaced by their type.
+    NotificationResponse ack = NotificationResponse("delete",
+        "Acknowledge and dismiss this notification", "delete", "");
+    assert(prettyResponseLabel(ack) == "Dismiss");
+
+    NotificationResponse sub = NotificationResponse("unsubscribe",
+        "Unsubscribe from this group's event announcements", "bell-slash", "");
+    assert(prettyResponseLabel(sub) == "Unsubscribe");
+
+    // A type nobody listed, whose text is already a button: text wins.
+    NotificationResponse link = NotificationResponse("link", "View Group", "", "group:grp_a");
+    assert(prettyResponseLabel(link) == "View Group");
+
+    // Same unlisted type with a sentence for a label falls back to the type.
+    NotificationResponse verbose = NotificationResponse("somethingNew",
+        "Do the thing this notification is about", "", "");
+    assert(prettyResponseLabel(verbose) == "somethingNew");
+
+    // Table beats text even when the text was fine, so casing is uniform.
+    NotificationResponse accept = NotificationResponse("accept", "ACCEPT", "check", "");
+    assert(prettyResponseLabel(accept) == "Accept");
+
+    NotificationResponse empty;
+    assert(prettyResponseLabel(empty) == "Respond");
 }
 
 /// One inbox notification, normalized out of any of the four wire shapes.

@@ -14,7 +14,7 @@ import std.json : JSONValue;
 
 import ddui;
 import vrcd.events : prettyPlatform, prettyNotifType, shortAvatarId;
-import vrcd.notifications : NotificationInfo, NotificationResponse;
+import vrcd.notifications : NotificationInfo, NotificationResponse, prettyResponseLabel;
 
 import client.notifications : notifyEventLabels, feedEventLabels, feedFilterSections,
     feedEventIndex, prettyEventType;
@@ -1901,8 +1901,10 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
                     foreach (ref NotificationResponse response; n.info.responses)
                     {
                         mu_layout_row(ctx, 1, fullCol.ptr, actionHeight);
-                        if (mu_button(ctx, response.text.length
-                            ? response.text : response.type))
+                        // Not response.text: VRChat writes that as a sentence
+                        // ("Acknowledge and dismiss this notification"), which
+                        // a 160px button shows the first two words of.
+                        if (mu_button(ctx, prettyResponseLabel(response)))
                         {
                             // Waits for the result rather than dropping the
                             // row: the user pressed Accept on something and
