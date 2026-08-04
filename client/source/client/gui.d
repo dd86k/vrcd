@@ -1222,6 +1222,21 @@ private void drainNetworkMessages()
                     appState.rateLimited = rate_limited.boolean;
                 break;
 
+            case "stats":
+                // vrcd-server's store, not this client's feed: the event count
+                // is everything ever logged, while the feed holds the pages
+                // that were fetched.
+                if (const(JSONValue) *event_count = "event_count" in msg)
+                    appState.statsEventCount = event_count.integer;
+                if (const(JSONValue) *world_cache_count = "world_cache_count" in msg)
+                    appState.statsWorldCacheCount = world_cache_count.integer;
+                if (const(JSONValue) *avatar_cache_count = "avatar_cache_count" in msg)
+                    appState.statsAvatarCacheCount = avatar_cache_count.integer;
+                if (const(JSONValue) *db_size_bytes = "db_size_bytes" in msg)
+                    appState.statsDbSizeBytes = db_size_bytes.integer;
+                appState.statsKnown = true;
+                break;
+
             case "friends":
                 applyFriendsSnapshot(msg);
                 break;

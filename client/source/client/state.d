@@ -245,6 +245,17 @@ struct AppState
     long rateLimitMax = -1;
     bool rateLimited;
 
+    // vrcd-server's database counters, from `stats`. Nothing announces them,
+    // so the network thread asks on connect and again off each keepalive: the
+    // counts move as events land, and the ping is the only clock that thread
+    // already has. `statsKnown` keeps the section hidden until the first
+    // reply, since four zeroes and "not asked yet" are not the same thing.
+    bool statsKnown;
+    long statsEventCount;
+    long statsWorldCacheCount;
+    long statsAvatarCacheCount;
+    long statsDbSizeBytes;
+
     // Settings (editable via UI)
     char[128] settingsHost = '\0';
     char[8] settingsPort = '\0';

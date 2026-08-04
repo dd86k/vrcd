@@ -578,6 +578,9 @@ class ServerConnection
                 requestModerations();
             if (serverVersion >= PROTOCOL_NOTIFICATIONS)
                 requestNotifications();
+            // Database counters. Present since the first protocol version, so
+            // no gate; refreshed from the keepalive in the receive loop.
+            requestStats();
             runThreadedImpl(queue, sdlEventType);
         }
         catch (Exception e)
@@ -637,6 +640,11 @@ class ServerConnection
                         {
                             logTrace("runThreadedImpl: ping -> pong");
                             sendMessage(JSONValue(["type": JSONValue("pong")]));
+                            // Nothing announces the database counters, and the
+                            // keepalive is the only clock this thread has, so
+                            // the refresh rides on it. The reply lands in the
+                            // queue like any other message.
+                            requestStats();
                             continue;
                         }
                     }

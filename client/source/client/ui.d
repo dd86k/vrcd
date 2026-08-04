@@ -1080,6 +1080,26 @@ private const(char)[] formatRelative(long unixTime, char[] buf)
     return sformat(buf, "%dy ago", diff / (86_400 * 365));
 }
 
+/// Format a byte count for display. Whole bytes below a kilobyte, one decimal
+/// above: "12.4 MB" says as much as the exact figure and keeps its width as
+/// the file grows. Writes into the caller's buffer to avoid per-frame GC.
+private const(char)[] formatBytes(long bytes, char[] buf)
+{
+    static immutable string[4] units = [ "B", "KB", "MB", "GB" ];
+
+    double n = bytes;
+    size_t unit;
+    while (n >= 1024 && unit < units.length - 1)
+    {
+        n /= 1024;
+        ++unit;
+    }
+
+    if (unit == 0)
+        return sformat(buf, "%d %s", bytes, units[unit]);
+    return sformat(buf, "%.1f %s", n, units[unit]);
+}
+
 /// Extra vertical margin (in pixels) added to collapsible headers in the
 /// Online tab, on top of the style default, to make them easier to hit in VR.
 private enum int onlineHeaderExtraHeight = 16;
@@ -3140,6 +3160,33 @@ private void drawSettingsTab(mu_Context* ctx, AppState* state, int scrollDelta)
     {
         state.saveSettingsRequested = true;
         setStatusFlash(state, "  Settings saved");
+    }
+    
+    // Server db stats after settings (not part of settings) and before about (not related to software compile options)
+    if (state.statsKnown)
+    {
+        spacer(ctx);
+        sectionHeader(ctx, "Database Statistics");
+
+        // One buffer for all four rows: mu_label copies the text into ddui's
+        // arena, so the next sformat is free to overwrite it.
+        char[32] statBuf = void;
+
+        mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
+        mu_label(ctx, "Events");
+        mu_label(ctx, cast(string) sformat(statBuf, "%,d", state.statsEventCount));
+
+        mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
+        mu_label(ctx, "Worlds cached");
+        mu_label(ctx, cast(string) sformat(statBuf, "%,d", state.statsWorldCacheCount));
+
+        mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
+        mu_label(ctx, "Avatars cached");
+        mu_label(ctx, cast(string) sformat(statBuf, "%,d", state.statsAvatarCacheCount));
+
+        mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
+        mu_label(ctx, "Size");
+        mu_label(ctx, cast(string) formatBytes(state.statsDbSizeBytes, statBuf));
     }
 
     // About this project.
