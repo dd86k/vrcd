@@ -136,7 +136,13 @@ tls_only = true
 
 Both sides verify each other's certificate. The server rejects clients that don't present a valid cert. Useful when you want to restrict access beyond the shared secret.
 
-**1. Create a CA** and sign both server and client certificates:
+**1. Create a CA** and sign both server and client certificates. `tools/gen-certs.sh` does this in one run, with subject alternative names and the right key usages, and reuses an existing CA so a client can be added later:
+
+```bash
+tools/gen-certs.sh -o /srv/vrcd -H vrcd.lan -c desktop
+```
+
+By hand:
 
 ```bash
 # CA key and cert
