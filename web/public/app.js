@@ -79,6 +79,41 @@ var NOTIFY_TYPES = {
    type nobody listed here still draws - just not emphasised. */
 var NOTIFY_PRIMARY = { accept: true, join: true, confirm: true, yes: true };
 
+/* VRChat writes a v2 response's `text` as a sentence describing the action -
+   "Acknowledge and dismiss this notification", "Unsubscribe from this group's
+   event announcements". That is a caption, not a button, and on a phone it
+   wraps to three lines each. The response *type* is the action, so it names
+   the button; the full sentence goes in the tooltip where it costs nothing.
+
+   The table is only for types worth wording differently from their own name
+   (delete reads as DISMISS everywhere else on this page). Everything else
+   falls through to the type, which uppercases into a perfectly good label -
+   including types this build has never heard of. */
+var NOTIFY_RESPONSE_LABELS = {
+    "delete": "DISMISS",
+    reject: "DECLINE",
+    deny: "DECLINE"
+};
+
+/* A button's worth of text: short enough not to wrap in a row of them. */
+var NOTIFY_LABEL_MAX = 14;
+
+function responseLabel(response) {
+    // hasOwnProperty because the type comes off the wire, and "constructor"
+    // would otherwise hand back a function to use as a label.
+    if (NOTIFY_RESPONSE_LABELS.hasOwnProperty(response.type))
+        return NOTIFY_RESPONSE_LABELS[response.type];
+
+    /* VRChat's own text when it is already button-sized ("Join", "View
+       Group"): it is the more specific of the two, and a type like "link"
+       says less than the label VRChat gave it. */
+    var text = (response.text || "").trim();
+    if (text && text.length <= NOTIFY_LABEL_MAX) return text.toUpperCase();
+
+    if (response.type) return notifyLabel(response.type).toUpperCase();
+    return text ? text.split(/\s+/)[0].toUpperCase() : "RESPOND";
+}
+
 /* What to say once one went through. Keyed by the action, not the response:
    which button of a group invite was pressed is the server's business. */
 var NOTIFY_DONE = { accept: "Accepted", hide: "Dismissed", respond: "Answered" };
@@ -720,8 +755,8 @@ function notifyCard(entry) {
     var actions = el("div", "actions");
     if (responses.length) {
         responses.forEach(function (response) {
-            var label = (response.text || response.type).toUpperCase();
-            actions.appendChild(notifyButton(entry, "respond", label,
+            actions.appendChild(notifyButton(entry, "respond",
+                responseLabel(response),
                 NOTIFY_PRIMARY[response.type] === true, busy, response));
         });
     } else {
@@ -759,6 +794,10 @@ function notifyLabel(type) {
 
 function notifyButton(entry, action, label, primary, busy, response) {
     var button = el("button", "act" + (primary ? " primary" : ""), label);
+    // What VRChat called it, for the cases where the short label dropped
+    // something ("...this group's event announcements" - which group?).
+    if (response && response.text && response.text.toUpperCase() !== label)
+        button.title = response.text;
     button.disabled = busy;
     button.onclick = function () { notifyAct(entry, action, button, response); };
     return button;
