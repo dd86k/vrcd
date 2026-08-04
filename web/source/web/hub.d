@@ -66,7 +66,6 @@ class Hub
             if (reset)
             {
                 feedRing = encoded.dup;
-                feedBase = feedSeq;
                 ++feedEpoch;
             }
             else
@@ -77,11 +76,7 @@ class Hub
             feedSeq += encoded.length;
 
             if (feedRing.length > FEED_RING)
-            {
-                size_t drop = feedRing.length - FEED_RING;
-                feedRing = feedRing[drop .. $];
-                feedBase += drop;
-            }
+                feedRing = feedRing[$ - FEED_RING .. $];
 
             cond.notifyAll();
         }
@@ -123,19 +118,29 @@ class Hub
                     seenState = stateGeneration;
                 }
 
-                // A new epoch, a first look, or having fallen off the back of
-                // the ring all mean the same thing: send what we have as a
-                // replacement rather than trying to patch the browser's copy.
-                if (seenEpoch != feedEpoch || primed == false || seenSeq < feedBase)
+                // How far behind this browser is. seenSeq only ever moves to
+                // feedSeq and only under this lock, so it never leads.
+                ulong behind = feedSeq - seenSeq;
+
+                // A new epoch, a first look, or being further behind than the
+                // ring can still account for all mean the same thing: send what
+                // we have as a replacement rather than patching the browser's
+                // copy. Asking the ring directly is the whole test -- what can
+                // still be produced is exactly what it is still holding.
+                if (seenEpoch != feedEpoch || primed == false || behind > feedRing.length)
                 {
                     feedMessage = feedFrame(feedRing, true);
                     seenEpoch = feedEpoch;
                     seenSeq = feedSeq;
                     primed = true;
                 }
-                else if (seenSeq < feedSeq)
+                else if (behind > 0)
                 {
-                    feedMessage = feedFrame(feedRing[seenSeq - feedBase .. $], false);
+                    // Sequence numbers are ulong so they never wrap, but a ring
+                    // index is size_t, which is 32-bit on some targets. The
+                    // branch above just established behind <= feedRing.length,
+                    // so this narrows a value already bounded by a length.
+                    feedMessage = feedFrame(feedRing[$ - cast(size_t)behind .. $], false);
                     seenSeq = feedSeq;
                 }
             }
@@ -167,9 +172,9 @@ private:
     ulong stateGeneration;
     string statePayload;
 
-    /// Total entries ever published, and the sequence number of feedRing[0].
+    /// Total entries ever published. Connections track their own last-seen
+    /// value; the difference against the ring length is what they are owed.
     ulong feedSeq;
-    ulong feedBase;
     /// Bumped when the feed is replaced rather than extended.
     ulong feedEpoch;
     string[] feedRing;
