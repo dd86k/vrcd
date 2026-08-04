@@ -161,6 +161,8 @@ int runGui(string host, ushort port, string secret, long sinceId,
     // Load TLS settings into appState (bool -> int).
     appState.settingsTls = cast(int) saved.useTls;
     appState.settingsTlsSkipVerify = cast(int) saved.tlsSkipVerify;
+    if (saved.tlsCaCert.length > 0)
+        initSettingsBuf(appState.settingsTlsCaCert, saved.tlsCaCert);
     if (saved.tlsClientCert.length > 0)
         initSettingsBuf(appState.settingsTlsClientCert, saved.tlsClientCert);
     if (saved.tlsClientKey.length > 0)
@@ -318,7 +320,7 @@ int runGui(string host, ushort port, string secret, long sinceId,
     appState.serverStatus = "Connecting...";
     conn = new ServerConnection(host, port, secret,
         saved.useTls, saved.tlsSkipVerify,
-        saved.tlsClientCert, saved.tlsClientKey);
+        saved.tlsClientCert, saved.tlsClientKey, saved.tlsCaCert);
     long initialSinceId = sinceId;
     netThread = new Thread({
         conn.connectAndRun(msgQueue, networkEventType, initialSinceId);
@@ -2336,9 +2338,10 @@ private void doReconnect()
     appState.dapStatus = "";
     string clientCert = cast(string) appState.settingsTlsClientCert[0 .. strlen(appState.settingsTlsClientCert.ptr)].idup;
     string clientKey  = cast(string) appState.settingsTlsClientKey[0 .. strlen(appState.settingsTlsClientKey.ptr)].idup;
+    string caCert     = cast(string) appState.settingsTlsCaCert[0 .. strlen(appState.settingsTlsCaCert.ptr)].idup;
     conn = new ServerConnection(host, port, secret,
         appState.settingsTls != 0, appState.settingsTlsSkipVerify != 0,
-        clientCert, clientKey);
+        clientCert, clientKey, caCert);
     long sinceId = saved.lastEventId;
     netThread = new Thread({
         conn.connectAndRun(msgQueue, networkEventType, sinceId);
@@ -2377,6 +2380,7 @@ private void doSaveSettings()
     s.secret = cast(string) appState.settingsSecret[0 .. strlen(appState.settingsSecret.ptr)].idup;
     s.useTls = appState.settingsTls != 0;
     s.tlsSkipVerify = appState.settingsTlsSkipVerify != 0;
+    s.tlsCaCert = cast(string) appState.settingsTlsCaCert[0 .. strlen(appState.settingsTlsCaCert.ptr)].idup;
     s.tlsClientCert = cast(string) appState.settingsTlsClientCert[0 .. strlen(appState.settingsTlsClientCert.ptr)].idup;
     s.tlsClientKey  = cast(string) appState.settingsTlsClientKey[0 .. strlen(appState.settingsTlsClientKey.ptr)].idup;
     s.fontPath = cast(string) appState.settingsFontPath[0 .. strlen(appState.settingsFontPath.ptr)].idup;

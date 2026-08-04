@@ -42,6 +42,7 @@ class ServerConnection
     private string secret;
     private bool useTls;
     private bool tlsSkipVerify;
+    private string tlsCaCert;
     private string tlsClientCert;
     private string tlsClientKey;
     private Stream stream;
@@ -58,13 +59,15 @@ class ServerConnection
 
     this(string host, ushort port, string secret,
         bool useTls = false, bool tlsSkipVerify = false,
-        string tlsClientCert = null, string tlsClientKey = null)
+        string tlsClientCert = null, string tlsClientKey = null,
+        string tlsCaCert = null)
     {
         this.host = host;
         this.port = port;
         this.secret = secret;
         this.useTls = useTls;
         this.tlsSkipVerify = tlsSkipVerify;
+        this.tlsCaCert = tlsCaCert;
         this.tlsClientCert = tlsClientCert;
         this.tlsClientKey = tlsClientKey;
         this.sendMutex = new Mutex();
@@ -104,7 +107,7 @@ class ServerConnection
         {
             if (sslCtx is null)
             {
-                try sslCtx = createClientTLSContext(tlsSkipVerify, tlsClientCert, tlsClientKey);
+                try sslCtx = createClientTLSContext(tlsSkipVerify, tlsClientCert, tlsClientKey, tlsCaCert);
                 catch (Exception e)
                 {
                     logError("TLS context creation failed: %s", e.msg);
@@ -113,7 +116,7 @@ class ServerConnection
                     return false;
                 }
             }
-            try stream = new TLSClientStream(tcpSock, sslCtx, host);
+            try stream = new TLSClientStream(tcpSock, sslCtx, host, tlsSkipVerify == false);
             catch (Exception e)
             {
                 logError("TLS handshake failed with %s:%d: %s", host, port, e.msg);

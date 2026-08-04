@@ -3038,6 +3038,12 @@ private void drawSettingsTab(mu_Context* ctx, AppState* state, int scrollDelta)
         mu_label(ctx, "Skip verify");
         mu_checkbox(ctx, "", &state.settingsTlsSkipVerify);
 
+        // CA file for verifying the server. Empty falls back to the system
+        // trust store, which knows nothing about a private CA.
+        mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
+        mu_label(ctx, "CA cert");
+        mu_textbox(ctx, state.settingsTlsCaCert.ptr, cast(int) state.settingsTlsCaCert.length);
+
         mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
         mu_label(ctx, "Certificate");
         mu_textbox(ctx, state.settingsTlsClientCert.ptr, cast(int) state.settingsTlsClientCert.length);

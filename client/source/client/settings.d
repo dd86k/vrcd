@@ -21,6 +21,7 @@ struct Settings
     string secret;
     bool useTls;
     bool tlsSkipVerify;
+    string tlsCaCert;
     string tlsClientCert;
     string tlsClientKey;
     string fontPath;
@@ -83,6 +84,9 @@ Settings loadSettings()
         if (const(JSONValue) *jtls_skip_verify = "tls_skip_verify" in json)
             if (jtls_skip_verify.type == JSONType.true_)
                 s.tlsSkipVerify = true;
+        if (const(JSONValue) *jtls_ca_cert = "tls_ca_cert" in json)
+            if (jtls_ca_cert.type == JSONType.string)
+                s.tlsCaCert = jtls_ca_cert.str;
         if (const(JSONValue) *jtls_client_cert = "tls_client_cert" in json)
             if (jtls_client_cert.type == JSONType.string)
                 s.tlsClientCert = jtls_client_cert.str;
@@ -214,6 +218,7 @@ void saveSettings(Settings s)
         json["secret"] = s.secret;
         json["use_tls"] = s.useTls;
         json["tls_skip_verify"] = s.tlsSkipVerify;
+        json["tls_ca_cert"] = s.tlsCaCert;
         json["tls_client_cert"] = s.tlsClientCert;
         json["tls_client_key"] = s.tlsClientKey;
         json["font_path"] = s.fontPath;

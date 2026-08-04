@@ -262,6 +262,7 @@ struct AppState
     char[128] settingsSecret = '\0';
     int settingsTls;
     int settingsTlsSkipVerify;
+    char[256] settingsTlsCaCert = '\0';
     char[256] settingsTlsClientCert = '\0';
     char[256] settingsTlsClientKey = '\0';
     bool reconnectRequested;

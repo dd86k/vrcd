@@ -149,6 +149,8 @@ bool loadTLS()
     if ((_SSL_CTX_use_cert   = sym!FP_CTX_file  (ssl, "SSL_CTX_use_certificate_file")) is null) return false;
     if ((_SSL_CTX_use_key    = sym!FP_CTX_file  (ssl, "SSL_CTX_use_PrivateKey_file"))  is null) return false;
     if ((_SSL_CTX_check_key  = sym!FP_CTX_chk   (ssl, "SSL_CTX_check_private_key"))    is null) return false;
+    if ((_SSL_CTX_load_verify = sym!FP_CTX_load (ssl, "SSL_CTX_load_verify_locations")) is null) return false;
+    if ((_SSL_CTX_set_default_paths = sym!FP_CTX_paths(ssl, "SSL_CTX_set_default_verify_paths")) is null) return false;
     if ((_SSL_new            = sym!FP_SSL_new   (ssl, "SSL_new"))           is null) return false;
     if ((_SSL_free           = sym!FP_SSL_free  (ssl, "SSL_free"))          is null) return false;
     if ((_SSL_set_fd         = sym!FP_set_fd    (ssl, "SSL_set_fd"))        is null) return false;
@@ -160,6 +162,14 @@ bool loadTLS()
     if ((_ERR_get_error      = sym!FP_ERR_get   (crypto, "ERR_get_error")) is null) return false;
     if ((_ERR_error_string_n = sym!FP_ERR_string(crypto, "ERR_error_string_n")) is null) return false;
 
+    // Hostname checking is resolved separately: missing it costs the name
+    // check, not TLS itself, so it must not fail the whole load.
+    _SSL_get0_param       = cast(FP_get0_param) sysSym(ssl,    "SSL_get0_param");
+    _X509_param_set1_host = cast(FP_param_host) sysSym(crypto, "X509_VERIFY_PARAM_set1_host");
+    _X509_param_set1_ip   = cast(FP_param_ip)   sysSym(crypto, "X509_VERIFY_PARAM_set1_ip_asc");
+    if (_SSL_get0_param is null || _X509_param_set1_host is null)
+        logInfo("TLS: hostname verification unavailable (old OpenSSL)");
+
     _tlsLoaded = true;
     logInfo("TLS available (OpenSSL loaded)");
     return true;
@@ -168,10 +178,14 @@ bool loadTLS()
 /// Create a client-side TLS context.
 /// If skipVerify is true, the server's certificate is not validated —
 /// suitable for self-signed certificates on a local network.
+/// When caCert is set, the server's certificate is verified against that
+/// CA file instead of the system trust store — which is what a private CA
+/// wants: trusting it system-wide would also trust it for every other
+/// program on the machine.
 /// When clientCert and clientKey are set, the client presents a
 /// certificate to the server for mutual TLS authentication.
 void* createClientTLSContext(bool skipVerify,
-    string clientCert = null, string clientKey = null)
+    string clientCert = null, string clientKey = null, string caCert = null)
 {
     enum SSL_FILETYPE_PEM = 1;
     enum SSL_VERIFY_NONE = 0;
@@ -183,6 +197,26 @@ void* createClientTLSContext(bool skipVerify,
 
     int verifyMode = skipVerify ? SSL_VERIFY_NONE : SSL_VERIFY_PEER;
     _SSL_CTX_set_verify(ctx, verifyMode, null);
+
+    // A fresh context has an empty trust store — OpenSSL reads the system
+    // one only when asked. Without this, SSL_VERIFY_PEER rejects every
+    // server, no matter who signed its certificate.
+    if (skipVerify == false)
+    {
+        if (caCert.length > 0)
+        {
+            if (_SSL_CTX_load_verify(ctx, caCert.toStringz, null) != 1)
+            {
+                _SSL_CTX_free(ctx);
+                throw new Exception("Failed to load CA certificate '" ~ caCert ~ "': " ~ tlsErrorString());
+            }
+        }
+        else if (_SSL_CTX_set_default_paths(ctx) != 1)
+        {
+            _SSL_CTX_free(ctx);
+            throw new Exception("Failed to load system CA certificates: " ~ tlsErrorString());
+        }
+    }
 
     // Load client certificate for mutual TLS.
     if (clientCert.length > 0 && clientKey.length > 0)
@@ -222,12 +256,29 @@ class TLSClientStream : Stream
     private Socket sock;
     private void* ssl;
 
-    this(Socket s, void* ctx, string hostname)
+    this(Socket s, void* ctx, string hostname, bool verifyHostname = false)
     {
         this.sock = s;
         ssl = _SSL_new(ctx);
         if (ssl is null)
             throw new Exception("SSL_new failed: " ~ tlsErrorString());
+
+        // Check the certificate was issued for the host we asked for. The
+        // chain check alone accepts anything the CA signed, including a
+        // certificate it issued to a client.
+        if (verifyHostname && _SSL_get0_param)
+        {
+            void* param = _SSL_get0_param(ssl);
+            if (isIPAddress(hostname))
+            {
+                if (_X509_param_set1_ip)
+                    _X509_param_set1_ip(param, hostname.toStringz);
+            }
+            else if (_X509_param_set1_host)
+            {
+                _X509_param_set1_host(param, hostname.toStringz, 0);
+            }
+        }
 
         // Set SNI hostname so the server can select the right certificate.
         // Skip for IP addresses — RFC 6066 requires a DNS name, and
@@ -286,7 +337,12 @@ private extern (C) @nogc nothrow
     alias FP_CTX_free   = void function(void*);
     alias FP_CTX_verify = void function(void*, int, void*);
     alias FP_CTX_file   = int function(void*, const(char)*, int);
+    alias FP_CTX_load   = int function(void*, const(char)*, const(char)*);
+    alias FP_CTX_paths  = int function(void*);
     alias FP_CTX_chk    = int function(void*);
+    alias FP_get0_param = void* function(void*);
+    alias FP_param_host = int function(void*, const(char)*, size_t);
+    alias FP_param_ip   = int function(void*, const(char)*);
     alias FP_SSL_new    = void* function(void*);
     alias FP_SSL_free   = void function(void*);
     alias FP_set_fd     = int function(void*, int);
@@ -307,7 +363,12 @@ private __gshared
     FP_CTX_verify _SSL_CTX_set_verify;
     FP_CTX_file   _SSL_CTX_use_cert;
     FP_CTX_file   _SSL_CTX_use_key;
+    FP_CTX_load   _SSL_CTX_load_verify;
+    FP_CTX_paths  _SSL_CTX_set_default_paths;
     FP_CTX_chk    _SSL_CTX_check_key;
+    FP_get0_param _SSL_get0_param;
+    FP_param_host _X509_param_set1_host;
+    FP_param_ip   _X509_param_set1_ip;
     FP_SSL_new    _SSL_new;
     FP_SSL_free   _SSL_free;
     FP_set_fd     _SSL_set_fd;
