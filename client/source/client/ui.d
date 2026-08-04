@@ -3221,10 +3221,6 @@ private void drawSettingsTab(mu_Context* ctx, AppState* state, int scrollDelta)
     mu_label(ctx, COMPILER);
     
     // TODO: Compile/runtime settings (compiler, package versions, SDL2 versions, etc.)
-    
-    // BUG: Can't scroll to bottom 100% flush, so add empty row for now
-    mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
-    mu_label(ctx, "");
 
     mu_end_panel(ctx);
 }
@@ -3276,8 +3272,14 @@ private void applyScroll(mu_Context* ctx, int scrollDelta)
     // Clamp: don't scroll above the top.
     if (panel.scroll.y < 0)
         panel.scroll.y = 0;
-    // Clamp to content (use previous frame's content_size).
-    int maxScroll = panel.content_size.y - panel.body_.h;
+    // Clamp to content (use previous frame's content_size). ddui's own
+    // scrollbar adds style.padding * 2 to the content size before computing
+    // its limit, because a panel's layout starts one padding in and the last
+    // row is meant to come to rest one padding above the bottom edge. Leaving
+    // it out here stopped the wheel two paddings early, which clipped the
+    // bottom of the last row on every panel while the scrollbar thumb (which
+    // uses ddui's limit) could still be dragged past it.
+    int maxScroll = panel.content_size.y + ctx.style.padding * 2 - panel.body_.h;
     if (maxScroll < 0) maxScroll = 0;
     if (panel.scroll.y > maxScroll)
         panel.scroll.y = maxScroll;
