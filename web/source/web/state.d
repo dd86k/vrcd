@@ -54,6 +54,22 @@ string buildStateJSON(ServerLink link)
         ]);
     }
 
+    // Present only once vrcd-server has answered `get_stats`: the connection
+    // block draws nothing rather than four zeroes for a link that has not said
+    // yet. Cheap enough to ride along -- four numbers against a roster in the
+    // same message -- and they are refreshed off the keepalive, so no route of
+    // their own is needed.
+    StoreStats stats = link.stats();
+    if (stats.known)
+    {
+        root["database"] = JSONValue([
+            "event_count":        JSONValue(stats.eventCount),
+            "world_cache_count":  JSONValue(stats.worldCacheCount),
+            "avatar_cache_count": JSONValue(stats.avatarCacheCount),
+            "size_bytes":         JSONValue(stats.dbSizeBytes),
+        ]);
+    }
+
     JSONValue[] instances;
     foreach (ref InstanceGroup group; roster.instances)
     {

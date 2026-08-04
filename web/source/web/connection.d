@@ -84,6 +84,20 @@ struct LinkStatus
     string lastError;
 }
 
+/// vrcd-server's SQLite store, as its `stats` reply describes it.
+///
+/// These are the server's own numbers, not this front-end's: the event count
+/// is every event ever logged, while the feed here holds the last page of them.
+struct StoreStats
+{
+    /// False until the first `stats` reply lands.
+    bool known;
+    long eventCount;
+    long worldCacheCount;
+    long avatarCacheCount;
+    long dbSizeBytes;
+}
+
 /// One event, labelled and reduced to what the feed shows. The timestamp
 /// stays as the server's ISO 8601 UTC string so the browser can render it in
 /// the viewer's own timezone.
@@ -329,6 +343,13 @@ class ServerLink
     {
         synchronized (stateMutex)
             return linkStatus;
+    }
+
+    /// vrcd-server's database counters. Unknown until the first `stats` reply.
+    StoreStats stats()
+    {
+        synchronized (stateMutex)
+            return storeStats;
     }
 
     /// Current friend roster. Empty until the first `friends` snapshot lands.
@@ -1092,6 +1113,7 @@ private:
     Mutex sendMutex;
     SelfInfo selfInfo;
     LinkStatus linkStatus;
+    StoreStats storeStats;
     FriendRoster friendRoster;
     JoinResult lastJoin;
     /// Pending notifications, oldest first. Order is the server's, and new
@@ -1463,6 +1485,11 @@ private:
                 PROTOCOL_MODERATION, status().serverVersion);
         }
 
+        // The database counters. Nothing announces them, so they are asked for
+        // here and then again off each keepalive: the counts move as events
+        // land, and the ping is the only clock this thread already has.
+        sendMessage(JSONValue([ "type": JSONValue("get_stats") ]));
+
         // Seed the feed with the newest events. `fetch_older` is the right
         // call rather than `catch_up`: catch-up walks forward from an ID and
         // would hand us the *oldest* page of a long backlog, while this page
@@ -1771,8 +1798,42 @@ private:
             logInfo("VRChat WebSocket %s", vrchatConnected ? "connected" : "disconnected");
             break;
 
+        case "stats":
+            StoreStats counted;
+            counted.known = true;
+            if (const(JSONValue) *v = "event_count" in message)
+                if (v.type == JSONType.integer)
+                    counted.eventCount = v.integer;
+            if (const(JSONValue) *v = "world_cache_count" in message)
+                if (v.type == JSONType.integer)
+                    counted.worldCacheCount = v.integer;
+            if (const(JSONValue) *v = "avatar_cache_count" in message)
+                if (v.type == JSONType.integer)
+                    counted.avatarCacheCount = v.integer;
+            if (const(JSONValue) *v = "db_size_bytes" in message)
+                if (v.type == JSONType.integer)
+                    counted.dbSizeBytes = v.integer;
+
+            bool moved;
+            synchronized (stateMutex)
+            {
+                moved = storeStats != counted;
+                storeStats = counted;
+            }
+            // Only when a number actually changed: this arrives every keepalive,
+            // and a snapshot to every browser twice a minute for an unchanged
+            // count would redraw the page for nothing.
+            if (moved)
+                notifyChange();
+
+            logTrace("Stats: %d events, %d worlds, %d avatars, %d bytes",
+                counted.eventCount, counted.worldCacheCount,
+                counted.avatarCacheCount, counted.dbSizeBytes);
+            break;
+
         case "ping":
             sendMessage(JSONValue([ "type": JSONValue("pong") ]));
+            sendMessage(JSONValue([ "type": JSONValue("get_stats") ]));
             break;
 
         case "error":

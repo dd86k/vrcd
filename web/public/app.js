@@ -2705,6 +2705,39 @@ function renderProfileTab(body) {
     pair(conn, "VRChat", state.vrchat_connected ? "connected" : "disconnected");
     if (state.last_error) pair(conn, "Last error", state.last_error);
     body.appendChild(conn);
+
+    // vrcd-server's store, not this page's feed: the event count is everything
+    // ever logged, while the feed holds the last page of it. Absent until the
+    // link has answered once, which is why the whole block is conditional
+    // rather than showing zeroes.
+    if (state.database) {
+        body.appendChild(el("div", "section", "Database"));
+        var db = el("dl", "kv");
+        pair(db, "Events", countText(state.database.event_count));
+        pair(db, "Worlds cached", countText(state.database.world_cache_count));
+        pair(db, "Avatars cached", countText(state.database.avatar_cache_count));
+        pair(db, "Size", sizeText(state.database.size_bytes));
+        body.appendChild(db);
+    }
+}
+
+/* Thousands separators, since these run to six figures and a wall of digits is
+   unreadable at a glance. */
+function countText(value) {
+    return (value || 0).toLocaleString();
+}
+
+function sizeText(value) {
+    var n = value || 0;
+    var units = ["B", "KB", "MB", "GB"];
+    var i = 0;
+    while (n >= 1024 && i < units.length - 1) {
+        n /= 1024;
+        i++;
+    }
+    // Whole bytes, one decimal above that: "12.4 MB" says as much as the exact
+    // figure and stays the same width as it grows.
+    return (i === 0 ? n : n.toFixed(1)) + " " + units[i];
 }
 
 function pair(list, key, value) {
