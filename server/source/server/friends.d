@@ -16,6 +16,21 @@ import server.instancecache;
 import server.userimage;
 import server.worldcache;
 
+/// What a processed event actually moved.
+///
+/// Two flags rather than one because "redraw the roster" and "put a row in the
+/// event log" are not the same question. A friend's profile picture falls back
+/// to their avatar thumbnail when they have set neither an icon nor an
+/// override, so it moves on every avatar swap: the face on screen has to
+/// follow, but a wardrobe change is not an event, and in a private instance
+/// there is not even an avatar-change synthetic for the raw frame to hide
+/// behind.
+struct EventChange
+{
+    bool snapshot;  /// A client-visible field moved; push a fresh roster.
+    bool loggable;  /// A field reflecting intent moved; the raw event is worth keeping.
+}
+
 /// Tracks the current state of all friends from WebSocket events.
 /// Maintained in-memory on the server; clients request a snapshot.
 class FriendsTracker
@@ -325,12 +340,12 @@ class FriendsTracker
     }
 
     /// Process a VRCEvent and update friend state.
-    /// Returns true if the *client-visible* state changed. Per-handler change
-    /// flags are too eager (VRChat resends identical frames with slightly
-    /// differing nested fields that bounce internal state without altering
-    /// the snapshot clients receive). Authoritative diff: take a fingerprint
-    /// of the affected friend before and after, compare.
-    bool processEvent(VRCEvent event)
+    /// Returns what moved, client-visibly. Per-handler change flags are too
+    /// eager (VRChat resends identical frames with slightly differing nested
+    /// fields that bounce internal state without altering the snapshot clients
+    /// receive). Authoritative diff: take a fingerprint of the affected friend
+    /// before and after, compare.
+    EventChange processEvent(VRCEvent event)
     {
         synchronized (friendsMutex)
         {
@@ -350,7 +365,7 @@ class FriendsTracker
                 case EventType.userLocation:   handleUserLocation(event.content);   break;
                 default:
                     logTrace("processEvent: ignoring type=%s", event.typeRaw);
-                    return false;
+                    return EventChange.init;
             }
 
             VisibleState after = userId.length > 0 ? visibleStateOf(userId) : VisibleState.init;
@@ -364,13 +379,15 @@ class FriendsTracker
                     pendingSelfChange = true;
                 logDebugging("processEvent: type=%s self-update selfChanged=%s",
                     event.typeRaw, pendingSelfChange);
-                return false;
+                return EventChange.init;
             }
 
-            bool changed = before != after;
-            logDebugging("processEvent: type=%s changed=%s friends=%d",
-                event.typeRaw, changed, friends.length);
-            return changed;
+            EventChange changes;
+            changes.snapshot = before != after;
+            changes.loggable = withoutPicture(before) != withoutPicture(after);
+            logDebugging("processEvent: type=%s snapshot=%s loggable=%s friends=%d",
+                event.typeRaw, changes.snapshot, changes.loggable, friends.length);
+            return changes;
         }
     }
 
@@ -413,6 +430,20 @@ class FriendsTracker
         v.imageFileId = f.imageFileId;
         v.imageVersion = f.imageVersion;
         v.online = f.online;
+        return v;
+    }
+
+    /// The same fingerprint with the picture dropped, used to decide whether
+    /// the raw event is worth persisting. For a friend who has set no icon and
+    /// no override, applyPictureUpdate falls through to the avatar thumbnail,
+    /// so the picture is really the avatar and changes every time they swap.
+    /// That belongs in the roster, not the event log -- and applyAvatarUpdate
+    /// stays quiet for a friend in a private instance, so there is no
+    /// avatar-change synthetic there to suppress the raw frame in its place.
+    private static VisibleState withoutPicture(VisibleState v)
+    {
+        v.imageFileId = null;
+        v.imageVersion = 0;
         return v;
     }
 
@@ -828,22 +859,24 @@ private:
         string dn = extractDisplayName(c, f.displayName);
         if (dn != f.displayName) { f.displayName = dn; changed = true; }
 
-        if (const(JSONValue)* v = "status" in c)
+        // friend-update always wraps the User object under "user"; it carries
+        // nothing at the top level but "userId". Reading status from the top
+        // level here found nothing, which mattered because friend-update is
+        // exactly what VRChat sends when somebody flips their status -- it was
+        // picked up only when a later friend-location or friend-online
+        // happened to carry it.
+        string newStatus = extractNestedUserString(c, "status");
+        if (newStatus.length > 0 && newStatus != f.status)
         {
-            if (v.str.length > 0 && v.str != f.status)
-            {
-                f.status = v.str;
-                changed = true;
-            }
+            f.status = newStatus;
+            changed = true;
         }
 
-        if (const(JSONValue)* v = "statusDescription" in c)
+        string newStatusDesc = extractNestedUserString(c, "statusDescription");
+        if (newStatusDesc.length > 0 && newStatusDesc != f.statusDescription)
         {
-            if (v.str.length > 0 && v.str != f.statusDescription)
-            {
-                f.statusDescription = v.str;
-                changed = true;
-            }
+            f.statusDescription = newStatusDesc;
+            changed = true;
         }
 
         if (applyAvatarUpdate(f, c)) changed = true;
@@ -1355,4 +1388,55 @@ private:
 
         return null;
     }
+}
+
+// A friend-update carries the User object under "user" and nothing but
+// "userId" at the top level. Status has to be read from there, and an avatar
+// swap by somebody with no icon set has to redraw the roster without logging
+// an event.
+unittest
+{
+    static string friendUpdate(string status, string avatarFile)
+    {
+        JSONValue user = JSONValue([
+            "id":                            JSONValue("usr_1"),
+            "displayName":                   JSONValue("Kura"),
+            "status":                        JSONValue(status),
+            "userIcon":                      JSONValue(""),
+            "profilePicOverride":            JSONValue(""),
+            "profilePicOverrideThumbnail":   JSONValue(""),
+            "currentAvatarThumbnailImageUrl":
+                JSONValue("https://api.vrchat.cloud/api/1/image/" ~ avatarFile ~ "/1/256"),
+            "currentAvatarImageUrl":
+                JSONValue("https://api.vrchat.cloud/api/1/file/" ~ avatarFile ~ "/1/file"),
+        ]);
+        JSONValue content = JSONValue([
+            "userId": JSONValue("usr_1"),
+            "user":   user,
+        ]);
+        return JSONValue([
+            "type":    JSONValue("friend-update"),
+            "content": JSONValue(content.toString()),
+        ]).toString();
+    }
+
+    FriendsTracker tracker = new FriendsTracker();
+
+    // First sighting seeds; there is no previous state to diff against.
+    tracker.processEvent(parseNewVrcEvent(friendUpdate("active", "file_aaa")));
+    tracker.takePendingSynthetics();
+
+    // Same status, new avatar. The friend has no icon, so their picture is the
+    // avatar thumbnail and it moves: the roster needs redrawing, the log does
+    // not need a row. No avatar-change synthetic either, since the location is
+    // unknown rather than a concrete instance.
+    EventChange picture = tracker.processEvent(parseNewVrcEvent(friendUpdate("active", "file_bbb")));
+    assert(picture.snapshot);
+    assert(picture.loggable == false);
+    assert(tracker.takePendingSynthetics().length == 0);
+
+    // A status change on the same event type is real, and both flags say so.
+    EventChange status = tracker.processEvent(parseNewVrcEvent(friendUpdate("join me", "file_bbb")));
+    assert(status.snapshot);
+    assert(status.loggable);
 }

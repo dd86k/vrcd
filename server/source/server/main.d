@@ -251,7 +251,7 @@ void cmdRun(ref Config config)
         worldCache.enrichWorldName(event);
 
         // Process event to see if a friend changed
-        bool friendsChanged = tracker.processEvent(event);
+        EventChange friendsChanged = tracker.processEvent(event);
         VRCEvent[] synthetics = tracker.takePendingSynthetics();
 
         // Surface self world transitions to the DropAPortal sidecar.
@@ -318,14 +318,17 @@ void cmdRun(ref Config config)
         // already produced a synthetic for them, or nothing in our cached
         // friend state actually moved (VRChat re-emits friend-update /
         // friend-location even when no observable property changed).
+        // A picture change alone does not count: it follows the avatar for
+        // anyone without an icon set, so it redraws the roster without
+        // earning a row in the log.
         // Also drop traveling friend-locations; currently no use for saving it.
         bool suppressRaw = isTraveling
             || (isAvatarNoiseEvent(event.type)
-                && (synthetics.length > 0 || friendsChanged == false));
+                && (synthetics.length > 0 || friendsChanged.loggable == false));
         if (suppressRaw)
         {
-            logTrace("suppressed raw %s (synthetics=%d changed=%s traveling=%s)",
-                event.typeRaw, synthetics.length, friendsChanged, isTraveling);
+            logTrace("suppressed raw %s (synthetics=%d loggable=%s traveling=%s)",
+                event.typeRaw, synthetics.length, friendsChanged.loggable, isTraveling);
         }
         else
         {
@@ -349,7 +352,7 @@ void cmdRun(ref Config config)
             apiServer.broadcast(syn, synId);
         }
 
-        if (friendsChanged)
+        if (friendsChanged.snapshot)
             apiServer.broadcastFriendsSnapshot();
 
         if (tracker.takePendingSelfChange())
