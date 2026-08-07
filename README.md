@@ -67,25 +67,27 @@ to a server-side self-invite.
 ## Architecture
 
 ```text
-+ ~ ~ ~ ~ ~ ~ ~ ~+
-| VRChat servers |
-+~ ~ ~ ~ ~ ~ ~ ~ +
-        ^
-HTTP requests/WS events
-        v
-+----------------+              +-----------------+
-| vrcd-server    | <- JSON-L -> | vrcd-client(s)  |
-| - VRC API sync |              | - Picture meta  |
-| - Friend state |              | - Notifications |
-+----------------+              +-----------------+
-        ^
-      JSON-L
-        v
-+----------------+                    +----------+
-| vrcd-web       | <- Stateless WS -> | Browser  |
-| Acts like a    |                    | - Notifs |
-| client         |                    | - etc. ! |
-+----------------+                    +----------+
+             + ~ ~ ~ ~ ~ ~ ~ ~+
+             | VRChat servers |
+             +~ ~ ~ ~ ~ ~ ~ ~ +
+                      ^
+          HTTP requests / WS events
+                      v
+             +----------------+
+             | vrcd-server    |
+             | - VRC API sync |
+             | - Friend state |
+             +----------------+
+                      ^
+                    JSON-L
+                      v
+          +-----------+-----------+
+          v                       v
++-----------------+      +----------------+                +----------+
+| vrcd-client(s)  |      | vrcd-web       | <- HTTP/WS ->  | Browser  |
+| - Picture meta  |      | - Serves HTML  |                | - Notifs |
+| - Notifications |      | - Same link    |                | - etc. ! |
++-----------------+      +----------------+                +----------+
 ```
 
 Targets:
