@@ -1,4 +1,4 @@
-# ![speech bubble logo with D-like lettering](res/vrcd-logo-32.png) vcrd
+# ![speech bubble logo with D-like lettering](res/vrcd-logo-32.png) vrcd
 
 A little companion suite for VRChat to help you track friend activity,
 inject metadata into photos, and receive VR/desktop notifications.
@@ -82,7 +82,7 @@ HTTP requests/WS events
       JSON-L
         v
 +----------------+                    +----------+
-| vrcd-web       | <- Stateless WS -> | Browswer |
+| vrcd-web       | <- Stateless WS -> | Browser  |
 | Acts like a    |                    | - Notifs |
 | client         |                    | - etc. ! |
 +----------------+                    +----------+
