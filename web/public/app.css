@@ -519,6 +519,63 @@ button.head { cursor: pointer; }
     color: var(--dim); font-size: .8rem; text-align: center; margin-bottom: 1rem;
 }
 
+/* ---- image viewer ------------------------------------------------------
+   A picture on its own over the page. Under the sign-in modal (z-index 25):
+   vrcd-server is blocked waiting on that prompt, so it takes the top of the
+   stack whatever else is open.
+
+   Two bars and the rest is picture. The buttons say the same thing as the
+   wheel and the pinch on purpose - a headset has neither. */
+
+.viewer {
+    z-index: 24; padding: 0;
+    display: flex; flex-direction: column;
+    background: rgba(8, 8, 11, .94);
+}
+.viewer-bar, .viewer-foot {
+    display: flex; align-items: center; gap: .5rem; flex: none; flex-wrap: wrap;
+    padding: .6rem .75rem; background: var(--panel);
+}
+.viewer-bar {
+    border-bottom: 1px solid var(--line);
+    padding-top: calc(.6rem + env(safe-area-inset-top));
+}
+.viewer-foot {
+    border-top: 1px solid var(--line);
+    padding-bottom: calc(.6rem + env(safe-area-inset-bottom));
+}
+/* Both take the whole of the first line, so the buttons stay together on the
+   second when a long name or a phone runs the row out of width. */
+.viewer-title, .viewer-note {
+    flex: 1; min-width: 8rem;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.viewer-title { font-weight: 700; }
+.viewer-note { color: var(--muted); font-size: .8rem; }
+/* Buttons sized for a headset, but only as wide as their labels: the full
+   width `.act` is written for a column of them in the detail pane. */
+.viewer .act { width: auto; flex: none; min-width: 4rem; padding: 0 1.1rem; }
+
+/* The frame the picture is fitted into, and the only part that grows. What
+   hangs outside it when zoomed in is clipped rather than scrolled: panning is
+   the transform, so a scrollbar would be a second way to move it. */
+.viewer-stage {
+    flex: 1; min-height: 0; position: relative;
+    display: grid; place-items: center; overflow: hidden;
+}
+/* touch-action none, or a drag scrolls the page behind the modal instead of
+   panning the picture, and a pinch zooms the whole document. */
+.viewer-img {
+    max-width: 100%; max-height: 100%; display: block;
+    touch-action: none; cursor: grab;
+    user-select: none; -webkit-user-select: none; -webkit-user-drag: none;
+}
+.viewer-img:active { cursor: grabbing; }
+
+/* Anything on the page that opens in the viewer. */
+.zoomable { cursor: zoom-in; }
+.zoomable:focus-visible { outline: 2px solid var(--accent-hi); outline-offset: 2px; }
+
 /* ---- drag hint ---------------------------------------------------------
    Raised while a file is over the window. pointer-events none is load-bearing:
    the drop has to reach the document handler, and an overlay that ate it would

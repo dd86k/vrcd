@@ -832,7 +832,10 @@ function whenText(unix) {
    nothing. A file, version and size never change what they point at, so a
    cached URL never goes stale. */
 var imageURLs = {};
-/* Key -> the img nodes waiting on it. One fetch serves all of them, which is
+/* What the proxy said each held picture is, for the one caller that has to
+   name a file: the viewer's save button. */
+var imageTypes = {};
+/* Key -> the callbacks waiting on it. One fetch serves all of them, which is
    what stops a redraw mid-fetch from starting a second. */
 var imageWaiting = {};
 var imageFailed = {};
@@ -852,14 +855,27 @@ function imageKey(fileId, version, size) {
     return fileId + "/" + version + "/" + size;
 }
 
-function imageInto(img, fileId, version, size) {
-    var key = imageKey(fileId, version, size);
-    if (imageURLs[key]) { img.src = imageURLs[key]; return; }
-    if (imageFailed[key]) return;
+/* Fetch a proxied image and hand the object URL to `then`, or null when it
+   could not be had. One fetch per key however many callers ask for it, and a
+   key already held answers on the spot.
 
-    if (imageWaiting[key]) { imageWaiting[key].push(img); return; }
-    imageWaiting[key] = [img];
+   The viewer asks this way rather than through imageInto: it has a caption to
+   take down and a save button to arm once the full-size picture has actually
+   landed, and an <img> pointed at a URL says nothing about which one it is. */
+function imageThen(fileId, version, size, then) {
+    var key = imageKey(fileId, version, size);
+    if (imageURLs[key]) { then(imageURLs[key]); return; }
+    if (imageFailed[key]) { then(null); return; }
+
+    if (imageWaiting[key]) { imageWaiting[key].push(then); return; }
+    imageWaiting[key] = [then];
     fetchImage(key, fileId, version, size, IMAGE_TRIES);
+}
+
+function imageInto(img, fileId, version, size) {
+    imageThen(fileId, version, size, function (url) {
+        if (url) img.src = url;
+    });
 }
 
 /* Same, but not until the picture is near the viewport.
@@ -910,11 +926,13 @@ function imageWhenVisible(img, fileId, version, size) {
    for an observer would only make them appear late. */
 function badgeInto(img, url) {
     var key = "badge:" + url;
-    if (imageURLs[key]) { img.src = imageURLs[key]; return; }
+    var give = function (found) { if (found) img.src = found; };
+
+    if (imageURLs[key]) { give(imageURLs[key]); return; }
     if (imageFailed[key]) return;
 
-    if (imageWaiting[key]) { imageWaiting[key].push(img); return; }
-    imageWaiting[key] = [img];
+    if (imageWaiting[key]) { imageWaiting[key].push(give); return; }
+    imageWaiting[key] = [give];
     fetchBadge(key, url, IMAGE_TRIES);
 }
 
@@ -931,7 +949,7 @@ function fetchBadge(key, url, tries) {
         if (r.ok === false) { imageDone(key, null); return null; }
         return r.blob();
     }).then(function (blob) {
-        if (blob) imageDone(key, URL.createObjectURL(blob));
+        if (blob) imageDone(key, URL.createObjectURL(blob), blob.type);
     }).catch(function () {
         imageDone(key, null);
     });
@@ -953,21 +971,27 @@ function fetchImage(key, fileId, version, size, tries) {
         if (r.ok === false) { imageDone(key, null); return null; }
         return r.blob();
     }).then(function (blob) {
-        if (blob) imageDone(key, URL.createObjectURL(blob));
+        if (blob) imageDone(key, URL.createObjectURL(blob), blob.type);
     }).catch(function () {
         imageDone(key, null);
     });
 }
 
-function imageDone(key, url) {
+function imageDone(key, url, type) {
     var waiting = imageWaiting[key] || [];
     delete imageWaiting[key];
 
-    if (url === null) { imageFailed[key] = true; return; }
-    imageURLs[key] = url;
-    // Nodes from a render that has since been replaced are detached by now,
-    // and setting src on one of those costs nothing.
-    waiting.forEach(function (img) { img.src = url; });
+    if (url === null) {
+        imageFailed[key] = true;
+    } else {
+        imageURLs[key] = url;
+        imageTypes[key] = type || "";
+    }
+
+    // Callbacks left over from a render that has since been replaced are
+    // pointing at detached nodes by now, and setting src on one of those
+    // costs nothing.
+    waiting.forEach(function (give) { give(url); });
 }
 
 /* The gradient underneath is not a placeholder for a slow image so much as
@@ -1212,7 +1236,12 @@ function entryCard(entry, section) {
 function detailContent(body, entry, section) {
     var kind = sectionInfo(section).kind;
     document.getElementById("detailTitle").textContent = entryName(entry, section);
-    body.appendChild(thumb(entry, section, 512, true));
+
+    // A print is a photograph and a gallery picture was uploaded to be looked
+    // at; a card in a pane is not looking at either of them.
+    var picture = thumb(entry, section, 512, true);
+    viewable(picture, entryImage(entry, section), entryName(entry, section), 512);
+    body.appendChild(picture);
 
     if (kind === "item") detailItemBody(body, entry);
     else if (kind === "print") detailPrintBody(body, entry);
@@ -1915,6 +1944,413 @@ function cropWheel(ev) {
     drawCrop();
 }
 
+/* ----------------------------------------------------------- image viewer */
+
+/* One picture, on its own, over the page: the face on a profile, and anything
+   in STUFF with artwork behind it. A print is a photograph and a profile
+   picture is cropped to a circle in every place it is drawn, so the page has
+   plenty of pictures nothing on it actually shows.
+
+   What the hero and the grid draw are thumbnails; this asks the proxy for size
+   0, which is the file VRChat was given. The thumbnail already in hand goes up
+   first, so the frame is never empty while several megabytes come down the
+   link, and it is replaced in place when they land.
+
+   Zoom starts at fit and only goes in - at fit the whole picture is already
+   there - and pinch, wheel and a pair of buttons all reach it, since a headset
+   has no scroll wheel and a phone has no cursor. */
+
+var VIEWER_ZOOM_MAX = 8;
+/* Where a double-press goes, and comes back from. */
+var VIEWER_TAP_ZOOM = 2.5;
+/* What a button press moves the zoom by. */
+var VIEWER_ZOOM_STEP = 1.6;
+/* How long the second press of a double has to arrive in. */
+var VIEWER_TAP_MS = 350;
+/* How far a press may wander and still be a press rather than a pan. */
+var VIEWER_TAP_SLOP = 12;
+
+/* The viewer while it is open, null the rest of the time. `zoom` is a multiple
+   of the fitted size and `x`/`y` are the picture's offset from the middle of
+   the frame in screen pixels, which is the space the transform is written in.
+   Everything drawn comes from those three. */
+var viewer = null;
+
+/* Params:
+     picture = { id, version }, the shape entryImage() already returns.
+     title   = what to call it in the bar, and in the file if it is saved.
+     preview = thumbnail edge already on screen behind it, or 0 for none. */
+function openViewer(picture, title, preview) {
+    closeViewer();
+    viewer = {
+        picture: picture,
+        title: title || "Picture",
+        zoom: 1,
+        x: 0,
+        y: 0,
+        pointers: {},
+        pinch: 0,
+        /* Where the press being held started, whether it has moved far enough
+           to be a pan, and when and where the last one that was not ended -
+           between them that is a double-press. */
+        pressX: 0,
+        pressY: 0,
+        dragged: false,
+        tapAt: 0,
+        tapX: 0,
+        tapY: 0,
+        url: "",
+        full: false,
+        error: ""
+    };
+    buildViewer();
+
+    // Captured, so a callback that arrives after this one was closed and
+    // another opened does not paint into the new one.
+    var mine = viewer;
+
+    if (preview)
+        imageThen(picture.id, picture.version, preview, function (url) {
+            // Only while the full one is still coming: a thumbnail that
+            // arrives second would otherwise be put back over it.
+            if (viewer === mine && mine.full === false && url) mine.image.src = url;
+        });
+
+    imageThen(picture.id, picture.version, 0, function (url) {
+        if (viewer !== mine) return;
+
+        if (url === null) {
+            mine.error = "That picture could not be fetched";
+            drawViewer();
+            return;
+        }
+        mine.full = true;
+        mine.url = url;
+        mine.image.src = url;
+        drawViewer();
+    });
+}
+
+function closeViewer() {
+    if (viewer === null) return;
+    // The object URL is a cache entry shared with every thumbnail on the page,
+    // so it is not revoked here: it belongs to imageURLs, not to this modal.
+    viewer = null;
+
+    var box = document.getElementById("viewer");
+    box.textContent = "";
+    box.classList.add("hidden");
+}
+
+function buildViewer() {
+    var box = document.getElementById("viewer");
+    box.textContent = "";
+
+    var bar = el("div", "viewer-bar");
+    var title = el("div", "viewer-title", viewer.title);
+    title.id = "viewerTitle";
+    bar.appendChild(title);
+
+    var close = el("button", "act", "CLOSE");
+    close.onclick = closeViewer;
+    bar.appendChild(close);
+    box.appendChild(bar);
+
+    var stage = el("div", "viewer-stage");
+    /* A press beside the picture is a press on nothing, which is the other way
+       out of here.
+
+       Both halves are load-bearing. A click is delivered to the nearest
+       ancestor of where the press began and where it ended, so a pan that
+       starts on the picture and finishes past its edge arrives here looking
+       exactly like a press on the backdrop - hence the drag check. And a press
+       that does begin on the backdrop never reaches viewerDown, so it clears
+       the flag itself or a pan a minute ago would still be suppressing it. */
+    stage.onpointerdown = function (ev) {
+        if (ev.target === stage) viewer.dragged = false;
+    };
+    stage.onclick = function (ev) {
+        if (ev.target === stage && viewer.dragged === false) closeViewer();
+    };
+    stage.onwheel = viewerWheel;
+
+    var img = document.createElement("img");
+    img.className = "viewer-img";
+    img.alt = viewer.title;
+    // The browser's own drag would pick the picture up mid-pan.
+    img.draggable = false;
+    img.onpointerdown = viewerDown;
+    img.onpointermove = viewerMove;
+    img.onpointerup = viewerUp;
+    img.onpointercancel = viewerUp;
+    /* The fitted size is only known once the browser has the picture, and the
+       zoom is a multiple of it - so both the clamp and the caption wait for
+       this. It fires again when the full-size one replaces the thumbnail. */
+    img.onload = function () { clampViewer(); drawViewer(); };
+    stage.appendChild(img);
+
+    viewer.image = img;
+    viewer.stage = stage;
+    box.appendChild(stage);
+
+    var foot = el("div", "viewer-foot");
+    viewer.note = el("div", "viewer-note");
+    foot.appendChild(viewer.note);
+
+    var out = el("button", "act", "-");
+    out.setAttribute("aria-label", "Zoom out");
+    out.onclick = function () { zoomViewer(1 / VIEWER_ZOOM_STEP, 0, 0); };
+    foot.appendChild(out);
+
+    var into = el("button", "act", "+");
+    into.setAttribute("aria-label", "Zoom in");
+    into.onclick = function () { zoomViewer(VIEWER_ZOOM_STEP, 0, 0); };
+    foot.appendChild(into);
+
+    var fit = el("button", "act", "FIT");
+    fit.onclick = fitViewer;
+    foot.appendChild(fit);
+
+    var save = el("button", "act", "SAVE");
+    save.onclick = saveViewer;
+    foot.appendChild(save);
+
+    box.appendChild(foot);
+    box.classList.remove("hidden");
+    drawViewer();
+}
+
+function drawViewer() {
+    if (viewer === null) return;
+
+    viewer.image.style.transform = "translate(" + viewer.x + "px, " +
+        viewer.y + "px) scale(" + viewer.zoom + ")";
+    viewer.note.textContent = viewerNote();
+}
+
+/* The caption under the picture: what went wrong, or what is still coming, or
+   what is there. The dimensions are the file's own, which is the thing the
+   page has nowhere else to say. */
+function viewerNote() {
+    if (viewer.error) return viewer.error;
+    if (viewer.full === false) return "Loading full size...";
+
+    var zoom = Math.round(viewer.zoom * 100) + "%";
+    if (viewer.image.naturalWidth < 1) return zoom;
+    return viewer.image.naturalWidth + " x " + viewer.image.naturalHeight +
+        "  -  " + zoom;
+}
+
+/* Zoom about a point, given relative to the middle of the frame. The buttons
+   pass 0,0 - the middle - since there is no cursor behind them. */
+function zoomViewer(step, atX, atY) {
+    if (viewer === null) return;
+
+    var was = viewer.zoom;
+    viewer.zoom = Math.min(Math.max(viewer.zoom * step, 1), VIEWER_ZOOM_MAX);
+
+    // The point under the cursor stays under it.
+    var moved = viewer.zoom / was;
+    viewer.x = atX + (viewer.x - atX) * moved;
+    viewer.y = atY + (viewer.y - atY) * moved;
+
+    clampViewer();
+    drawViewer();
+}
+
+function fitViewer() {
+    if (viewer === null) return;
+    viewer.zoom = 1;
+    viewer.x = 0;
+    viewer.y = 0;
+    drawViewer();
+}
+
+/* Keep an edge of the picture in the frame. clientWidth is the fitted size -
+   the CSS fits it - so the drawn size is that times the zoom, and half the
+   overhang is how far it can go before the far edge comes into view. */
+function clampViewer() {
+    if (viewer === null) return;
+
+    var overX = Math.max(0,
+        (viewer.image.clientWidth * viewer.zoom - viewer.stage.clientWidth) / 2);
+    var overY = Math.max(0,
+        (viewer.image.clientHeight * viewer.zoom - viewer.stage.clientHeight) / 2);
+
+    viewer.x = Math.min(Math.max(viewer.x, -overX), overX);
+    viewer.y = Math.min(Math.max(viewer.y, -overY), overY);
+}
+
+/* Pan with one pointer, pinch with two, the way the crop frame does. Each of
+   these checks the modal is still up: closing it during a drag tears the
+   picture out from under a captured pointer, and the release still arrives. */
+function viewerDown(ev) {
+    if (viewer === null) return;
+    ev.preventDefault();
+    viewer.image.setPointerCapture(ev.pointerId);
+    viewer.pointers[ev.pointerId] = { x: ev.clientX, y: ev.clientY };
+    viewer.pinch = viewerSpan();
+
+    viewer.pressX = ev.clientX;
+    viewer.pressY = ev.clientY;
+    // A second finger is a pinch, whatever either of them does next.
+    viewer.dragged = Object.keys(viewer.pointers).length > 1;
+}
+
+function viewerMove(ev) {
+    if (viewer === null) return;
+    var held = viewer.pointers[ev.pointerId];
+    if (held === undefined) return;
+    ev.preventDefault();
+
+    var ids = Object.keys(viewer.pointers);
+    if (ids.length === 1) {
+        viewer.x += ev.clientX - held.x;
+        viewer.y += ev.clientY - held.y;
+    }
+    held.x = ev.clientX;
+    held.y = ev.clientY;
+
+    if (Math.abs(ev.clientX - viewer.pressX) +
+        Math.abs(ev.clientY - viewer.pressY) > VIEWER_TAP_SLOP)
+        viewer.dragged = true;
+
+    if (ids.length > 1) {
+        var span = viewerSpan();
+        if (viewer.pinch > 0 && span > 0) {
+            var middle = viewerMiddle();
+            zoomViewer(span / viewer.pinch, middle.x, middle.y);
+        }
+        viewer.pinch = span;
+    }
+
+    clampViewer();
+    drawViewer();
+}
+
+function viewerUp(ev) {
+    if (viewer === null) return;
+
+    var was = viewer.pointers[ev.pointerId] !== undefined;
+    delete viewer.pointers[ev.pointerId];
+    // Whichever finger is left starts a fresh span, or the next move jumps by
+    // the distance between the two.
+    viewer.pinch = viewerSpan();
+
+    if (was && viewer.dragged === false) viewerTap(ev);
+}
+
+function viewerSpan() {
+    var ids = Object.keys(viewer.pointers);
+    if (ids.length < 2) return 0;
+    var a = viewer.pointers[ids[0]], b = viewer.pointers[ids[1]];
+    return Math.sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y));
+}
+
+/* Where a pinch is centred, relative to the middle of the frame. */
+function viewerMiddle() {
+    var ids = Object.keys(viewer.pointers);
+    var a = viewer.pointers[ids[0]], b = viewer.pointers[ids[1]];
+    var box = viewer.stage.getBoundingClientRect();
+    return {
+        x: (a.x + b.x) / 2 - (box.left + box.width / 2),
+        y: (a.y + b.y) / 2 - (box.top + box.height / 2)
+    };
+}
+
+function viewerWheel(ev) {
+    if (viewer === null) return;
+    ev.preventDefault();
+
+    var box = viewer.stage.getBoundingClientRect();
+    zoomViewer(Math.exp(-ev.deltaY / 400),
+        ev.clientX - (box.left + box.width / 2),
+        ev.clientY - (box.top + box.height / 2));
+}
+
+/* Double-press to zoom in where it was pressed, double-press again to come
+   back: the one gesture that means the same thing with a mouse, a finger and a
+   controller.
+
+   Counted here rather than left to dblclick. The pointer handlers
+   preventDefault to keep a drag from selecting the picture or scrolling the
+   page, and a browser is then entitled to send no compatibility mouse events
+   at all - and a touchscreen would not send a dblclick anyway. */
+function viewerTap(ev) {
+    var now = Date.now();
+    var second = viewer.tapAt > 0 && now - viewer.tapAt < VIEWER_TAP_MS &&
+        Math.abs(ev.clientX - viewer.tapX) +
+        Math.abs(ev.clientY - viewer.tapY) < VIEWER_TAP_SLOP * 2;
+
+    // A third press starts counting again rather than reading as another
+    // double against the second.
+    viewer.tapAt = second ? 0 : now;
+    viewer.tapX = ev.clientX;
+    viewer.tapY = ev.clientY;
+    if (second === false) return;
+
+    if (viewer.zoom > 1) { fitViewer(); return; }
+
+    var box = viewer.stage.getBoundingClientRect();
+    zoomViewer(VIEWER_TAP_ZOOM,
+        ev.clientX - (box.left + box.width / 2),
+        ev.clientY - (box.top + box.height / 2));
+}
+
+/* Keeping the picture. The bytes are already in the browser as an object URL,
+   so this is a link click and nothing goes over the network again. Before the
+   full-size one lands there is nothing worth saving - the thumbnail on screen
+   is not what was asked for - so it says so rather than saving that. */
+function saveViewer() {
+    if (viewer === null) return;
+    if (viewer.url === "") {
+        showToast(viewer.error || "Still fetching that picture", true);
+        return;
+    }
+
+    var link = document.createElement("a");
+    link.href = viewer.url;
+    link.download = viewerFileName();
+    link.click();
+}
+
+var IMAGE_EXTENSIONS = {
+    "image/png": "png", "image/jpeg": "jpg",
+    "image/webp": "webp", "image/gif": "gif"
+};
+
+/* A display name is not a file name: it can hold a slash, and on Windows a
+   colon or a quote. Everything but letters, digits, dots and dashes becomes an
+   underscore, which leaves something recognisable and safe to write. */
+function viewerFileName() {
+    var mime = imageTypes[imageKey(viewer.picture.id, viewer.picture.version, 0)];
+    var name = viewer.title.replace(/[^\w.-]+/g, "_").replace(/^[_.]+/, "");
+    return (name || viewer.picture.id) + "." + (IMAGE_EXTENSIONS[mime] || "png");
+}
+
+/* Make a picture on the page open in the viewer. The node keeps whatever it
+   already is - the hero face and a 4:3 card are both a box with an <img> in
+   them, and neither wants to become a <button> - so the role and the key
+   handler are what a keyboard and a screen reader go by. */
+function viewable(node, picture, title, preview) {
+    if (!picture) return node;
+
+    node.classList.add("zoomable");
+    node.tabIndex = 0;
+    node.setAttribute("role", "button");
+    node.setAttribute("aria-label", "View " + title + " full size");
+
+    var open = function () { openViewer(picture, title, preview); };
+    node.onclick = open;
+    node.onkeydown = function (ev) {
+        if (ev.key !== "Enter" && ev.key !== " ") return;
+        // Space scrolls the pane underneath otherwise.
+        ev.preventDefault();
+        open();
+    };
+    return node;
+}
+
 /* --------------------------------------------------------- drag and drop */
 
 /* A file dragged onto the window is the other way into the crop modal. The
@@ -2472,7 +2908,14 @@ function renderProfile(body, person, opts) {
     var p = mergeProfile(person, full);
 
     var hero = el("div", "hero");
-    hero.appendChild(avatar(p.displayName || "?", true, p));
+    /* The face opens full size. Every place this page draws a profile picture
+       crops it to a circle, so the picture somebody actually uploaded is not
+       otherwise on screen anywhere. */
+    var face = avatar(p.displayName || "?", true, p);
+    if (p.imageFileId)
+        viewable(face, { id: p.imageFileId, version: p.imageVersion || 1 },
+            p.displayName || "Profile picture", AV_BIG_SIZE);
+    hero.appendChild(face);
     hero.appendChild(el("div", "name", p.displayName || p.id));
 
     // Pronouns ride with the name rather than sitting in a row further down:
@@ -3524,13 +3967,22 @@ document.getElementById("search").oninput = function (ev) {
     renderList();
 };
 
-/* Escape leaves the crop modal but not the sign-in one: the server is blocked
-   waiting on that answer, and a stray key is not one. */
+/* Escape leaves the viewer and the crop modal but not the sign-in one: the
+   server is blocked waiting on that answer, and a stray key is not one. The
+   viewer goes first, being the one that can be opened over the other. */
 document.addEventListener("keydown", function (ev) {
-    if (ev.key === "Escape" && crop) closeCrop();
+    if (ev.key !== "Escape") return;
+    if (viewer)    closeViewer();
+    else if (crop) closeCrop();
 });
 
-window.addEventListener("resize", layoutCrop);
+window.addEventListener("resize", function () {
+    layoutCrop();
+    // The frame changed size under a picture that may be zoomed into a corner
+    // of it, so what was against an edge has to be pulled back to one.
+    clampViewer();
+    drawViewer();
+});
 
 watchDrops();
 render();

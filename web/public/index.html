@@ -72,6 +72,11 @@
     <nav class="bottom" id="bottom"></nav>
 </div>
 
+<!-- One picture on its own: a profile face, a print, anything in STUFF with
+     artwork. Before the sign-in modal on purpose, so a prompt the server is
+     blocked on lands over it rather than under it. -->
+<div id="viewer" class="modal viewer hidden" role="dialog" aria-modal="true" aria-labelledby="viewerTitle"></div>
+
 <!-- Filled in by app.js when vrcd-server asks a front-end to sign it in to
      VRChat. Empty and hidden the rest of the time. -->
 <div id="signin" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="signinTitle"></div>
