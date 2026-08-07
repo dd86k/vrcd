@@ -620,7 +620,13 @@ function renderOnline(body) {
         body.appendChild(awayBox);
     }
 
-    var down = roster.offline.filter(function (f) { return matches(f.displayName); });
+    // Offline friends are not what this tab is for and TOOLS carries the whole
+    // list flat, so the section is drawn only for a search: a name typed here
+    // that came back empty because they happen to be offline reads as a bug,
+    // when "they are offline" is the answer the search was asking for.
+    var down = view.filter
+        ? roster.offline.filter(function (f) { return matches(f.displayName); })
+        : [];
     if (down.length) {
         shown++;
         body.appendChild(el("div", "section", "Offline (" + down.length + ")"));
@@ -629,10 +635,12 @@ function renderOnline(body) {
         body.appendChild(downBox);
     }
 
+    // Nobody online with a roster in hand is a different answer than a roster
+    // that has not arrived, now that the offline ones no longer fill the pane.
     if (shown === 0)
         body.appendChild(placeholder(view.filter
             ? "Nothing matches that filter."
-            : "No friend data yet."));
+            : (roster.offline.length ? "No friends online." : "No friend data yet.")));
 }
 
 function renderFeed(body) {

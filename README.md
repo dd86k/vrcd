@@ -78,6 +78,14 @@ HTTP requests/WS events
 | - VRC API sync |              | - Picture meta  |
 | - Friend state |              | - Notifications |
 +----------------+              +-----------------+
+        ^
+      JSON-L
+        v
++----------------+                    +----------+
+| vrcd-web       | <- Stateless WS -> | Browswer |
+| Acts like a    |                    | - Notifs |
+| client         |                    | - etc. ! |
++----------------+                    +----------+
 ```
 
 Targets:
