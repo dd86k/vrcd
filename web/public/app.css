@@ -428,6 +428,9 @@ button.head { cursor: pointer; }
    characters wide, and none of these fields are. The language list is a
    `select` and gets the same box, since that is the one control a headset and
    a phone both render as a list of their own. */
+/* Closed, the editor is one button under another one. The gap is a section
+   heading's top padding, which is what separates them once it is open. */
+.act.edit-profile { margin-top: 1rem; }
 .note-input { width: 100%; }
 .bio-input {
     min-height: 8rem; line-height: 1.5; padding: .7rem .8rem; resize: vertical;

@@ -3225,7 +3225,10 @@ function profileEditor(body, p, ready) {
     var offline = state.connected === false;
 
     if (profileDraft === null) {
-        var open = el("button", "act", "EDIT PROFILE");
+        // Spaced off the picker above it: two full-width buttons touching read
+        // as a pair, and a slip off SET STATUS is the one that reaches VRChat.
+        // The gap is the same one the section heading gives when this is open.
+        var open = el("button", "act edit-profile", "EDIT PROFILE");
         open.disabled = ready === false || offline || busy;
         open.onclick = function () {
             profileDraft = profileDraftOf(p);
