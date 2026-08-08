@@ -423,6 +423,20 @@ button.head { cursor: pointer; }
    left to itself is about twenty characters wide. */
 .status-message { width: 100%; margin-bottom: .5rem; }
 
+/* The profile editor under the picker. Every box takes the width, for the same
+   reason the message box does: an input left to itself is about twenty
+   characters wide, and none of these fields are. The language list is a
+   `select` and gets the same box, since that is the one control a headset and
+   a phone both render as a list of their own. */
+.note-input { width: 100%; }
+.bio-input {
+    min-height: 8rem; line-height: 1.5; padding: .7rem .8rem; resize: vertical;
+}
+select.note-input { padding: 0 .6rem; }
+/* The three link boxes as one stack: separate margins would space them like
+   three separate sections. */
+.fields { display: flex; flex-direction: column; gap: .5rem; }
+
 .placeholder { color: var(--dim); text-align: center; padding: 4rem 1rem; font-size: .9rem; }
 .placeholder b { display: block; color: var(--muted); margin-bottom: .5rem; }
 

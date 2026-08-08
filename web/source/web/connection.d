@@ -48,6 +48,11 @@ private enum long PROTOCOL_MODERATION = 3;
 /// Protocol version that added full user profiles (`get_user`).
 private enum long PROTOCOL_PROFILES = 7;
 
+/// Protocol version that added profile editing (`set_profile`). An older
+/// server answers it with an `error`, so the editor is not drawn at all rather
+/// than offering a SAVE that cannot work.
+private enum long PROTOCOL_PROFILE_EDIT = 8;
+
 /// Byte budget for proxied images. Thumbnails run tens of kilobytes each, so
 /// this holds a few hundred of them; past that the oldest are dropped and
 /// re-fetched if they are looked at again.
@@ -134,6 +139,36 @@ struct StatusUpdate
     /// the request left alone.
     string status;
     string statusDescription;
+    bool success;
+    string error;
+}
+
+/// Which fields a profile edit carries. Separate from the values, since an
+/// empty bio is a bio somebody cleared and an absent one is a bio the editor
+/// did not touch.
+struct ProfileFields
+{
+    bool bio;
+    bool pronouns;
+    bool links;
+    bool languages;
+
+    /// Whether anything at all is being changed.
+    bool any() const
+    {
+        return bio || pronouns || links || languages;
+    }
+}
+
+/// Outcome of the most recent profile edit, on the same terms as
+/// `StatusUpdate`: the page is waiting on it, and so is every other browser
+/// open on the same profile.
+struct ProfileUpdate
+{
+    /// False until a profile edit has been asked for this session.
+    bool attempted;
+    /// True while vrcd-server has yet to answer for one.
+    bool pending;
     bool success;
     string error;
 }
@@ -371,6 +406,20 @@ class ServerLink
     {
         synchronized (stateMutex)
             return lastStatus;
+    }
+
+    /// Outcome of the most recent profile edit.
+    ProfileUpdate profileResult()
+    {
+        synchronized (stateMutex)
+            return lastProfile;
+    }
+
+    /// Whether vrcd-server is new enough to take a profile edit at all.
+    bool canEditProfile()
+    {
+        synchronized (stateMutex)
+            return linkStatus.serverVersion >= PROTOCOL_PROFILE_EDIT;
     }
 
     /// Pending notifications, oldest first. Empty until the server's
@@ -970,6 +1019,66 @@ class ServerLink
         logWarn("Status change dropped: no link to vrcd-server");
     }
 
+    /// Edit our own VRChat profile: bio, the links pinned under it, pronouns,
+    /// languages. Safe to call from an HTTP thread; the reply arrives
+    /// asynchronously as a `set_profile_result`.
+    ///
+    /// Each field is sent only when its flag is set, and the flag is separate
+    /// from the value being empty because an empty value is how a field is
+    /// cleared. The editor sets a flag for what it changed, so two browsers
+    /// open on the same profile do not write each other's stale fields back.
+    ///
+    /// Params:
+    ///   fields = Which of the four the request carries.
+    ///   bio = Profile bio, sent when `fields.bio` is set.
+    ///   pronouns = Pronouns, sent when `fields.pronouns` is set.
+    ///   links = Links pinned under the bio, sent when `fields.links` is set.
+    ///   languages = ISO 639-3 codes, sent when `fields.languages` is set.
+    void requestProfile(ProfileFields fields, string bio, string pronouns,
+        string[] links, string[] languages)
+    {
+        logInfo("Editing profile (%s%s%s%s)",
+            fields.bio       ? "bio "       : "",
+            fields.pronouns  ? "pronouns "  : "",
+            fields.links     ? "links "     : "",
+            fields.languages ? "languages"  : "");
+
+        JSONValue message = JSONValue([ "type": JSONValue("set_profile") ]);
+        if (fields.bio)
+            message["bio"] = JSONValue(bio);
+        if (fields.pronouns)
+            message["pronouns"] = JSONValue(pronouns);
+        if (fields.links)
+            message["bio_links"] = JSONValue(links);
+        if (fields.languages)
+            message["languages"] = JSONValue(languages);
+
+        // Published before the send, like a status change: this is what the
+        // editor draws "saving" from, and it belongs up while the request is
+        // on the wire.
+        ProfileUpdate asked;
+        asked.attempted = true;
+        asked.pending = true;
+
+        synchronized (stateMutex)
+            lastProfile = asked;
+        notifyChange();
+
+        if (sendMessage(message))
+            return;
+
+        // Nothing carried it, so answer here: the page is waiting on a
+        // set_profile_result that no one is going to send.
+        asked.pending = false;
+        asked.error = "Not connected to vrcd-server";
+
+        synchronized (stateMutex)
+            lastProfile = asked;
+        notifyChange();
+
+        logWarn("Profile edit dropped: no link to vrcd-server");
+    }
+
     /// Answer a notification: `accept` or `hide` on a v1 one, `respond` or
     /// `hide` on a v2 one. Safe to call from an HTTP thread; the reply
     /// arrives asynchronously as a `notification_action_result`.
@@ -1123,6 +1232,7 @@ private:
     NotificationInfo[] inbox;
     NotifyActionResult lastNotifyAction;
     StatusUpdate lastStatus;
+    ProfileUpdate lastProfile;
     AuthPrompt pendingAuth;
     /// One per entry in CONTENT_SECTIONS, in that order.
     ContentSnapshot[CONTENT_SECTIONS.length] sections;
@@ -1342,6 +1452,14 @@ private:
                 {
                     lastStatus.pending = false;
                     lastStatus.error = "Not connected to vrcd-server";
+                }
+
+                // And a profile edit, for the same reason: an editor stuck on
+                // "saving" cannot even be pressed again.
+                if (lastProfile.pending)
+                {
+                    lastProfile.pending = false;
+                    lastProfile.error = "Not connected to vrcd-server";
                 }
 
                 // A request that was in flight died with the socket. The
@@ -1764,6 +1882,37 @@ private:
                 logInfo("Status updated");
             else
                 logWarn("Status update failed: %s", statusError);
+            break;
+
+        case "set_profile_result":
+            string profileError = jsonString(message, "error");
+            bool profileOK;
+            if (const(JSONValue) *v = "success" in message)
+                profileOK = v.type == JSONType.true_;
+
+            string editedId;
+            synchronized (stateMutex)
+            {
+                lastProfile.attempted = true;
+                lastProfile.pending = false;
+                lastProfile.success = profileOK;
+                lastProfile.error = profileError;
+                editedId = selfInfo.id;
+            }
+
+            // The cached profile now describes the profile as it was. Only some
+            // of what was written comes back in the `self` snapshot -- languages
+            // are not in it at all, and a field that was cleared is empty there,
+            // which is exactly the case the merge lets the older record win. So
+            // the copy held here goes, and the page's next look re-fetches it.
+            if (profileOK && editedId.length > 0)
+                profiles.forget(editedId);
+            notifyChange();
+
+            if (profileOK)
+                logInfo("Profile updated");
+            else
+                logWarn("Profile update failed: %s", profileError);
             break;
 
         case "auth_request":

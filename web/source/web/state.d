@@ -226,6 +226,22 @@ string buildStateJSON(ServerLink link)
         ]);
     }
 
+    // The profile editor on the same tab, and on the same terms as the picker
+    // above it. `can_edit` is separate from the outcome: an older vrcd-server
+    // would answer `set_profile` with an error, so the editor is not drawn at
+    // all rather than offering a SAVE that cannot work.
+    root["can_edit_profile"] = JSONValue(link.canEditProfile());
+    ProfileUpdate profileUpdate = link.profileResult();
+    if (profileUpdate.attempted)
+    {
+        root["profile_action"] = JSONValue([
+            "attempted": JSONValue(true),
+            "pending":   JSONValue(profileUpdate.pending),
+            "success":   JSONValue(profileUpdate.success),
+            "error":     JSONValue(profileUpdate.error),
+        ]);
+    }
+
     if (notifyAction.attempted)
     {
         root["notify_action"] = JSONValue([

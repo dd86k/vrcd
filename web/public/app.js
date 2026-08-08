@@ -30,6 +30,15 @@ var STATUS_CHOICES = [
    on the box so the limit is visible while typing rather than after saving. */
 var STATUS_MESSAGE_MAX = 32;
 
+/* The same for the profile editor's fields. vrcd-server checks all four again,
+   being the side that answers to VRChat and the side a second front-end also
+   goes through; here they only keep a box from taking a character that would
+   come back refused. */
+var BIO_MAX = 512;
+var PRONOUNS_MAX = 32;
+var LINKS_MAX = 3;
+var LANGUAGES_MAX = 3;
+
 var PLATFORMS = {
     "standalonewindows": "PC",
     "android": "Quest",
@@ -268,8 +277,20 @@ var lastModKey = "";
    flight; the snapshot's own `pending` takes over. */
 var statusChoice = null;
 var statusDraft = null;
-var statusCaret = -1;
 var statusPending = false;
+
+/* The profile editor under it, staged the same way and for the same reasons:
+   null while it is closed, and a draft of every field it edits once it opens.
+   Nothing of it lives in the DOM either -- a snapshot arrives on every friend
+   movement and takes the boxes with it.
+
+   `profileWasPending` is how an answer is told apart from the snapshot that
+   merely repeats the last one: the same edit sent twice is identical in the
+   snapshot, so what is watched for is the pending flag falling rather than the
+   outcome changing. */
+var profileDraft = null;
+var profilePending = false;
+var profileWasPending = false;
 /* False until a snapshot has been through the reporters. The snapshot carries
    the last outcome indefinitely, so a page that just opened would otherwise
    announce a change somebody made an hour ago; the line under the picker still
@@ -1090,7 +1111,6 @@ function renderStuff(body) {
 
     body.appendChild(sectionSwitcher());
     body.appendChild(sectionBar(info, held));
-    restorePrintCaret();
 
     if (held.error) body.appendChild(el("div", "err", held.error));
 
@@ -1197,18 +1217,6 @@ function sectionBar(info, held) {
         bar.appendChild(note);
     }
     return bar;
-}
-
-/* Put the caption box back the way the redraw found it. Called once the bar is
-   in the document, since focus does nothing to a detached node. */
-function restorePrintCaret() {
-    if (printCaret < 0) return;
-
-    var note = document.getElementById("printNote");
-    if (note === null) return;
-
-    note.focus();
-    note.setSelectionRange(printCaret, printCaret);
 }
 
 function entryCard(entry, section) {
@@ -1476,11 +1484,10 @@ function contentAct(id, action, slot, button) {
 
 /* ---------------------------------------------------------- stuff upload */
 
-/* Caption for the next print, and where the caret was in it. Both kept out of
-   the DOM so a redraw mid-typing does not take them with it; -1 means the box
-   does not have focus and should not be given it back. */
+/* Caption for the next print, kept out of the DOM so a redraw mid-typing does
+   not take it with it (the caret is handled for every box at once, see
+   rememberCaret). */
 var printNote = "";
-var printCaret = -1;
 
 /* A picked file does not go straight up. VRChat takes PNG only, at most
    2000x2000, and refuses a sticker or emoji that is not square, so a phone
@@ -2946,6 +2953,11 @@ function renderProfile(body, person, opts) {
         body.appendChild(el("div", "hint", why || "Loading profile..."));
     }
 
+    // Open, the editor stands in for the three blocks below that it covers:
+    // they would otherwise sit above their own boxes saying the same thing.
+    var editing = opts.editStatus === true && profileDraft !== null;
+    if (opts.editStatus) profileEditor(body, p, full !== null);
+
     if (p.badges && p.badges.length) {
         body.appendChild(el("div", "section", "Badges")); // padding
         body.appendChild(badgeStrip(p.badges));
@@ -2954,21 +2966,17 @@ function renderProfile(body, person, opts) {
     // Its own block rather than a row in the list: a bio runs to 512
     // characters over as many lines as somebody felt like, and a definition
     // list is the wrong shape for a paragraph.
-    if (p.bio) {
+    if (p.bio && editing === false) {
         body.appendChild(el("div", "section", "Bio"));
         body.appendChild(el("div", "bio", p.bio));
     }
 
-    if (p.bioLinks && p.bioLinks.length) {
+    if (p.bioLinks && p.bioLinks.length && editing === false) {
         body.appendChild(el("div", "section", "Links"));
         var links = el("dl", "kv");
         p.bioLinks.forEach(function (url, index) {
             var dd = el("dd");
-            var a = el("a", null, url);
-            a.href = url;
-            a.rel = "noopener noreferrer";
-            a.target = "_blank";
-            dd.appendChild(a);
+            dd.appendChild(profileLink(url));
             links.appendChild(el("dt", null, "#" + (index + 1)));
             links.appendChild(dd);
         });
@@ -2983,7 +2991,7 @@ function renderProfile(body, person, opts) {
     if (p.platform)
         pair(kv, "Platform", PLATFORMS[p.platform] || p.platform);
     if (opts.where) pair(kv, "Where", opts.where);
-    if (p.languages && p.languages.length)
+    if (p.languages && p.languages.length && editing === false)
         pair(kv, "Languages", p.languages.map(languageName).join(", "));
     if (p.dateJoined) pair(kv, "Joined", whenDay(p.dateJoined));
     // Only for somebody who is not standing somewhere we can already see, and
@@ -3002,6 +3010,21 @@ function renderProfile(body, person, opts) {
     // the pane's own order is what keeps a block away from a self-invite.
     if (opts.moderate) moderationActions(actions, p.id, opts.friend === true);
     body.appendChild(actions);
+}
+
+/* One of the links pinned under a bio, as something safe to press. VRChat
+   stores whatever it was handed, and an href is not only ever a link:
+   `javascript:` in one is script, running on a signed-in page, out of a field
+   any account can write. The two schemes that are links become an anchor and
+   everything else stays text, which is still readable and still copyable. */
+function profileLink(url) {
+    if (/^https?:\/\//i.test(url) === false) return el("span", null, url);
+
+    var a = el("a", null, url);
+    a.href = url;
+    a.rel = "noopener noreferrer";
+    a.target = "_blank";
+    return a;
 }
 
 /* The row of pills under the name: trust rank, and the marks that qualify it.
@@ -3181,12 +3204,271 @@ function statusEditor(body, self) {
         body.appendChild(el("div", "err", state.status_action.error));
 }
 
+/* The rest of your own profile: the bio, the links pinned under it, pronouns,
+   and the languages you speak. Behind a button rather than always open, unlike
+   the status picker above it. Two reasons: this is five boxes of text where
+   that is four rows, and a form standing open on a tab that redraws itself
+   every time a friend moves is a form somebody edits by accident.
+
+   Open, it stands in for the blocks it covers (see renderProfile), so a bio is
+   either being read or being written, never both at once. It is seeded from the
+   fetched profile rather than from the roster: the roster carries no languages
+   at all, and a form seeded without them would clear them the first time it
+   saved. So the button waits for the profile to land. */
+function profileEditor(body, p, ready) {
+    // An older vrcd-server answers `set_profile` with an error, so the button
+    // is not offered at all rather than failing when it is pressed.
+    if (state.can_edit_profile === false) return;
+
+    var busy = profilePending ||
+        (state.profile_action !== undefined && state.profile_action.pending === true);
+    var offline = state.connected === false;
+
+    if (profileDraft === null) {
+        var open = el("button", "act", "EDIT PROFILE");
+        open.disabled = ready === false || offline || busy;
+        open.onclick = function () {
+            profileDraft = profileDraftOf(p);
+            renderList();
+        };
+        body.appendChild(open);
+        return;
+    }
+
+    body.appendChild(el("div", "section", "Bio"));
+    var bio = el("textarea", "note-input bio-input");
+    bio.id = "profileBio";
+    bio.rows = 6;
+    bio.maxLength = BIO_MAX;
+    bio.placeholder = "Anything you want on your profile";
+    bio.value = profileDraft.bio;
+    bio.disabled = busy || offline;
+    body.appendChild(bio);
+
+    // Under the box rather than beside the heading: what it counts is what is
+    // in the box, and VRChat cuts a bio that runs past it.
+    var count = el("div", "hint", bioCount(profileDraft.bio));
+    body.appendChild(count);
+
+    body.appendChild(el("div", "section", "Links"));
+    var links = el("div", "fields");
+    // Always all three, since VRChat takes three: an empty one is a row to
+    // type into, which is one press fewer than a button that adds one.
+    profileDraft.links.forEach(function (url, index) {
+        var box = el("input", "note-input");
+        box.id = "profileLink" + index;
+        box.type = "url";
+        box.placeholder = "https://";
+        box.value = url;
+        box.disabled = busy || offline;
+        box.oninput = function (ev) {
+            profileDraft.links[index] = ev.target.value;
+            arm();
+        };
+        links.appendChild(box);
+    });
+    body.appendChild(links);
+
+    body.appendChild(el("div", "section", "Pronouns"));
+    var pronouns = el("input", "note-input");
+    pronouns.id = "profilePronouns";
+    pronouns.type = "text";
+    pronouns.maxLength = PRONOUNS_MAX;
+    pronouns.placeholder = "they/them";
+    pronouns.value = profileDraft.pronouns;
+    pronouns.disabled = busy || offline;
+    body.appendChild(pronouns);
+
+    body.appendChild(el("div", "section", "Languages"));
+    body.appendChild(languagePicker(busy || offline));
+
+    var actions = el("div", "actions");
+    var save = el("button", "act", busy ? "SAVING..." : "SAVE PROFILE");
+    save.onclick = function () { sendProfile(p); };
+    actions.appendChild(save);
+
+    // Not aligned with SAVE and not a confirm: what it discards is text that is
+    // still on screen, and the way back is to type it again.
+    var cancel = el("button", "act", "CANCEL");
+    cancel.disabled = busy;
+    cancel.onclick = function () {
+        profileDraft = null;
+        renderList();
+    };
+    actions.appendChild(cancel);
+    body.appendChild(actions);
+
+    if (busy === false && state.profile_action !== undefined &&
+        state.profile_action.error)
+        body.appendChild(el("div", "err", state.profile_action.error));
+
+    /* SAVE follows what is in the boxes, and typing does not redraw the pane
+       (a redraw would take the caret with it), so it is armed from here. */
+    function arm() {
+        var dirty = Object.keys(profileChanges(p)).length > 0;
+        save.disabled = busy || offline || dirty === false;
+        save.classList.toggle("primary", save.disabled === false);
+    }
+
+    bio.oninput = function (ev) {
+        profileDraft.bio = ev.target.value;
+        count.textContent = bioCount(profileDraft.bio);
+        arm();
+    };
+    pronouns.oninput = function (ev) {
+        profileDraft.pronouns = ev.target.value;
+        arm();
+    };
+    arm();
+}
+
+function bioCount(text) {
+    // Code points, which is what VRChat counts. `length` would count UTF-16
+    // units, and a bio of emoji would read as twice what VRChat sees -- the
+    // box's own maxlength counts those units too, so it stops a little early
+    // rather than a little late, which is the right way round.
+    return Array.from(text).length + " / " + BIO_MAX;
+}
+
+/* The languages already picked, each one press away from going, and a list to
+   add one from. A picked language is a chip rather than a row: three of them
+   fit on one line, and the list they come from is thirty entries long.
+
+   The list is the same names the profile is read with, so a language VRChat
+   knows and this page does not cannot be added here -- it can still be kept,
+   since a chip is drawn from the code either way. */
+function languagePicker(disabled) {
+    var box = el("div");
+
+    var chips = el("div", "chips");
+    profileDraft.languages.forEach(function (code) {
+        var chip = el("button", "chip on");
+        chip.appendChild(el("span", null, languageName(code)));
+        chip.appendChild(el("span", "n", "REMOVE"));
+        chip.disabled = disabled;
+        chip.onclick = function () {
+            profileDraft.languages = profileDraft.languages.filter(
+                function (held) { return held !== code; });
+            renderList();
+        };
+        chips.appendChild(chip);
+    });
+    if (profileDraft.languages.length === 0)
+        chips.appendChild(el("div", "hint", "None set."));
+    box.appendChild(chips);
+
+    var full = profileDraft.languages.length >= LANGUAGES_MAX;
+    var add = el("select", "note-input");
+    add.id = "profileLanguage";
+    add.disabled = disabled || full;
+    var head = el("option", null,
+        full ? "VRChat takes " + LANGUAGES_MAX + " languages" : "Add a language...");
+    // Explicit, since an option with no value of its own is its own text.
+    head.value = "";
+    add.appendChild(head);
+
+    Object.keys(LANGUAGES).map(function (code) {
+        return { code: code, name: LANGUAGES[code] };
+    }).filter(function (entry) {
+        return profileDraft.languages.indexOf(entry.code) < 0;
+    }).sort(function (a, b) {
+        return a.name < b.name ? -1 : (a.name > b.name ? 1 : 0);
+    }).forEach(function (entry) {
+        var option = el("option", null, entry.name);
+        option.value = entry.code;
+        add.appendChild(option);
+    });
+
+    // A pick is staged like everything else here: it moves a chip, and nothing
+    // reaches VRChat until SAVE PROFILE.
+    add.onchange = function (ev) {
+        if (ev.target.value === "") return;
+        profileDraft.languages = profileDraft.languages.concat([ ev.target.value ]);
+        renderList();
+    };
+    box.appendChild(add);
+    return box;
+}
+
+/* The draft the editor opens with: what VRChat has, in the shape the boxes
+   want. The links are padded to three so every box exists whether or not it
+   has anything in it. */
+function profileDraftOf(p) {
+    var links = (p.bioLinks || []).slice(0, LINKS_MAX);
+    while (links.length < LINKS_MAX) links.push("");
+
+    return {
+        bio: p.bio || "",
+        pronouns: p.pronouns || "",
+        links: links,
+        languages: (p.languages || []).slice()
+    };
+}
+
+/* What the draft changes about the profile VRChat has, as the body to send.
+   Only the fields that actually moved: an untouched one costs a VRChat call
+   for nothing, and two browsers open on the same profile would otherwise write
+   each other's stale fields back over each other. */
+function profileChanges(p) {
+    var body = {};
+
+    if (profileDraft.bio !== (p.bio || "")) body.bio = profileDraft.bio;
+    if (profileDraft.pronouns.trim() !== (p.pronouns || ""))
+        body.pronouns = profileDraft.pronouns.trim();
+
+    // A blank box is a link not filled in, which is also how one is removed.
+    var links = profileDraft.links.map(function (url) { return url.trim(); })
+        .filter(function (url) { return url.length > 0; });
+    if (sameStrings(links, p.bioLinks || []) === false) body.bio_links = links;
+
+    if (sameStrings(profileDraft.languages, p.languages || []) === false)
+        body.languages = profileDraft.languages;
+
+    return body;
+}
+
+function sameStrings(a, b) {
+    if (a.length !== b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+        if (a[i] !== b[i]) return false;
+    }
+    return true;
+}
+
+/* Send what the editor changed. Nothing to send closes it: pressing SAVE on a
+   draft that matches what VRChat has is the same intent as CANCEL, and the
+   round trip would say nothing back. The outcome arrives in the next
+   snapshot. */
+function sendProfile(p) {
+    var body = profileChanges(p);
+    if (Object.keys(body).length === 0) {
+        profileDraft = null;
+        renderList();
+        return;
+    }
+
+    profilePending = true;
+    if (view.tab === "profile") renderList();
+
+    fetch("/api/profile", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+    }).then(function (r) {
+        if (r.ok) return;
+        profilePending = false;
+        showToast("The vrcd web server refused that edit", true);
+        if (view.tab === "profile") renderList();
+    }).catch(function () {
+        profilePending = false;
+        showToast("Could not reach the vrcd web server", true);
+        if (view.tab === "profile") renderList();
+    });
+}
+
 function renderProfileTab(body) {
     if (state.self) {
         renderProfile(body, state.self, { editStatus: true });
-        // The box is in the document by now; focus does nothing to a node that
-        // is not.
-        restoreStatusCaret();
     } else {
         body.appendChild(placeholder("Not signed in to VRChat yet."));
     }
@@ -3250,15 +3532,7 @@ function renderList() {
     var body = document.getElementById("listBody");
     var search = document.getElementById("search");
 
-    // Read off the print caption and status message boxes before the redraw
-    // drops them, so the caret can be put back where the typing was. -1 means
-    // it did not have focus and must not be given it.
-    var note = document.getElementById("printNote");
-    printCaret = note && document.activeElement === note ? note.selectionStart : -1;
-    var message = document.getElementById("statusMessage");
-    statusCaret = message && document.activeElement === message
-        ? message.selectionStart : -1;
-
+    rememberCaret(body);
     body.textContent = "";
     document.getElementById("listTitle").textContent = TITLES[tab.id];
     document.title = "vrcd - " + TITLES[tab.id];
@@ -3275,6 +3549,40 @@ function renderList() {
     else if (tab.id === "stuff")   renderStuff(body);
     else if (tab.id === "tools")   renderTools(body);
     else if (tab.id === "profile") renderProfileTab(body);
+
+    // Last, once every box the tab draws is in the document: focus does
+    // nothing to a node that is not.
+    restoreCaret();
+}
+
+/* Where the caret was when a redraw started, so it can be put back afterwards.
+   A snapshot arrives on every friend movement and takes every box on the page
+   with it; without this, typing a bio next to a busy friends list would lose a
+   character every few seconds.
+
+   Read just before the redraw rather than from a blur handler, because
+   browsers disagree about whether removing a focused node fires one. Only
+   boxes inside the pane being redrawn count: the search field survives the
+   redraw, and re-focusing it would collapse a selection nobody asked to lose. */
+var caretBox = null;
+
+function rememberCaret(pane) {
+    var box = document.activeElement;
+    var typed = box && (box.tagName === "INPUT" || box.tagName === "TEXTAREA");
+
+    caretBox = typed && box.id && pane.contains(box)
+        ? { id: box.id, at: box.selectionStart }
+        : null;
+}
+
+function restoreCaret() {
+    if (caretBox === null) return;
+
+    var box = document.getElementById(caretBox.id);
+    if (box === null) return;
+
+    box.focus();
+    box.setSelectionRange(caretBox.at, caretBox.at);
 }
 
 /* --------------------------------------------------------- detail pane */
@@ -3485,17 +3793,6 @@ function showToast(message, bad) {
     toast.classList.toggle("bad", !!bad);
     if (toastTimer) clearTimeout(toastTimer);
     toastTimer = setTimeout(function () { toast.classList.add("hidden"); }, 6000);
-}
-
-/* Put the status message box back the way the redraw found it. */
-function restoreStatusCaret() {
-    if (statusCaret < 0) return;
-
-    var box = document.getElementById("statusMessage");
-    if (box === null) return;
-
-    box.focus();
-    box.setSelectionRange(statusCaret, statusCaret);
 }
 
 /* Send a status change. `status` empty leaves the status alone, `message` null
@@ -3744,6 +4041,10 @@ function applyState(message) {
     // is never coming.
     if (state.connected === false) {
         statusPending = false;
+        // Same for a profile edit. The draft stays: what is in it is typing
+        // nobody would want dropped by a reconnect, and the link comes back.
+        profilePending = false;
+        profileWasPending = false;
         // Same for a moderation: the result it is waiting on died with the
         // link, and a button stuck on "SENDING..." is worse than one that can
         // be pressed again.
@@ -3768,7 +4069,46 @@ function applyState(message) {
     // though it predated the page.
     reportStatus(statusSeeded === false);
     statusSeeded = true;
+    reportProfile();
     syncContent();
+}
+
+/* A profile edit that has been answered. Watched as the snapshot's pending flag
+   falling rather than as its outcome changing, unlike every other reporter
+   here: the same edit sent twice is identical in the snapshot, and an editor
+   that had already gone back to saying SAVE would be the only sign that
+   anything happened. It also makes a seeding pass unnecessary -- a page that
+   opens on somebody else's old outcome never saw it pending. */
+function reportProfile() {
+    var result = state.profile_action;
+    if (!result || !result.attempted) return;
+
+    if (result.pending) {
+        profileWasPending = true;
+        return;
+    }
+    if (profileWasPending === false) return;
+    profileWasPending = false;
+
+    // Ours, rather than another browser's: that one's success should not close
+    // an editor with typing in it, and its failure is not this page's to
+    // explain. The toast is said either way -- it is the same profile.
+    var mine = profilePending;
+    profilePending = false;
+
+    if (result.success) {
+        // The copy held here describes the profile as it was. vrcd-server and
+        // the link have both dropped theirs, so the next look re-fetches -- and
+        // it has to, since a cleared field is empty in the `self` snapshot and
+        // the merge lets the older record win there.
+        if (state.self) delete profiles[state.self.id];
+        if (mine) profileDraft = null;
+    }
+    if (view.tab === "profile") renderList();
+
+    showToast(result.success
+        ? "Profile updated"
+        : "Profile change failed: " + result.error, !result.success);
 }
 
 function reportStatus(seeding) {

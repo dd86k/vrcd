@@ -319,6 +319,27 @@ int main(string[] args)
             req.replyJSON(HTTPStatus.ok, `{"requested":true}`);
             return REQUEST_OK;
         })
+        .post(`/api/profile`, (ref HTTPRequest req)
+        {
+            if (authorized(req, true) == false)
+                return REQUEST_OK;
+
+            ProfileRequest profile;
+            if (profileRequest(req.payload, profile) == false)
+            {
+                req.replyJSON(HTTPStatus.badRequest,
+                    `{"error":"nothing to change"}`);
+                return REQUEST_OK;
+            }
+
+            // Fire and forget, like /api/status: the outcome arrives as a
+            // set_profile_result and reaches every browser in the next
+            // snapshot, together with a fresh self.
+            link.requestProfile(profile.fields, profile.bio, profile.pronouns,
+                profile.links, profile.languages);
+            req.replyJSON(HTTPStatus.ok, `{"requested":true}`);
+            return REQUEST_OK;
+        })
         .get(`/api/content/:section`, (ref HTTPRequest req)
         {
             if (authorized(req, true) == false)
@@ -766,6 +787,80 @@ private bool statusRequest(ubyte[] payload, out StatusRequest status)
         return false;
 
     return status.status.length > 0 || status.hasDescription;
+}
+
+/// One profile edit, as the page sends it. `fields` says which of them the
+/// body carried, since an empty bio is one somebody cleared and an absent one
+/// is a field the editor did not touch.
+private struct ProfileRequest
+{
+    ProfileFields fields;
+    string bio;
+    string pronouns;
+    string[] links;
+    string[] languages;
+}
+
+/// Pull a profile edit out of a /api/profile request body. Returns false when
+/// the body changes nothing.
+///
+/// The values themselves are not checked here beyond their shape: VRChat's
+/// limits are vrcd-server's to enforce, being the side that answers to VRChat,
+/// and its refusal carries VRChat's own words back to the box they came from.
+private bool profileRequest(ubyte[] payload, out ProfileRequest profile)
+{
+    if (payload.length == 0)
+        return false;
+
+    JSONValue body_;
+    try body_ = parseJSON(cast(const(char)[])payload);
+    catch (JSONException ex)
+    {
+        logWarn("Malformed profile request: %s", ex.msg);
+        return false;
+    }
+
+    if (body_.type != JSONType.object)
+        return false;
+
+    if (const(JSONValue) *v = "bio" in body_)
+        if (v.type == JSONType.string)
+        {
+            profile.bio = v.str;
+            profile.fields.bio = true;
+        }
+
+    if (const(JSONValue) *v = "pronouns" in body_)
+        if (v.type == JSONType.string)
+        {
+            profile.pronouns = v.str.strip;
+            profile.fields.pronouns = true;
+        }
+
+    if (const(JSONValue) *v = "bio_links" in body_)
+        if (v.type == JSONType.array)
+        {
+            profile.fields.links = true;
+            foreach (const(JSONValue) link; v.array)
+            {
+                // A row left blank is a row not filled in, not a link.
+                if (link.type == JSONType.string && link.str.strip.length > 0)
+                    profile.links ~= link.str.strip;
+            }
+        }
+
+    if (const(JSONValue) *v = "languages" in body_)
+        if (v.type == JSONType.array)
+        {
+            profile.fields.languages = true;
+            foreach (const(JSONValue) code; v.array)
+            {
+                if (code.type == JSONType.string && code.str.length > 0)
+                    profile.languages ~= code.str;
+            }
+        }
+
+    return profile.fields.any();
 }
 
 /// First `max` code points of `text`, whole: cutting UTF-8 by the byte would
