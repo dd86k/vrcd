@@ -236,6 +236,108 @@ JSONValue buildUserProfile(JSONValue user)
     return profile;
 }
 
+/// VRChat's limits on the fields a person writes about themselves. Checked
+/// before the call rather than after, so a bio one character too long costs no
+/// VRChat call and comes back as a sentence rather than an HTTP code. Counted
+/// in code points: VRChat counts characters.
+enum size_t PROFILE_BIO_MAX = 512;
+/// ditto
+enum size_t PROFILE_PRONOUNS_MAX = 32;
+/// ditto
+enum size_t PROFILE_LINKS_MAX = 3;
+/// ditto
+enum size_t PROFILE_LANGUAGES_MAX = 3;
+
+/// Whether this is a language code VRChat would take as a `language_` tag.
+///
+/// The shape is checked, not the membership. VRChat's list is ISO 639-3 plus a
+/// few of its own, it grows, and a hard-coded copy of it here would refuse a
+/// language the game itself offers -- while a code VRChat does not know comes
+/// back from the tag call with VRChat's own words for it, which is a better
+/// answer than this file could invent.
+bool isLanguageCode(string code)
+{
+    if (code.length < 2 || code.length > 8)
+        return false;
+
+    foreach (char c; code)
+    {
+        if (c < 'a' || c > 'z')
+            return false;
+    }
+    return true;
+}
+
+/// Whether this may be pinned under a bio as a link.
+///
+/// The front-ends put these in an anchor, so the scheme is the check that
+/// matters: `javascript:` in an `href` is script, not a link, and a profile is
+/// read by other people. VRChat shows anything it was given, so this is one of
+/// those rules each side has to apply for itself.
+bool isProfileLink(string url)
+{
+    import std.string : icmp;
+
+    // Long enough to hold a real one; past this it is not a link somebody
+    // typed. VRChat's own editor stops at a thousand characters.
+    if (url.length < 8 || url.length > 1000)
+        return false;
+
+    foreach (char c; url)
+    {
+        // A control character in an href is either a mistake or an attempt to
+        // hide the scheme from a check like this one.
+        if (c < 0x20 || c == 0x7f)
+            return false;
+    }
+
+    return icmp(url[0 .. 7], "http://") == 0 || icmp(url[0 .. 8], "https://") == 0;
+}
+
+/// Which `language_` tags have to be added and which removed to turn the tags
+/// VRChat currently has into the languages somebody picked.
+///
+/// The difference rather than the whole list, because the tag list is not only
+/// languages: trust rank and moderation marks live in it too, and those are
+/// VRChat's to set. `add` and `remove` come back as full tags, ready to send.
+void languageTagDiff(const(string)[] currentTags, const(string)[] wanted,
+    out string[] add, out string[] remove)
+{
+    bool wants(string code)
+    {
+        foreach (string want; wanted)
+        {
+            if (want == code)
+                return true;
+        }
+        return false;
+    }
+
+    string[] have;
+    foreach (string tag; currentTags)
+    {
+        if (startsWith(tag, "language_") == false || tag.length <= 9)
+            continue;
+
+        string code = tag[9 .. $];
+        have ~= code;
+        if (wants(code) == false)
+            remove ~= tag;
+    }
+
+    foreach (string want; wanted)
+    {
+        bool already;
+        foreach (string code; have)
+        {
+            if (code == want)
+                already = true;
+        }
+        if (already == false)
+            add ~= "language_" ~ want;
+    }
+}
+
 /// Short-lived cache of built profiles, shared by every connected front-end.
 ///
 /// A profile is asked for whenever somebody opens a pane, which on a browser
@@ -333,6 +435,59 @@ unittest
     assert(isUserId("usr_../../auth/user") == false);
     assert(isUserId("usr_a/b") == false);
     assert(isUserId("") == false);
+}
+
+unittest
+{
+    assert(isLanguageCode("eng"));
+    assert(isLanguageCode("tok"));
+    // Two letters is a real shape (VRChat carries a few), eight is the ceiling.
+    assert(isLanguageCode("zh"));
+    assert(isLanguageCode("e") == false);
+    assert(isLanguageCode("") == false);
+    // Nothing that could add a second tag or climb out of the tag name.
+    assert(isLanguageCode("ENG") == false);
+    assert(isLanguageCode("en g") == false);
+    assert(isLanguageCode("system_trust_veteran") == false);
+}
+
+unittest
+{
+    assert(isProfileLink("https://example.invalid/x"));
+    assert(isProfileLink("HTTP://example.invalid"));
+    // The one this exists for: an href that is script rather than a link.
+    assert(isProfileLink("javascript:alert(1)") == false);
+    assert(isProfileLink("data:text/html,<script>") == false);
+    // And the same thing with the scheme broken up to get past the check.
+    assert(isProfileLink("java\nscript:alert(1)") == false);
+    assert(isProfileLink("example.invalid") == false);
+    assert(isProfileLink("") == false);
+}
+
+unittest
+{
+    string[] add, remove;
+
+    // Only languages are touched; the trust tag beside them is VRChat's.
+    languageTagDiff([ "system_trust_known", "language_eng", "language_jpn" ],
+        [ "eng", "fra" ], add, remove);
+    assert(add == [ "language_fra" ]);
+    assert(remove == [ "language_jpn" ]);
+
+    // Nothing to do when they already match.
+    languageTagDiff([ "language_eng" ], [ "eng" ], add, remove);
+    assert(add.length == 0);
+    assert(remove.length == 0);
+
+    // Clearing the list is every language removed and none added.
+    languageTagDiff([ "language_eng", "admin_moderator" ], null, add, remove);
+    assert(add.length == 0);
+    assert(remove == [ "language_eng" ]);
+
+    // A first language on an account that has none.
+    languageTagDiff([ "system_trust_basic" ], [ "kor" ], add, remove);
+    assert(add == [ "language_kor" ]);
+    assert(remove.length == 0);
 }
 
 unittest

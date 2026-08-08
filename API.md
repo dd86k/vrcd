@@ -41,7 +41,7 @@ Authentication uses a shared secret token. If the server's secret is empty, auth
 
 **Success:**
 ```json
-{"type": "auth_ok", "server_version": 6}
+{"type": "auth_ok", "server_version": 8}
 ```
 
 Protocol versions:
@@ -52,6 +52,7 @@ Protocol versions:
 - `5` = adds VRChat's v2 notifications (every type, each carrying its own responses)
 - `6` = adds the forced roster refresh (`refresh_friends`)
 - `7` = adds full user profiles (`get_user`) and badge art (`get_badge_image`).
+- `8` = adds profile editing (`set_profile`)
 
 **Failure:**
 ```json
@@ -236,6 +237,24 @@ Either field may be omitted to leave it unchanged; at least one must be present.
 | `status`             | string | Optional. One of `"active"`, `"join me"`, `"ask me"`, `"busy"` |
 | `status_description` | string | Optional. Custom status message text                        |
 
+### `set_profile`
+
+Edit the parts of the logged-in user's profile that they write themselves. The server replies with `set_profile_result`, preceded on success by a fresh `self` broadcast. Requires `server_version >= 8`.
+
+Every field is optional and an omitted one is left alone; at least one must be present. An empty value is how a field is *cleared*, which is why "absent" and "empty" are not the same thing.
+
+Bio, links and pronouns go out as one `PUT users/{selfUserId}`. Languages do not: VRChat keeps them as `language_*` entries in the user's tag list, alongside trust rank and moderation marks, so they are changed with `POST users/{selfUserId}/removeTags` and `/addTags` against the difference. That difference needs the current tags, which come from the `PUT` response when there was one and cost a `GET users/{selfUserId}` when there was not.
+
+Limits are checked before any call is made: bio 512 code points, pronouns 32, at most 3 links (`http`/`https` only -- both front-ends put these in an anchor), at most 3 languages. Anything VRChat itself refuses comes back in `error` in VRChat's own words.
+
+| Field       | Type   | Description                                                     |
+|-------------|--------|-----------------------------------------------------------------|
+| `type`      | string | `"set_profile"`                                                 |
+| `bio`       | string | Optional. Profile bio                                           |
+| `pronouns`  | string | Optional. Pronouns                                              |
+| `bio_links` | array  | Optional. Links pinned under the bio, in order                   |
+| `languages` | array  | Optional. ISO 639-3 codes without the `language_` prefix         |
+
 ### `get_files`
 
 Request a page of the logged-in user's files for one content tag. The server proxies `GET /files` on VRChat and replies with `files`.
@@ -397,7 +416,7 @@ Authentication succeeded.
 | Field            | Type   | Description              |
 |------------------|--------|--------------------------|
 | `type`           | string | `"auth_ok"`              |
-| `server_version` | int    | Protocol version (currently 5) |
+| `server_version` | int    | Protocol version (currently 8) |
 
 ### `auth_error`
 
@@ -562,6 +581,20 @@ Reply to a `set_status` request, sent only to the requesting client. On success,
 |-----------|--------|----------------------------------------------|
 | `type`    | string | `"set_status_result"`                        |
 | `success` | bool   | Whether the VRChat update succeeded          |
+| `error`   | string | Error description (present only on failure)  |
+
+### `set_profile_result`
+
+Reply to a `set_profile` request, sent only to the requesting client. On success, a `self` broadcast precedes it for all clients.
+
+A refused field is reported here too, rather than as an `error` message: the requester is waiting on this reply specifically, and a bare `error` would leave its editor saving forever.
+
+A failure does not mean nothing changed. Bio, links and pronouns are one call and the languages are one or two more, so a tag call that fails after the `PUT` succeeded reports the failure while the fields it did write stay written; the `self` broadcast still goes out.
+
+| Field     | Type   | Description                                  |
+|-----------|--------|----------------------------------------------|
+| `type`    | string | `"set_profile_result"`                       |
+| `success` | bool   | Whether the whole edit succeeded             |
 | `error`   | string | Error description (present only on failure)  |
 
 ### `moderations`

@@ -169,6 +169,33 @@ class FriendsTracker
         }
     }
 
+    /// Apply a profile edit to the self entry, on the same terms as
+    /// `applySelfStatus`: used after a successful `set_profile` so the next
+    /// self snapshot carries what was just written rather than what VRChat last
+    /// said, and a false `set` flag leaves that field alone.
+    ///
+    /// Unlike a status, these fields can legitimately be emptied -- a bio is
+    /// cleared by writing nothing -- so the flag is the only thing that says
+    /// whether a field was part of the edit.
+    void applySelfProfile(bool setBio, string bio, bool setPronouns,
+        string pronouns, bool setLinks, string[] links)
+    {
+        synchronized (friendsMutex)
+        {
+            if (selfUserId.length == 0)
+                return;
+            FriendState* f = selfUserId in friends;
+            if (f is null)
+                return;
+            if (setBio)
+                f.bio = bio;
+            if (setPronouns)
+                f.pronouns = pronouns;
+            if (setLinks)
+                f.bioLinks = links;
+        }
+    }
+
     /// Drain any synthesized events the tracker has queued (e.g. avatar
     /// changes derived from user-update/friend-update diffs). Caller is
     /// responsible for storing, logging and broadcasting them.

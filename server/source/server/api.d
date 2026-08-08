@@ -38,8 +38,9 @@ import vrcd.notifications;
 /// 3 = moderation API, 4 = notification listing (`get_notifications`),
 /// 5 = v2 notifications (every type, per-notification responses),
 /// 6 = forced roster refresh (`refresh_friends`),
-/// 7 = full user profiles (`get_user`).
-private enum int PROTOCOL_VERSION = 7;
+/// 7 = full user profiles (`get_user`),
+/// 8 = profile editing (`set_profile`).
+private enum int PROTOCOL_VERSION = 8;
 
 /// Shortest gap between two re-seed passes. A pass paginates the whole
 /// friends list, so this is what keeps a reconnect storm -- or somebody
@@ -825,6 +826,14 @@ private class ClientHandler
                         return;
                     }
                     handleSetStatus(msg);
+                    break;
+                case "set_profile":
+                    if (authenticated == false)
+                    {
+                        sendError("Not authenticated");
+                        return;
+                    }
+                    handleSetProfile(msg);
                     break;
                 case "auth_response":
                     if (authenticated == false)
@@ -2026,6 +2035,310 @@ private class ClientHandler
         }
     }
 
+    /// Reply to `set_profile`: change the parts of a VRChat profile that its
+    /// owner writes about themselves -- the bio, the links pinned under it,
+    /// pronouns, and the languages they speak.
+    ///
+    /// Every field is optional and an omitted one is left alone, the same rule
+    /// `set_status` follows and for the same reason: a front-end sends what its
+    /// editor changed, not the whole profile, so two browsers open on different
+    /// fields do not overwrite each other with what they last read.
+    ///
+    /// Languages do not ride in that call. VRChat keeps them as `language_*`
+    /// entries in the user's tag list, which also carries trust rank and
+    /// moderation marks -- writing that list wholesale would mean sending back
+    /// tags that are VRChat's to set, and getting one wrong is how an account
+    /// loses its rank. There are add/remove endpoints for exactly this, and
+    /// they take the difference, which is why the current tags are read first.
+    ///
+    /// Every failure, including a refused field, is reported inside
+    /// `set_profile_result` rather than as an `error`: the front-end's editor
+    /// is waiting on that message specifically, and a bare `error` would leave
+    /// it saving forever.
+    void handleSetProfile(JSONValue msg)
+    {
+        import std.range : walkLength;
+
+        void sendResult(bool success, string error)
+        {
+            JSONValue result = JSONValue([
+                "type":    JSONValue("set_profile_result"),
+                "success": JSONValue(success),
+            ]);
+            if (error.length > 0)
+                result["error"] = JSONValue(error);
+            sendLine(result.toString() ~ "\n");
+        }
+
+        // Reading a field is separate from it being empty: an empty bio is how
+        // a bio is cleared, and an absent one is how it is left alone.
+        bool haveBio, havePronouns, haveLinks, haveLanguages;
+        string bio, pronouns;
+        string[] links, languages;
+
+        if (const(JSONValue)* v = "bio" in msg)
+            if (v.type == JSONType.string)
+            {
+                bio = v.str;
+                haveBio = true;
+            }
+
+        if (const(JSONValue)* v = "pronouns" in msg)
+            if (v.type == JSONType.string)
+            {
+                pronouns = strip(v.str);
+                havePronouns = true;
+            }
+
+        if (const(JSONValue)* v = "bio_links" in msg)
+            if (v.type == JSONType.array)
+            {
+                haveLinks = true;
+                foreach (const(JSONValue) link; v.array)
+                {
+                    if (link.type != JSONType.string)
+                        continue;
+
+                    // A blank row in the editor is a row somebody has not
+                    // filled in yet, not a link they want VRChat to show.
+                    string url = strip(link.str);
+                    if (url.length > 0)
+                        links ~= url;
+                }
+            }
+
+        if (const(JSONValue)* v = "languages" in msg)
+            if (v.type == JSONType.array)
+            {
+                haveLanguages = true;
+                foreach (const(JSONValue) code; v.array)
+                {
+                    if (code.type == JSONType.string && code.str.length > 0)
+                        languages ~= code.str;
+                }
+            }
+
+        if (haveBio == false && havePronouns == false && haveLinks == false &&
+            haveLanguages == false)
+        {
+            sendResult(false, "set_profile: nothing to update");
+            return;
+        }
+
+        // VRChat's own limits, checked here so a typo costs no call. Counted in
+        // code points rather than bytes: VRChat counts characters, and a bio
+        // in a language that does not fit in ASCII would otherwise be refused
+        // at a third of its real length.
+        if (haveBio && walkLength(bio) > PROFILE_BIO_MAX)
+        {
+            sendResult(false, "Bio is longer than " ~
+                PROFILE_BIO_MAX.to!string() ~ " characters");
+            return;
+        }
+        if (havePronouns && walkLength(pronouns) > PROFILE_PRONOUNS_MAX)
+        {
+            sendResult(false, "Pronouns are longer than " ~
+                PROFILE_PRONOUNS_MAX.to!string() ~ " characters");
+            return;
+        }
+        if (links.length > PROFILE_LINKS_MAX)
+        {
+            sendResult(false, "VRChat takes at most " ~
+                PROFILE_LINKS_MAX.to!string() ~ " profile links");
+            return;
+        }
+        foreach (string url; links)
+        {
+            // The front-ends put these in an anchor, so a scheme that is not a
+            // link is refused before it can be stored as one.
+            if (isProfileLink(url) == false)
+            {
+                sendResult(false, "Not an http(s) link: " ~ url);
+                return;
+            }
+        }
+        if (languages.length > PROFILE_LANGUAGES_MAX)
+        {
+            sendResult(false, "VRChat takes at most " ~
+                PROFILE_LANGUAGES_MAX.to!string() ~ " languages");
+            return;
+        }
+        foreach (string code; languages)
+        {
+            if (isLanguageCode(code) == false)
+            {
+                sendResult(false, "Not a language code: " ~ code);
+                return;
+            }
+        }
+
+        string selfId = server.friendsTracker.getSelfUserId();
+        if (selfId.length == 0)
+        {
+            sendResult(false, "set_profile: self user id not known yet");
+            return;
+        }
+
+        if (server.httpClient is null || server.apiMutex is null)
+        {
+            sendResult(false, "Server HTTP client not configured");
+            return;
+        }
+
+        server.apiMutex.lock();
+        scope(exit) server.apiMutex.unlock();
+
+        if (server.rateLimiter && server.rateLimiter.isBlocked())
+        {
+            sendResult(false, "Rate limited by VRChat, try again later");
+            return;
+        }
+
+        string path = "/users/" ~ selfId;
+
+        // Tags as VRChat has them right now, kept across requests, so `.idup`:
+        // ddcurl hands back a view of its own buffer and std.json slices
+        // strings straight out of it, both of which the next request reuses.
+        string[] currentTags;
+        void readTags(string body_)
+        {
+            currentTags = null;
+            JSONValue user = parseJSON(body_);
+            if (user.type != JSONType.object)
+                return;
+            if (const(JSONValue)* v = "tags" in user)
+                if (v.type == JSONType.array)
+                    foreach (const(JSONValue) tag; v.array)
+                    {
+                        if (tag.type == JSONType.string)
+                            currentTags ~= tag.str.idup;
+                    }
+        }
+
+        // Whatever landed before something else failed still landed. A bio
+        // VRChat took is a bio the roster and the cached profile are now wrong
+        // about, so the answer -- success or not -- goes out behind the same
+        // bookkeeping a clean run does.
+        bool wroteFields, wroteTags;
+        void finish(bool ok, string error)
+        {
+            if (wroteFields)
+                server.friendsTracker.applySelfProfile(haveBio, bio,
+                    havePronouns, pronouns, haveLinks, links);
+
+            // Languages are not in the self snapshot at all, and neither is a
+            // field that was cleared -- an empty one there reads as "nothing to
+            // say" rather than as the new value. Both are read back from the
+            // profile, which has just become wrong.
+            if (wroteFields || wroteTags)
+            {
+                server.userProfiles.forget(selfId);
+                server.broadcastSelf();
+            }
+            sendResult(ok, error);
+        }
+
+        try
+        {
+            bool haveFields = haveBio || havePronouns || haveLinks;
+            if (haveFields)
+            {
+                JSONValue payload = JSONValue.emptyObject;
+                if (haveBio)
+                    payload["bio"] = JSONValue(bio);
+                if (havePronouns)
+                    payload["pronouns"] = JSONValue(pronouns);
+                if (haveLinks)
+                    payload["bioLinks"] = JSONValue(links);
+
+                logDebugging("handleSetProfile: PUT %s body=%s",
+                    path, payload.toString());
+                HTTPResponse resp = server.httpClient.putJSON(path,
+                    payload.toString());
+                logDebugging("handleSetProfile: VRC PUT %s -> HTTP %d",
+                    path, resp.code);
+                if (server.rateLimiter)
+                {
+                    server.rateLimiter.update(resp);
+                    server.broadcastStatus();
+                }
+
+                if (resp.code < 200 || resp.code >= 300)
+                {
+                    finish(false, vrchatError(resp));
+                    return;
+                }
+                wroteFields = true;
+
+                // The answer is the whole user, so the tags a language change
+                // has to diff against arrive without a call of their own.
+                readTags(resp.text);
+            }
+
+            if (haveLanguages)
+            {
+                // Nothing was written above, so the tag list has to be read.
+                if (haveFields == false)
+                {
+                    HTTPResponse resp = server.httpClient.get(path);
+                    logDebugging("handleSetProfile: VRC GET %s -> HTTP %d",
+                        path, resp.code);
+                    if (server.rateLimiter)
+                    {
+                        server.rateLimiter.update(resp);
+                        server.broadcastStatus();
+                    }
+
+                    if (resp.code < 200 || resp.code >= 300)
+                    {
+                        finish(false, vrchatError(resp));
+                        return;
+                    }
+                    readTags(resp.text);
+                }
+
+                string[] add, remove;
+                languageTagDiff(currentTags, languages, add, remove);
+
+                // Removals first: the list is capped at three, and adding
+                // before removing is how a swap hits that cap.
+                foreach (string action; [ "removeTags", "addTags" ])
+                {
+                    string[] tags = action == "addTags" ? add : remove;
+                    if (tags.length == 0)
+                        continue;
+
+                    JSONValue payload = JSONValue([ "tags": JSONValue(tags) ]);
+                    string tagPath = path ~ "/" ~ action;
+                    logDebugging("handleSetProfile: POST %s body=%s",
+                        tagPath, payload.toString());
+                    HTTPResponse resp = server.httpClient.postJSON(tagPath,
+                        payload.toString());
+                    logDebugging("handleSetProfile: VRC POST %s -> HTTP %d",
+                        tagPath, resp.code);
+                    if (server.rateLimiter)
+                    {
+                        server.rateLimiter.update(resp);
+                        server.broadcastStatus();
+                    }
+
+                    if (resp.code < 200 || resp.code >= 300)
+                    {
+                        finish(false, vrchatError(resp));
+                        return;
+                    }
+                    wroteTags = true;
+                }
+            }
+
+            finish(true, null);
+        }
+        catch (Exception e)
+        {
+            finish(false, e.msg);
+        }
+    }
+
     /// Reply to `get_moderations`: refetch the mute/block lists from VRChat
     /// and send a fresh `moderations` snapshot. Always refetches: VRChat has
     /// no WS events for player moderations, so the cache goes stale whenever
@@ -2744,6 +3057,41 @@ private class ClientHandler
         ]);
         sendLine(resp.toString() ~ "\n");
     }
+}
+
+/// What went wrong, in VRChat's own words when it gave any.
+///
+/// Most of this file reports a refused call as "HTTP 400", which is all a
+/// front-end can do anything with when the call was the server's own idea. A
+/// profile edit is the other case: somebody typed something into a form and
+/// VRChat is the only side that knows a bio holds a banned word or that a
+/// language code is not one it has heard of, so its message is worth carrying
+/// back to the box it came from.
+private string vrchatError(HTTPResponse resp)
+{
+    string fallback = "HTTP " ~ resp.code.to!string();
+
+    try
+    {
+        JSONValue body_ = parseJSON(resp.text);
+        if (body_.type != JSONType.object)
+            return fallback;
+
+        // VRChat nests it, and the message is itself a quoted string often
+        // enough that the quotes are worth taking off.
+        if (const(JSONValue)* v = "error" in body_)
+        {
+            if (v.type == JSONType.string)
+                return strip(v.str, `"`).idup;
+            if (v.type == JSONType.object)
+                if (const(JSONValue)* m = "message" in *v)
+                    if (m.type == JSONType.string && m.str.length > 0)
+                        return strip(m.str, `"`).idup;
+        }
+    }
+    catch (Exception) {}
+
+    return fallback;
 }
 
 /// Build a JSON event message for broadcasting.
