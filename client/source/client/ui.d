@@ -1043,6 +1043,192 @@ private bool confirmButton(mu_Context* ctx, AppState* state,
     return false;
 }
 
+/// The pictures drawn on icon-only action buttons.
+///
+/// The atlas ships four glyphs (a 16px X, a check, two arrows) and none of
+/// the rest of these, so each icon is a handful of filled rects laid out on
+/// a 0..100 grid scaled to the button -- the same trade drawStatusCircle
+/// makes. Stamping a 16px bitmap in the middle of a VR-sized target would
+/// have been the other option, and at that size the icon is what the button
+/// is for.
+private enum ActionIcon
+{
+    check,      /// accept, confirm, yes
+    cross,      /// decline, reject, deny, no, cancel
+    trash,      /// dismiss (delete/hide)
+    ban,        /// block
+    bellSlash,  /// unsubscribe
+    join,       /// join, enter
+    reply,      /// reply
+    dots,       /// a response type this build has never heard of
+}
+
+/// Pixels of breathing room between an action button's frame and its icon.
+private enum int actionIconPadding = 10;
+
+/// A line `thick` pixels wide between two points, as a run of squares
+/// stepped along the dominant axis. The software renderer only exposes
+/// filled rects, so this is how a diagonal gets drawn.
+private void iconLine(mu_Context* ctx, int x0, int y0, int x1, int y1,
+    int thick, mu_Color color)
+{
+    int dx = x1 - x0;
+    int dy = y1 - y0;
+    int adx = dx < 0 ? -dx : dx;
+    int ady = dy < 0 ? -dy : dy;
+    int steps = adx > ady ? adx : ady;
+    if (steps < 1)
+        steps = 1;
+    int half = thick / 2;
+    foreach (int i; 0 .. steps + 1)
+    {
+        int x = x0 + (dx * i) / steps;
+        int y = y0 + (dy * i) / steps;
+        mu_draw_rect(ctx, mu_Rect(x - half, y - half, thick, thick), color);
+    }
+}
+
+/// A circle outline, drawn as two passes so neither the sides nor the caps
+/// come out as gaps: one pass walks rows and marks the left and right edge,
+/// the other walks columns and marks the top and bottom.
+private void iconRing(mu_Context* ctx, int cx, int cy, int radius,
+    int thick, mu_Color color)
+{
+    import std.math : sqrt;
+
+    if (radius < 1)
+        return;
+    int r2 = radius * radius;
+    foreach (int dy; -radius .. radius + 1)
+    {
+        int span = cast(int) sqrt(cast(float)(r2 - dy * dy));
+        mu_draw_rect(ctx, mu_Rect(cx - span, cy + dy, thick, 1), color);
+        mu_draw_rect(ctx, mu_Rect(cx + span - thick, cy + dy, thick, 1), color);
+    }
+    foreach (int dx; -radius .. radius + 1)
+    {
+        int span = cast(int) sqrt(cast(float)(r2 - dx * dx));
+        mu_draw_rect(ctx, mu_Rect(cx + dx, cy - span, 1, thick), color);
+        mu_draw_rect(ctx, mu_Rect(cx + dx, cy + span - thick, 1, thick), color);
+    }
+}
+
+/// Draw one icon filling the square `box`.
+private void drawActionIcon(mu_Context* ctx, ActionIcon icon, mu_Rect box,
+    mu_Color color)
+{
+    int thick = box.w / 10;
+    if (thick < 2)
+        thick = 2;
+
+    // 0..100 grid over the box, so every icon below reads as coordinates
+    // rather than as arithmetic.
+    int gx(int u) { return box.x + (box.w * u) / 100; }
+    int gy(int u) { return box.y + (box.h * u) / 100; }
+    void line(int x0, int y0, int x1, int y1)
+    {
+        iconLine(ctx, gx(x0), gy(y0), gx(x1), gy(y1), thick, color);
+    }
+    void fill(int x0, int y0, int x1, int y1)
+    {
+        mu_draw_rect(ctx, mu_Rect(gx(x0), gy(y0),
+            gx(x1) - gx(x0), gy(y1) - gy(y0)), color);
+    }
+
+    final switch (icon)
+    {
+        case ActionIcon.check:
+            line(20, 52, 42, 74);
+            line(42, 74, 80, 26);
+            break;
+
+        case ActionIcon.cross:
+            line(26, 26, 74, 74);
+            line(74, 26, 26, 74);
+            break;
+
+        case ActionIcon.trash:
+            fill(40, 12, 60, 20);   // handle
+            fill(16, 24, 84, 33);   // lid
+            line(26, 36, 30, 86);   // body, tapered
+            line(74, 36, 70, 86);
+            line(30, 86, 70, 86);
+            line(44, 46, 45, 76);   // slots
+            line(56, 46, 55, 76);
+            break;
+
+        case ActionIcon.ban:
+            iconRing(ctx, gx(50), gy(50), (box.w * 32) / 100, thick, color);
+            line(28, 28, 72, 72);
+            break;
+
+        case ActionIcon.bellSlash:
+            line(36, 58, 38, 34);   // dome
+            line(38, 34, 50, 28);
+            line(50, 28, 62, 34);
+            line(62, 34, 64, 58);
+            line(28, 60, 72, 60);   // rim
+            fill(45, 66, 55, 74);   // clapper
+            line(24, 76, 76, 24);   // slash
+            break;
+
+        case ActionIcon.join:
+            line(20, 50, 58, 50);   // shaft
+            line(44, 36, 58, 50);   // head
+            line(44, 64, 58, 50);
+            line(74, 20, 74, 80);   // doorpost
+            break;
+
+        case ActionIcon.reply:
+            line(20, 40, 34, 26);   // head
+            line(20, 40, 34, 54);
+            line(20, 40, 66, 40);   // shaft, turning down
+            line(66, 40, 66, 76);
+            break;
+
+        case ActionIcon.dots:
+            fill(22, 44, 34, 56);
+            fill(44, 44, 56, 56);
+            fill(66, 44, 78, 56);
+            break;
+    }
+}
+
+/// A square, icon-only action button. Fires on mouseup like clickButton, so
+/// dragging the list scrolls it instead of pressing whatever the finger
+/// started on.
+///
+/// Icons say what they do only once somebody knows them, so the button hands
+/// its `label` back through `hoverLabel` while the pointer is on it; the
+/// caller captions the row with it. There is no hover in VR, which is the
+/// same reason the caption is a courtesy and not the label itself.
+private bool iconButton(mu_Context* ctx, ActionIcon icon, mu_Color tint,
+    const(char)[] label, ref const(char)[] hoverLabel)
+{
+    mu_Rect r = mu_layout_next(ctx);
+    bool mouseOver = mu_mouse_over(ctx, r) != 0;
+    if (mouseOver)
+        hoverLabel = label;
+
+    int colorId = MU_COLOR_BUTTON + (mouseOver && !ctx.mouse_down ? 1 : 0);
+    mu_draw_frame(ctx, r, colorId);
+
+    // Square icon box centered in whatever cell the layout handed us.
+    int side = (r.w < r.h ? r.w : r.h) - actionIconPadding * 2;
+    if (side < 8)
+        side = 8;
+    mu_Rect iconBox = mu_Rect(r.x + (r.w - side) / 2, r.y + (r.h - side) / 2,
+        side, side);
+    drawActionIcon(ctx, icon, iconBox, tint);
+
+    if (wasClick && mouseOver)
+    {
+        wasClick = false;
+        return true;
+    }
+    return false;
+}
+
 /// Draw a grid cell: text with a right-side vertical separator line.
 private void gridCell(mu_Context* ctx, const(char)[] text, mu_Color lineColor, bool lastCol = false)
 {
@@ -1770,26 +1956,48 @@ private void drawFriendProfile(mu_Context* ctx, AppState* state, int scrollDelta
 /// Notifications tab: friend requests, invites, group notifications, and
 /// anything else VRChat sends.
 ///
-/// Layout: each entry is a three-line cell with action buttons stacked
-/// on the right (VR-friendly touch targets). At ~640px (half of a 1280
-/// screen) a single meta row squished the sender name, so the metadata
-/// is split across three short rows that all get the full column width.
+/// Layout: three lines of text over a row of square icon buttons, all of
+/// them full width. At ~640px (half of a 1280 screen) a single meta row
+/// squished the sender name, so the metadata is split across three short
+/// rows; putting the buttons underneath rather than in a right-hand column
+/// gives those rows the whole width back, and gives the actions somewhere
+/// to grow sideways.
 ///
-///   +----------------------------------+--------+
-///   | Type . Date                      | Accept |
-///   | From                             |        |  (friendRequest)
-///   | Message                          |   X    |
-///   +----------------------------------+--------+
+///   +------------------------------------------+
+///   |# Type . Date                             |
+///   |# From                                    |  (friendRequest)
+///   |# Message                                 |
+///   |# [check] [trash]        Accept           |
+///   +------------------------------------------+
+///
+/// The `#` is a coloured spine down the left edge, and it is what makes the
+/// four rows read as one entry rather than as seven lines of grey: the thing
+/// that was hard to find in the list was where an entry started, which is a
+/// grouping problem and not an emphasis one. Its colour says what kind of
+/// notification this is before the words do, the same way a feed row is
+/// coloured by source. The type-and-date line is dimmed for the same reason:
+/// it labels the entry, the two lines under it are the entry.
+///
+/// A line with nothing in it is skipped rather than drawn blank -- a friend
+/// request carries no message, most group notices carry no sender, and an
+/// empty row reads as a missing one.
+///
+/// The buttons carry icons instead of words: a word wide enough to read is
+/// a button too wide to sit beside three others, and these are the same
+/// pictures VRChat draws in its own client. The caption to their right
+/// names whichever one the pointer is on, which is a desktop courtesy --
+/// there is no hover in VR, and no room for it either.
 ///
 /// Deny was removed because it sent the same "hide" as Dismiss, so the
-/// X covers both cases.
+/// trash covers both cases.
 ///
 /// A v2 notification (group invite, join request, transfer, queue-ready)
 /// names its own buttons instead, and the row draws those: VRChat writes
 /// their labels, and a type this build has never heard of still gets the
-/// right actions. The row grows to fit them. Rows that answer nothing --
-/// an announcement, an instance closure -- keep only the X, and rows VRChat
-/// says it will clear itself get no buttons at all.
+/// right actions -- an unmapped one draws as dots rather than as nothing.
+/// Rows that answer nothing -- an announcement, an instance closure -- keep
+/// only the trash, and rows VRChat says it will clear itself get no buttons
+/// at all.
 ///
 /// Rows are oldest first and are never re-sorted (see
 /// AppState.addNotification). With the buttons in the rows, anything that
@@ -1803,11 +2011,9 @@ private void drawFriendProfile(mu_Context* ctx, AppState* state, int scrollDelta
 /// no event to replay.
 private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDelta)
 {
-    static immutable int[2] outerCols  = [-170, 160];
     static immutable int[1] fullCol    = [-1];
     static immutable int[2] headerCols = [-130, 120];
-    enum int minRowHeight = 90;
-    enum int actionHeight = 36; // two stacked buttons fit in a 90px row
+    enum int actionSize = 64;   // square, and big enough to hit in VR
     enum lineColor = mu_Color(50, 50, 60, 255);
 
     mu_begin_panel(ctx, "NotificationsPanel");
@@ -1842,24 +2048,8 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
 
         foreach (ref NotificationEntry n; state.notifications)
         {
-            // Scope widget IDs by notification ID so identical button labels
-            // ("X", "Accept") across rows don't collide in microui.
-            mu_push_id(ctx, n.info.id.ptr, cast(int) n.info.id.length);
-
-            // Tall enough for whatever buttons this one draws: a group
-            // invite offering three responses does not fit two rows.
-            int buttons = cast(int) n.info.responses.length;
-            if (buttons == 0 && n.info.notificationType == "friendRequest")
-                buttons = 1;
-            if (n.info.canDelete)
-                ++buttons;
-            int rowHeight = buttons * (actionHeight + 4);
-            if (rowHeight < minRowHeight)
-                rowHeight = minRowHeight;
-
-            mu_layout_row(ctx, 2, outerCols.ptr, rowHeight);
-
-            // Left column: type+date / from / message, each on its own row.
+            // Text block: type+date / from / message, each on its own row
+            // across the full width.
             char[32] relBuf = void;
             const(char)[] relDate = formatRelative(n.info.receivedAtUnix, relBuf[]);
             string label = prettyNotifType(n.info.notificationType);
@@ -1875,36 +2065,70 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
             if (from.length == 0 && n.info.title != label)
                 from = n.info.title;
 
-            mu_layout_begin_column(ctx);
-                mu_layout_row(ctx, 1, fullCol.ptr, 0);
-                gridCell(ctx, head, lineColor, true);
+            // The head line doubles as the top of the entry: the spine is
+            // drawn at the end, once the rows below have given it a height.
+            mu_layout_row(ctx, 1, fullCol.ptr, 0);
+            int entryTop = notifLine(ctx, head, notifMetaColor).y;
 
+            // An empty line is a hole rather than a blank: a friend request
+            // carries no message, and most group notices carry no sender.
+            if (from.length > 0)
+            {
                 mu_layout_row(ctx, 1, fullCol.ptr, 0);
-                gridCell(ctx, from, lineColor, true);
-
+                notifLine(ctx, from, ctx.style.colors[MU_COLOR_TEXT]);
+            }
+            if (n.info.message.length > 0)
+            {
                 mu_layout_row(ctx, 1, fullCol.ptr, 0);
-                gridCell(ctx, n.info.message, lineColor, true);
-            mu_layout_end_column(ctx);
+                notifLine(ctx, n.info.message, ctx.style.colors[MU_COLOR_TEXT]);
+            }
 
-            // Right column: stacked action buttons.
-            mu_layout_begin_column(ctx);
-                if (n.actionPending)
+            // Action row underneath.
+            if (n.actionPending)
+            {
+                mu_layout_row(ctx, 1, fullCol.ptr, actionSize);
+                mu_label(ctx, "Pending...");
+            }
+            else
+            {
+                // A v2 notification's own buttons replace anything this build
+                // would have guessed: a group invite is not accepted through
+                // the friend-request endpoint.
+                bool ownAccept = n.info.responses.length == 0
+                    && n.info.notificationType == "friendRequest";
+                int buttons = cast(int) n.info.responses.length;
+                if (ownAccept)
+                    ++buttons;
+                if (n.info.canDelete)
+                    ++buttons;
+
+                if (buttons > 0)
                 {
-                    mu_layout_row(ctx, 1, fullCol.ptr, 0);
-                    mu_label(ctx, "Pending...");
-                }
-                else
-                {
-                    // A v2 notification's own buttons replace anything this
-                    // build would have guessed: a group invite is not
-                    // accepted through the friend-request endpoint.
+                    // A gap clearing the spine, a square per action, then one
+                    // cell taking the rest of the width for the hover caption.
+                    // Anything past the widths microui carries wraps onto a
+                    // second row of the same squares, which is a shape no
+                    // notification has reached but beats dropping a button.
+                    if (buttons > MU_MAX_WIDTHS - 2)
+                        buttons = MU_MAX_WIDTHS - 2;
+                    int[MU_MAX_WIDTHS] cols = void;
+                    cols[0] = notifSpineGap;
+                    foreach (int i; 0 .. buttons)
+                        cols[i + 1] = actionSize;
+                    cols[buttons + 1] = -1;
+                    mu_layout_row(ctx, buttons + 2, cols.ptr, actionSize);
+                    mu_layout_next(ctx); // the gap
+
+                    const(char)[] hoverLabel;
+
                     foreach (ref NotificationResponse response; n.info.responses)
                     {
-                        mu_layout_row(ctx, 1, fullCol.ptr, actionHeight);
+                        ActionIcon icon = responseIcon(response);
                         // Not response.text: VRChat writes that as a sentence
                         // ("Acknowledge and dismiss this notification"), which
-                        // a 160px button shows the first two words of.
-                        if (mu_button(ctx, prettyResponseLabel(response)))
+                        // even the caption shows the first few words of.
+                        if (iconButton(ctx, icon, iconTint(icon),
+                            prettyResponseLabel(response), hoverLabel))
                         {
                             // Waits for the result rather than dropping the
                             // row: the user pressed Accept on something and
@@ -1916,11 +2140,10 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
                         }
                     }
 
-                    if (n.info.responses.length == 0
-                        && n.info.notificationType == "friendRequest")
+                    if (ownAccept)
                     {
-                        mu_layout_row(ctx, 1, fullCol.ptr, actionHeight);
-                        if (mu_button(ctx, "Accept"))
+                        if (iconButton(ctx, ActionIcon.check,
+                            iconTint(ActionIcon.check), "Accept", hoverLabel))
                         {
                             // Keep pending-confirmation flow for Accept: the user
                             // wants to know whether the friendship was actually made.
@@ -1936,21 +2159,29 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
                     // that only fails.
                     if (n.info.canDelete)
                     {
-                        mu_layout_row(ctx, 1, fullCol.ptr, actionHeight);
-                        if (mu_button(ctx, "X"))
+                        if (iconButton(ctx, ActionIcon.trash,
+                            iconTint(ActionIcon.trash), "Dismiss", hoverLabel))
                         {
                             state.pendingActions ~= dismissAction(n.info);
                             dismissedIds ~= n.info.id;
                         }
                     }
+
+                    mu_Rect caption = mu_layout_next(ctx);
+                    if (hoverLabel.length > 0)
+                        mu_draw_control_text(ctx, cast(string) hoverLabel,
+                            caption, MU_COLOR_TEXT, 0);
                 }
-            mu_layout_end_column(ctx);
+            }
 
-            // Row separator.
+            // Separator, and the spine spanning everything above it. Drawn
+            // last because that is when the entry's height is known; nothing
+            // else paints in that column, so painting over it is safe.
             mu_layout_row(ctx, 1, fullCol.ptr, 1);
-            mu_draw_rect(ctx, mu_layout_next(ctx), lineColor);
-
-            mu_pop_id(ctx);
+            mu_Rect separator = mu_layout_next(ctx);
+            mu_draw_rect(ctx, mu_Rect(separator.x, entryTop, notifSpineWidth,
+                separator.y - entryTop), notifAccent(n.info.notificationType));
+            mu_draw_rect(ctx, separator, lineColor);
         }
 
         // Apply optimistic removals.
@@ -1961,11 +2192,149 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
     mu_end_panel(ctx);
 }
 
+/// Width of the accent spine down the left edge of a notification entry,
+/// and the gap everything else in the entry is inset by to clear it.
+private enum int notifSpineWidth = 4;
+private enum int notifSpineGap   = 8;
+
+/// Ink for the type-and-date line. Dimmer than the rest: it is the label on
+/// the entry, not the content of it, and three lines of identical grey was
+/// the thing that made an entry hard to take in at a glance.
+private enum mu_Color notifMetaColor = mu_Color(140, 145, 155, 255);
+
+/// Colour of an entry's spine, by what kind of notification it is.
+///
+/// Same idea as the feed's source strip: the colour is the first thing read
+/// and it answers "what is this" before any of the words do. Grouped by
+/// family rather than by exact type, since the list of types grows faster
+/// than a palette usefully can -- an unlisted `group.somethingNew` still
+/// lands on the group colour by prefix.
+private mu_Color notifAccent(string notifType)
+{
+    import std.string : startsWith;
+
+    switch (notifType)
+    {
+        case "friendRequest":
+            return mu_Color(70, 200, 90, 255);      // green, someone new
+        case "invite", "requestInvite",
+             "requestInviteResponse", "inviteResponse":
+            return mu_Color(54, 215, 192, 255);     // teal, the app accent
+        case "votetokick", "instance.closed":
+            return mu_Color(220, 70, 70, 255);      // red, something ending
+        case "boop", "message":
+            return mu_Color(220, 170, 60, 255);     // amber, someone talking
+        default:
+            break;
+    }
+
+    if (notifType.startsWith("group"))
+        return mu_Color(160, 90, 220, 255);         // purple, as the feed
+    return mu_Color(90, 90, 100, 255);              // grey, unlisted
+}
+
+/// One line of a notification entry: text inset past the spine, in whatever
+/// ink the caller asks for. mu_draw_control_text takes a style slot rather
+/// than a colour, so the slot is swapped for the call and put back -- the
+/// same trick bigHeader plays with the header size.
+///
+/// Returns the cell it drew into, which is how the caller learns where the
+/// entry starts without laying out a row it does not need.
+private mu_Rect notifLine(mu_Context* ctx, const(char)[] text, mu_Color color)
+{
+    mu_Rect r = mu_layout_next(ctx);
+    if (text.length == 0)
+        return r;
+
+    mu_Color saved = ctx.style.colors[MU_COLOR_TEXT];
+    ctx.style.colors[MU_COLOR_TEXT] = color;
+    mu_draw_control_text(ctx, cast(string) text,
+        mu_Rect(r.x + notifSpineGap, r.y, r.w - notifSpineGap, r.h),
+        MU_COLOR_TEXT, 0);
+    ctx.style.colors[MU_COLOR_TEXT] = saved;
+    return r;
+}
+
 /// The dismiss for one notification. Which endpoint that is depends on the
 /// system it came from, so the version travels with the action.
 private NotificationAction dismissAction(ref NotificationInfo info)
 {
     return NotificationAction(info.id, "hide", info.apiVersion);
+}
+
+/// The picture for a v2 notification response.
+///
+/// The `type` is the action -- it is what gets posted back -- so it picks the
+/// icon, the same way prettyResponseLabel words the caption from it. VRChat's
+/// own `icon` hint is the fallback rather than the source: it is advisory,
+/// often absent, and names art this build does not have. A response neither
+/// names draws as dots, which at least says "there is something here to
+/// press" -- the button still works, since the type travels with it.
+private ActionIcon responseIcon(ref const(NotificationResponse) response)
+{
+    switch (response.type)
+    {
+        case "accept", "confirm", "yes":     return ActionIcon.check;
+        case "decline", "reject", "deny",
+             "no", "cancel":                 return ActionIcon.cross;
+        case "delete", "acknowledge":        return ActionIcon.trash;
+        case "block":                        return ActionIcon.ban;
+        case "unsubscribe":                  return ActionIcon.bellSlash;
+        case "join":                         return ActionIcon.join;
+        case "reply":                        return ActionIcon.reply;
+        default:                             break;
+    }
+
+    switch (response.icon)
+    {
+        case "check":       return ActionIcon.check;
+        case "cancel":      return ActionIcon.cross;
+        case "ban":         return ActionIcon.ban;
+        case "bell-slash":  return ActionIcon.bellSlash;
+        case "reply":       return ActionIcon.reply;
+        default:            return ActionIcon.dots;
+    }
+}
+
+/// Ink for an icon: yes is green, the two ways of saying no are red, and
+/// everything else is plain. Colour is doing the same work the words used
+/// to -- it is the fastest thing to read on a button with no label, and it
+/// is what keeps Accept and Decline from being two grey squares.
+private mu_Color iconTint(ActionIcon icon)
+{
+    final switch (icon)
+    {
+        case ActionIcon.check:
+            return mu_Color(110, 210, 120, 255);
+        case ActionIcon.cross:
+        case ActionIcon.ban:
+            return mu_Color(225, 100, 100, 255);
+        case ActionIcon.trash:
+        case ActionIcon.bellSlash:
+        case ActionIcon.join:
+        case ActionIcon.reply:
+        case ActionIcon.dots:
+            return mu_Color(205, 210, 220, 255);
+    }
+}
+
+unittest
+{
+    // The type names the icon even when the hint disagrees or is missing.
+    NotificationResponse accept = NotificationResponse("accept", "Accept", "", "");
+    assert(responseIcon(accept) == ActionIcon.check);
+
+    NotificationResponse ack = NotificationResponse("delete",
+        "Acknowledge and dismiss this notification", "check", "");
+    assert(responseIcon(ack) == ActionIcon.trash);
+
+    // Unlisted type, usable hint.
+    NotificationResponse odd = NotificationResponse("mysteryAction", "", "ban", "");
+    assert(responseIcon(odd) == ActionIcon.ban);
+
+    // Neither: still a button, just an unnamed one.
+    NotificationResponse blank = NotificationResponse("mysteryAction", "", "", "");
+    assert(responseIcon(blank) == ActionIcon.dots);
 }
 
 /// Tools tab: utility buttons.
