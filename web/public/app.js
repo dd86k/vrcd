@@ -127,6 +127,62 @@ function responseLabel(response) {
    which button of a group invite was pressed is the server's business. */
 var NOTIFY_DONE = { accept: "Accepted", hide: "Dismissed", respond: "Answered" };
 
+/* The picture on a v2 response's button, by response type. The type is the
+   action - it is what gets posted back - so it picks the icon, the same way
+   responseLabel words the button from it. Mirrors `responseIcon` in the SDL
+   client (client/source/client/ui.d), so both front-ends draw one action the
+   same way. */
+var NOTIFY_ICONS = {
+    accept: "i-check", confirm: "i-check", yes: "i-check",
+    decline: "i-x", reject: "i-x", deny: "i-x", no: "i-x", cancel: "i-x",
+    "delete": "i-trash", acknowledge: "i-trash",
+    block: "i-ban",
+    unsubscribe: "i-bell-slash",
+    join: "i-enter",
+    reply: "i-reply"
+};
+
+/* VRChat's own icon hint, which is advisory, often absent, and names art
+   nobody here has. Only consulted for a response type not listed above. */
+var NOTIFY_ICON_HINTS = {
+    check: "i-check", cancel: "i-x", ban: "i-ban",
+    "bell-slash": "i-bell-slash", reply: "i-reply"
+};
+
+function responseIcon(response) {
+    // hasOwnProperty for the same reason responseLabel uses it: the type
+    // comes off the wire, and "constructor" is not an icon.
+    if (NOTIFY_ICONS.hasOwnProperty(response.type))
+        return NOTIFY_ICONS[response.type];
+    if (NOTIFY_ICON_HINTS.hasOwnProperty(response.icon || ""))
+        return NOTIFY_ICON_HINTS[response.icon];
+    // Still a button, just an unnamed one: the type travels with it, so it
+    // posts back correctly whether or not this build can draw it.
+    return "i-dots";
+}
+
+/* The colour of a card's left edge, by notification type. Grouped by family
+   rather than by exact type, since VRChat adds types faster than a palette
+   usefully grows - an unlisted `group.somethingNew` still lands on the group
+   colour by prefix. Mirrors `notifAccent` in the SDL client. */
+var NOTIFY_ACCENTS = {
+    friendRequest: "#46c85a",           // green, someone new
+    invite: "#36d7c0",                  // teal, the app accent
+    requestInvite: "#36d7c0",
+    inviteResponse: "#36d7c0",
+    requestInviteResponse: "#36d7c0",
+    votetokick: "#dc4646",              // red, something ending
+    "instance.closed": "#dc4646",
+    boop: "#dcaa3c",                    // amber, someone talking
+    message: "#dcaa3c"
+};
+
+function notifyAccent(type) {
+    if (NOTIFY_ACCENTS.hasOwnProperty(type)) return NOTIFY_ACCENTS[type];
+    if ((type || "").indexOf("group") === 0) return "#a05adc";
+    return "#5a5a64";
+}
+
 /* What each 2FA method is asking for. VRChat calls them totp, otp and
    emailOtp; only the first is the usual authenticator app. */
 var TWOFA_TEXT = {
@@ -736,6 +792,12 @@ function notifyCard(entry) {
 
     var card = el("div", "notify" + (entry.debug ? " fake" : ""));
 
+    /* The spine down the left edge, which is what makes the lines above the
+       buttons read as one card rather than as a block of text. A fake keeps
+       its own amber stripe: that warning outranks knowing the type at a
+       glance, and .notify.fake overrides this in the stylesheet. */
+    card.style.setProperty("--spine", notifyAccent(entry.notification_type));
+
     /* A button, not a div, so the sender opens in the detail pane the way a
        feed row does. The action buttons are siblings of it, never inside it.
 
@@ -786,15 +848,17 @@ function notifyCard(entry) {
         responses.forEach(function (response) {
             actions.appendChild(notifyButton(entry, "respond",
                 responseLabel(response),
-                NOTIFY_PRIMARY[response.type] === true, busy, response));
+                NOTIFY_PRIMARY[response.type] === true, busy, response,
+                responseIcon(response)));
         });
     } else {
         if (kind.accept)
-            actions.appendChild(notifyButton(entry, "accept", kind.accept, true, busy));
+            actions.appendChild(notifyButton(entry, "accept", kind.accept,
+                true, busy, null, "i-check"));
         // An invite is answered by going there, which is the same self-invite
         // the roster offers; VRChat's accept endpoint does nothing for one.
         if (kind.join && entry.location) {
-            var go = joinButton(entry.location, "JOIN WORLD");
+            var go = joinButton(entry.location, "JOIN WORLD", "i-enter");
             go.disabled = busy;
             actions.appendChild(go);
         }
@@ -806,11 +870,60 @@ function notifyCard(entry) {
     if (entry.can_delete !== false) {
         var dismiss = responses.length ? "DISMISS" : kind.hide;
         if (dismiss)
-            actions.appendChild(notifyButton(entry, "hide", dismiss, false, busy));
+            actions.appendChild(notifyButton(entry, "hide", dismiss, false,
+                busy, null, "i-trash"));
     }
+
+    notifyBlock(actions, entry, busy);
+
     if (actions.childNodes.length) card.appendChild(actions);
 
     return card;
+}
+
+/* Block, last in the row and so furthest from accept: the two are opposite
+   answers to the same request and should not be neighbours under a thumb.
+   It answers the sender rather than this one notification, which is the
+   point - dismissing a request from somebody who sends another every day is
+   not an answer.
+
+   Offered only for a notification from an actual person: a v2 group
+   notification carries a `grp_` ID in the same field, and there is nobody to
+   block behind it. Armed rather than fired, like every other block on this
+   page, and keyed by sender, so the same person armed here reads as armed in
+   their pane.
+
+   A fake gets no block button. Everything else a fake answers is answered by
+   the link and never reaches VRChat, but a moderation has no such path: it
+   would be a real call about a person who was invented two clicks ago. */
+function notifyBlock(actions, entry, busy) {
+    if (entry.debug) return;
+    if ((entry.sender_user_id || "").indexOf("usr_") !== 0) return;
+
+    var id = entry.sender_user_id;
+    var mod = state.moderations;
+    // Which way it points is not known until the lists land, and there is no
+    // unblock to offer here: the inbox is not where that is undone.
+    if (!mod || mod.loaded === false || isModerated("blocked", id)) return;
+
+    appendArmed(actions, "block|" + id, "BLOCK", "CONFIRM BLOCK",
+        busy || pendingModerations[id] === true,
+        function (label) {
+            var button = el("button", "act", label);
+            button.disabled = state.connected === false;
+            button.onclick = function () {
+                moderate("block", id, button);
+                /* Blocking answers the notification too: a request from
+                   somebody who can no longer send one is not worth leaving
+                   in the inbox. Only when VRChat allows the dismiss - a row
+                   it clears itself would come back on the next seed. No
+                   button of its own: it rides on the block's, which is
+                   already saying it is working. */
+                if (entry.can_delete !== false)
+                    notifyAct(entry, "hide", null);
+            };
+            return button;
+        }, render, "i-ban");
 }
 
 /* "group.queueReady" -> "Group queue ready". A type this build has never
@@ -821,12 +934,15 @@ function notifyLabel(type) {
     return words.charAt(0).toUpperCase() + words.slice(1).toLowerCase();
 }
 
-function notifyButton(entry, action, label, primary, busy, response) {
-    var button = el("button", "act" + (primary ? " primary" : ""), label);
+function notifyButton(entry, action, label, primary, busy, response, iconName) {
+    var cls = "act" + (primary ? " primary" : "");
+    var button = iconName ? iconAct(cls, label, iconName) : el("button", cls, label);
     // What VRChat called it, for the cases where the short label dropped
-    // something ("...this group's event announcements" - which group?).
+    // something ("...this group's event announcements" - which group?). It
+    // joins the label rather than replacing it now that the label is the only
+    // thing saying what the picture means.
     if (response && response.text && response.text.toUpperCase() !== label)
-        button.title = response.text;
+        button.title = iconName ? label + " - " + response.text : response.text;
     button.disabled = busy;
     button.onclick = function () { notifyAct(entry, action, button, response); };
     return button;
@@ -1367,18 +1483,73 @@ function appendDelete(actions, id, action, busy) {
 /* Two taps, and the second one is not where the first landed: Cancel takes
    that spot, because none of these can be undone. `make` builds the confirm
    button, since what one sends is not what the next one does: a delete and a
-   block do not go to the same place. */
-function appendArmed(actions, key, label, confirmLabel, busy, make) {
+   block do not go to the same place.
+
+   `redraw` is what puts the armed state on screen, and defaults to the detail
+   pane because that is where all of these but one live. `iconName` draws the
+   arming button as a square icon instead of a word, for the one row that is
+   built out of those - and then Cancel is a square too, so it lands on the
+   same spot rather than merely near it. */
+function appendArmed(actions, key, label, confirmLabel, busy, make, redraw, iconName) {
     if (armedAction === key) {
-        actions.appendChild(cancelButton(""));
+        /* Plain, not the cross's usual red: in an armed pair the red one has
+           to be the button that does something, and that is Confirm. A red
+           Cancel reads as the dangerous one and inverts the whole point. */
+        actions.appendChild(iconName
+            ? iconAct("act", "CANCEL", "i-x", function () {
+                  armedAction = ""; render();
+              }, "")
+            : cancelButton(""));
         actions.appendChild(make(confirmLabel));
         return;
     }
 
-    var arm = el("button", "act", label);
+    var arm = iconName ? iconAct("act", label, iconName) : el("button", "act", label);
     arm.disabled = busy;
-    arm.onclick = function () { armedAction = key; renderDetail(); };
+    arm.onclick = function () { armedAction = key; (redraw || renderDetail)(); };
     actions.appendChild(arm);
+}
+
+/* Put a button into its "working on it" state, and hand back the undo.
+
+   A button made of words says so in words. An icon button cannot: writing
+   text into it throws the picture away, and "SENDING..." in a square button
+   is clipped anyway - so for those the disabled state is the whole signal.
+   Null is allowed, for an action that rides along with another one and has no
+   button of its own. */
+function markSending(button) {
+    if (!button) return function () {};
+
+    button.disabled = true;
+    if (button.classList.contains("ico"))
+        return function () { button.disabled = false; };
+
+    var label = button.textContent;
+    button.textContent = "SENDING...";
+    return function () {
+        button.disabled = false;
+        button.textContent = label;
+    };
+}
+
+/* Ink for a picture, by which picture it is: yes is green, the two ways of
+   saying no are red, everything else plain. Keyed by icon rather than by
+   label so it still holds for a response type nobody here has heard of,
+   which is how `iconTint` does it in the SDL client. */
+var ICON_TONES = { "i-check": "yes", "i-x": "no", "i-ban": "no" };
+
+/* A button carrying a picture instead of a word. The word still travels with
+   it: a title for a pointer, an aria-label for everything else. An icon says
+   what it does only to somebody who already knows it, and a button with no
+   accessible name says nothing at all. */
+function iconAct(cls, label, name, onclick, tone) {
+    var ink = tone === undefined ? ICON_TONES[name] : tone;
+    var button = el("button", cls + " ico" + (ink ? " " + ink : ""));
+    button.appendChild(icon(name, 22));
+    button.title = label;
+    button.setAttribute("aria-label", label);
+    if (onclick) button.onclick = onclick;
+    return button;
 }
 
 function cancelButton(size) {
@@ -2714,13 +2885,11 @@ function showTool(section) {
 /* Fire and forget, like every other action: the outcome arrives in the next
    snapshot, as a result and as lists that have already moved. */
 function moderate(action, id, button) {
-    var label = button.textContent;
     // In the map rather than on the button: a snapshot redraws the row or the
     // pane from scratch and would hand back an enabled button otherwise.
     pendingModerations[id] = true;
     armedAction = "";
-    button.disabled = true;
-    button.textContent = "SENDING...";
+    var restore = markSending(button);
 
     fetch("/api/moderation", {
         method: "POST",
@@ -2730,13 +2899,11 @@ function moderate(action, id, button) {
         if (r.ok) return;
         delete pendingModerations[id];
         showToast("The vrcd web server refused that", true);
-        button.disabled = false;
-        button.textContent = label;
+        restore();
     }).catch(function () {
         delete pendingModerations[id];
         showToast("Could not reach the vrcd web server", true);
-        button.disabled = false;
-        button.textContent = label;
+        restore();
     });
 }
 
@@ -3672,8 +3839,10 @@ function detailPerson(body, id, name) {
     });
 }
 
-function joinButton(location, label) {
-    var button = el("button", "act primary", label);
+function joinButton(location, label, iconName) {
+    var button = iconName
+        ? iconAct("act primary", label, iconName)
+        : el("button", "act primary", label);
     button.onclick = function () { join(location, button); };
     return button;
 }
@@ -3845,12 +4014,10 @@ function join(location, button) {
 
 function notifyAct(entry, action, button, response) {
     var id = entry.id;
-    var label = button.textContent;
     // Marked in the map rather than on the button: the next snapshot redraws
     // the card from scratch and would hand back an enabled button otherwise.
     pendingNotifications[id] = true;
-    button.disabled = true;
-    button.textContent = "SENDING...";
+    var restore = markSending(button);
 
     fetch("/api/notification", {
         method: "POST",
@@ -3868,13 +4035,11 @@ function notifyAct(entry, action, button, response) {
         if (r.ok) return;
         delete pendingNotifications[id];
         showToast("The vrcd web server refused that", true);
-        button.disabled = false;
-        button.textContent = label;
+        restore();
     }).catch(function () {
         delete pendingNotifications[id];
         showToast("Could not reach the vrcd web server", true);
-        button.disabled = false;
-        button.textContent = label;
+        restore();
     });
 }
 

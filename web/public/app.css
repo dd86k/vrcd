@@ -199,8 +199,14 @@ button { font: inherit; color: inherit; }
    request should be one tap, and in a headset the detour through a second
    pane is the expensive part. */
 
+/* The spine is what makes the lines and the buttons under them read as one
+   card rather than as a wall of text: it says where an entry starts, which is
+   a grouping job that no amount of emphasis on one line does. Its colour is
+   the notification's type (set per card in notifyCard, mirroring the SDL
+   client), so what kind of thing this is arrives before any of the words. */
 .notify {
     background: var(--panel); border: 1px solid var(--line);
+    border-left: 3px solid var(--spine, var(--line));
     border-radius: 10px; padding: .85rem; margin-bottom: .75rem;
 }
 .notify .head {
@@ -236,6 +242,25 @@ button.head { cursor: pointer; }
    shrinking past what a thumb can hit. */
 .notify .actions { flex-direction: row; flex-wrap: wrap; margin-top: .85rem; }
 .notify .act { flex: 1 1 8rem; }
+
+/* An icon button is square and stays square: it is a picture, so there is
+   nothing in it that wants the extra width, and a row of them leaves the
+   card's own text the space a row of words was taking. Wide enough for a
+   thumb in a headset, which is the size the whole page is drawn to. */
+.act.ico {
+    flex: none; width: 3.5rem; min-width: 3.5rem; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+}
+/* Yes is green and the two ways of saying no are red - the same ink the SDL
+   client's iconTint gives them, and the fastest thing to read on a button
+   with no word on it. Everything else stays plain: a row in which every
+   button is coloured is a row of alarms. Only the picture is tinted, never
+   the frame, so the buttons still read as one set. */
+.act.ico .icon { color: var(--muted); }
+.act.ico.yes .icon { color: #6ed278; }
+.act.ico.no  .icon { color: #e16464; }
+.act.ico:disabled .icon { color: var(--dim); }
+.act.ico.primary .icon { color: #fff; }
 
 /* ---- stuff -------------------------------------------------------------
    A grid of cards rather than rows: these entries are mostly their artwork,
