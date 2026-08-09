@@ -1967,7 +1967,7 @@ private void drawFriendProfile(mu_Context* ctx, AppState* state, int scrollDelta
 ///   |# Type . Date                             |
 ///   |# From                                    |  (friendRequest)
 ///   |# Message                                 |
-///   |# [check] [trash]        Accept           |
+///   |# [check] [trash] [ban]  Accept           |
 ///   +------------------------------------------+
 ///
 /// The `#` is a coloured spine down the left edge, and it is what makes the
@@ -1989,7 +1989,21 @@ private void drawFriendProfile(mu_Context* ctx, AppState* state, int scrollDelta
 /// there is no hover in VR, and no room for it either.
 ///
 /// Deny was removed because it sent the same "hide" as Dismiss, so the
-/// trash covers both cases.
+/// trash covers both cases. Block is the answer neither of them is: a
+/// dismiss ends this notification, and somebody who sends one every day
+/// needs the sender ended instead. It is last in the row, furthest from
+/// Accept, since those two are opposite answers to the same request.
+///
+/// Being destructive, it arms rather than fires: the other buttons go away,
+/// Cancel takes over the square the ban was in -- the spot the finger just
+/// left, so a double tap cancels -- and Confirm sits a square further right
+/// on a second row. Confirming also dismisses the notification, when VRChat
+/// allows that notification to be dismissed at all: a request from somebody
+/// who can no longer send one is not worth answering. The armed state is
+/// keyed by sender rather than by notification, so it is the same arming the
+/// friend list does, and blocking clears the button from every other
+/// notification that sender left behind -- `isBlocked` follows the
+/// `moderations` snapshot the server sends after the call lands.
 ///
 /// A v2 notification (group invite, join request, transfer, queue-ready)
 /// names its own buttons instead, and the row draws those: VRChat writes
@@ -2011,6 +2025,8 @@ private void drawFriendProfile(mu_Context* ctx, AppState* state, int scrollDelta
 /// no event to replay.
 private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDelta)
 {
+    import std.string : startsWith;
+
     static immutable int[1] fullCol    = [-1];
     static immutable int[2] headerCols = [-130, 120];
     enum int actionSize = 64;   // square, and big enough to hit in VR
@@ -2096,21 +2112,104 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
                 // the friend-request endpoint.
                 bool ownAccept = n.info.responses.length == 0
                     && n.info.notificationType == "friendRequest";
+
+                // Block answers the whole sender rather than this one
+                // notification, which is the point: dismissing a request
+                // from somebody who sends another every day is not an
+                // answer. Offered only for a notification from an actual
+                // person -- a v2 group notification carries a grp_ ID in
+                // the same field -- and only when the server is new enough
+                // to moderate and does not already have them blocked.
+                bool canBlock = state.serverProtocol >= PROTOCOL_MODERATION
+                    && n.info.senderUserId.startsWith("usr_")
+                    && state.isBlocked(n.info.senderUserId) == false;
+
                 int buttons = cast(int) n.info.responses.length;
                 if (ownAccept)
                     ++buttons;
                 if (n.info.canDelete)
                     ++buttons;
+                if (canBlock)
+                    ++buttons;
 
-                if (buttons > 0)
+                if (buttons > MU_MAX_WIDTHS - 2)
+                    buttons = MU_MAX_WIDTHS - 2;
+
+                // Block is the last square, so that is the column Cancel has
+                // to take over once it is armed.
+                int banColumn = buttons - 1;
+                bool blockArmed = canBlock
+                    && state.armedConfirm.kind == "block"
+                    && state.armedConfirm.id == n.info.senderUserId;
+
+                if (blockArmed)
+                {
+                    // Armed: every other button goes away and Cancel takes
+                    // the square the ban was in -- the spot the finger just
+                    // left -- so an accidental double tap cancels. Confirm
+                    // waits on its own row, a full square further right.
+                    string blockName = n.info.senderName.length > 0
+                        ? n.info.senderName : n.info.senderUserId;
+
+                    int[MU_MAX_WIDTHS] cols = void;
+                    cols[0] = notifSpineGap;
+                    foreach (int i; 0 .. banColumn + 1)
+                        cols[i + 1] = actionSize;
+                    cols[banColumn + 2] = -1;
+                    mu_layout_row(ctx, banColumn + 3, cols.ptr, actionSize);
+                    mu_layout_next(ctx); // the gap
+                    foreach (int i; 0 .. banColumn)
+                        mu_layout_next(ctx); // where the other buttons were
+
+                    // Plain, not the cross's usual red: in an armed pair the
+                    // red one has to be the button that does something, and
+                    // that is Confirm. A red Cancel reads as the dangerous
+                    // one and inverts the whole point of arming.
+                    const(char)[] cancelLabel;
+                    if (iconButton(ctx, ActionIcon.cross, actionPlainTint,
+                        "Cancel", cancelLabel))
+                        state.armedConfirm = ArmedConfirm.init;
+
+                    char[128] promptBuf = void;
+                    mu_draw_control_text(ctx,
+                        cast(string) sformat(promptBuf, "Block %s?", blockName),
+                        mu_layout_next(ctx), MU_COLOR_TEXT, 0);
+
+                    static immutable int[4] confirmCols =
+                        [notifSpineGap, actionSize, 220, -1];
+                    mu_layout_row(ctx, 4, confirmCols.ptr, actionSize);
+                    mu_layout_next(ctx); // the gap
+                    mu_layout_next(ctx); // keeps Confirm off the Cancel square
+                    if (clickButton(ctx, "Confirm Block"))
+                    {
+                        state.armedConfirm = ArmedConfirm.init;
+                        if (state.moderationActionInFlight == false)
+                        {
+                            state.pendingModerationActions ~= ModerationAction(
+                                n.info.senderUserId, blockName, "block");
+                            setStatusFlash(state, "  Blocking...");
+
+                            // Blocking answers the notification too: leaving
+                            // it in the inbox would be a request from
+                            // somebody who can no longer send one. Only when
+                            // VRChat allows the hide -- a row it clears
+                            // itself would just come back on the next seed.
+                            if (n.info.canDelete)
+                            {
+                                state.pendingActions ~= dismissAction(n.info);
+                                dismissedIds ~= n.info.id;
+                            }
+                        }
+                    }
+                    mu_layout_next(ctx); // right spacer
+                }
+                else if (buttons > 0)
                 {
                     // A gap clearing the spine, a square per action, then one
                     // cell taking the rest of the width for the hover caption.
                     // Anything past the widths microui carries wraps onto a
                     // second row of the same squares, which is a shape no
                     // notification has reached but beats dropping a button.
-                    if (buttons > MU_MAX_WIDTHS - 2)
-                        buttons = MU_MAX_WIDTHS - 2;
                     int[MU_MAX_WIDTHS] cols = void;
                     cols[0] = notifSpineGap;
                     foreach (int i; 0 .. buttons)
@@ -2165,6 +2264,17 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
                             state.pendingActions ~= dismissAction(n.info);
                             dismissedIds ~= n.info.id;
                         }
+                    }
+
+                    // Last, and so furthest from Accept: the two are the
+                    // opposite answers to the same request, and they should
+                    // not be neighbours under a thumb.
+                    if (canBlock)
+                    {
+                        if (iconButton(ctx, ActionIcon.ban,
+                            iconTint(ActionIcon.ban), "Block", hoverLabel))
+                            state.armedConfirm =
+                                ArmedConfirm("block", n.info.senderUserId);
                     }
 
                     mu_Rect caption = mu_layout_next(ctx);
@@ -2296,6 +2406,9 @@ private ActionIcon responseIcon(ref const(NotificationResponse) response)
     }
 }
 
+/// Ink for an icon that is neither a yes nor a no.
+private enum mu_Color actionPlainTint = mu_Color(205, 210, 220, 255);
+
 /// Ink for an icon: yes is green, the two ways of saying no are red, and
 /// everything else is plain. Colour is doing the same work the words used
 /// to -- it is the fastest thing to read on a button with no label, and it
@@ -2314,7 +2427,7 @@ private mu_Color iconTint(ActionIcon icon)
         case ActionIcon.join:
         case ActionIcon.reply:
         case ActionIcon.dots:
-            return mu_Color(205, 210, 220, 255);
+            return actionPlainTint;
     }
 }
 
@@ -3000,10 +3113,18 @@ private void drawToolsTab(mu_Context* ctx, AppState* state, int scrollDelta)
         // Synthetic id with "test_" prefix so the server-bound action would
         // be a no-op if accidentally dispatched, and unique per click so the
         // dedup in addNotification doesn't swallow repeats.
-        string id = "test_" ~ to!string(Clock.currTime.toUnixTime!long());
+        string stamp = to!string(Clock.currTime.toUnixTime!long());
+        string id = "test_" ~ stamp;
         NotificationInfo test;
         test.id = id;
         test.notificationType = "friendRequest";
+        // An invented sender, so the row draws its Block button and the
+        // arm-and-confirm can be walked through -- that flow is the hardest
+        // part of the inbox to get in front of, since a real friend request
+        // arrives when somebody sends one. The "usr_test_" prefix keeps the
+        // moderation inside the client (see the drain in gui.d): there is
+        // nobody behind this ID for VRChat to be asked about.
+        test.senderUserId = "usr_test_" ~ stamp;
         test.senderName = "TestUser";
         test.message = "Synthetic friend request";
         test.receivedAtUnix = Clock.currTime.toUnixTime!long();

@@ -8,7 +8,7 @@ import std.algorithm.sorting : sort;
 import std.conv : to;
 import std.format : format;
 import std.json;
-import std.string : fromStringz, indexOf;
+import std.string : fromStringz, indexOf, startsWith;
 
 import core.thread;
 import core.time : Duration, MonoTime, dur;
@@ -969,6 +969,19 @@ private void eventLoop(mu_Context* uictx)
             {
                 foreach (ref ModerationAction act; appState.pendingModerationActions)
                 {
+                    // The injected test notification's sender is invented, so
+                    // a moderation for it has nobody to reach. Answered here
+                    // rather than asking VRChat about a user ID that was made
+                    // up two clicks ago: the point of the test row is to walk
+                    // the arm-and-confirm, not to file a report.
+                    if (act.userId.startsWith("usr_test_"))
+                    {
+                        appState.addFeedEntry(0, "system", act.displayName,
+                            "Test moderation (" ~ act.action ~ "), not sent",
+                            timeNow(), "", false, EventSource.system);
+                        continue;
+                    }
+
                     if (act.action == "unfriend")
                         conn.sendUnfriend(act.userId);
                     else
