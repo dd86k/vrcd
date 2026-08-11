@@ -223,10 +223,16 @@ button.head { cursor: pointer; }
 
 /* A fake notification, which exists only under --debug. It answers the same
    buttons as a real one, so it is marked twice over: a tag next to the type,
-   where the eye already is, and a stripe down the card that is visible without
-   reading anything. Both matter in the other direction too -- a real request
-   left sitting because it looked like a fake is the worse mistake. */
-.notify.fake { border-color: #6a5a2a; border-left: 3px solid #d8b24a; }
+   where the eye already is, and an amber outline round the card that is visible
+   without reading anything. Both matter in the other direction too -- a real
+   request left sitting because it looked like a fake is the worse mistake.
+
+   The outline goes round three sides and the spine keeps its type colour. A
+   fake exists to be developed against, and the spine is one of the things the
+   renderer produces, so painting every fake the same amber hid the property a
+   one-of-each catalogue is spawned to look at. */
+.notify.fake { border-color: #6a5a2a;
+    border-left-color: var(--spine, var(--line)); }
 .tag {
     display: inline-block; margin-right: .4rem; padding: .05rem .35rem;
     border-radius: 4px; font-size: .65rem; font-weight: 700;

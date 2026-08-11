@@ -809,9 +809,10 @@ function notifyCard(entry) {
     var card = el("div", "notify" + (entry.debug ? " fake" : ""));
 
     /* The spine down the left edge, which is what makes the lines above the
-       buttons read as one card rather than as a block of text. A fake keeps
-       its own amber stripe: that warning outranks knowing the type at a
-       glance, and .notify.fake overrides this in the stylesheet. */
+       buttons read as one card rather than as a block of text. A fake gets one
+       too, in its own type's colour: the amber that marks it as fake goes round
+       the other three sides instead, since a catalogue of one fake per type is
+       spawned precisely to look at what this line does. */
     card.style.setProperty("--spine", notifyAccent(entry.notification_type));
 
     /* A button, not a div, so the sender opens in the detail pane the way a
