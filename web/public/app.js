@@ -364,8 +364,10 @@ var profileWasPending = false;
 /* False until a snapshot has been through the reporters. The snapshot carries
    the last outcome indefinitely, so a page that just opened would otherwise
    announce a change somebody made an hour ago; the line under the picker still
-   says it, which is the right weight for old news. */
-var statusSeeded = false;
+   says it, which is the right weight for old news. Every reporter that watches
+   an outcome for a change is seeded from the same flag: the first snapshot is
+   where the page learns what the outcomes already are, not news about them. */
+var seeded = false;
 /* Notification IDs with a request in flight. A snapshot replaces `state`
    wholesale, so the in-flight mark cannot live on the entry itself. */
 var pendingNotifications = {};
@@ -4243,16 +4245,17 @@ function applyState(message) {
     }
 
     render();
-    reportJoin();
-    reportNotifyAction();
-    reportContentAction();
-    reportModeration();
-    // Told whether this is the first snapshot this page has seen, which is
-    // flipped here rather than in there: a first snapshot carrying no outcome
-    // at all still counts as seen, or the first real one would be swallowed as
-    // though it predated the page.
-    reportStatus(statusSeeded === false);
-    statusSeeded = true;
+    // Each reporter is told whether this is the first snapshot this page has
+    // seen, which is flipped here rather than in them: a first snapshot
+    // carrying no outcome at all still counts as seen, or the first real one
+    // would be swallowed as though it predated the page.
+    var seeding = seeded === false;
+    seeded = true;
+    reportJoin(seeding);
+    reportNotifyAction(seeding);
+    reportContentAction(seeding);
+    reportModeration(seeding);
+    reportStatus(seeding);
     reportProfile();
     syncContent();
 }
@@ -4349,7 +4352,7 @@ function syncContent() {
     });
 }
 
-function reportContentAction() {
+function reportContentAction(seeding) {
     var result = state.content_action;
     if (!result || !result.attempted) return;
 
@@ -4359,6 +4362,10 @@ function reportContentAction() {
         result.success + "|" + result.error;
     if (key === lastActionKey) return;
     lastActionKey = key;
+
+    // Already there when the page opened, so it is not news. Nothing below is
+    // worth doing either: a page this new has no press in flight to answer.
+    if (seeding) return;
 
     delete pendingItems[result.id];
     armedAction = "";
@@ -4377,7 +4384,7 @@ function reportContentAction() {
     showToast("That failed: " + result.error, true);
 }
 
-function reportModeration() {
+function reportModeration(seeding) {
     var result = state.moderation_action;
     if (!result || !result.attempted) return;
 
@@ -4387,6 +4394,10 @@ function reportModeration() {
         result.success + "|" + result.error;
     if (key === lastModKey) return;
     lastModKey = key;
+
+    // Old news to a page that just opened, and the lists in the snapshot
+    // already show where the mute or block landed.
+    if (seeding) return;
 
     delete pendingModerations[result.user_id];
     armedAction = "";
@@ -4403,7 +4414,7 @@ function reportModeration() {
     showToast("That failed: " + result.error, true);
 }
 
-function reportNotifyAction() {
+function reportNotifyAction(seeding) {
     var result = state.notify_action;
     if (!result || !result.attempted) return;
 
@@ -4413,6 +4424,12 @@ function reportNotifyAction() {
         result.success + "|" + result.error;
     if (key === lastNotifyKey) return;
     lastNotifyKey = key;
+
+    // The confirmation is worth saying for a press -- the buttons in a row sit
+    // side by side and an accept is not a dismiss -- but a page that just
+    // opened pressed nothing, and the notification it names is long gone from
+    // the inbox anyway.
+    if (seeding) return;
 
     if (result.success) {
         showToast(NOTIFY_DONE[result.action] || "Done", false);
@@ -4425,7 +4442,7 @@ function reportNotifyAction() {
     showToast("That failed: " + result.error, true);
 }
 
-function reportJoin() {
+function reportJoin(seeding) {
     var join = state.join;
     if (!join || !join.attempted) return;
 
@@ -4434,6 +4451,10 @@ function reportJoin() {
     var key = join.location + "|" + join.success + "|" + join.error;
     if (key === lastJoinKey) return;
     lastJoinKey = key;
+
+    // An invite somebody asked for an hour ago is not news to a page that just
+    // opened, and "check VRChat" points at a notification already read.
+    if (seeding) return;
 
     showToast(join.success
         ? "Invite sent, check VRChat"
