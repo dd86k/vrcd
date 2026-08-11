@@ -2323,6 +2323,13 @@ private enum mu_Color notifMetaColor = mu_Color(140, 145, 155, 255);
 /// family rather than by exact type, since the list of types grows faster
 /// than a palette usefully can -- an unlisted `group.somethingNew` still
 /// lands on the group colour by prefix.
+///
+/// Invites are blue rather than the teal they used to be. Teal sat 42 degrees
+/// of hue from the green above it at much the same lightness, which is close
+/// enough to confuse on a list and the pair that collapses first under
+/// deuteranopia; blue is 83 away and on the axis red-green colour blindness
+/// keeps. It is also lighter than the group purple, so those two separate even
+/// where hue does not survive.
 private mu_Color notifAccent(string notifType)
 {
     import std.string : startsWith;
@@ -2333,7 +2340,7 @@ private mu_Color notifAccent(string notifType)
             return mu_Color(70, 200, 90, 255);      // green, someone new
         case "invite", "requestInvite",
              "requestInviteResponse", "inviteResponse":
-            return mu_Color(54, 215, 192, 255);     // teal, the app accent
+            return mu_Color(74, 158, 255, 255);     // blue, somewhere to be
         case "votetokick", "instance.closed":
             return mu_Color(220, 70, 70, 255);      // red, something ending
         case "boop", "message":
