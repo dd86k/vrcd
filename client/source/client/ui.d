@@ -2124,10 +2124,14 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
                     && n.info.senderUserId.startsWith("usr_")
                     && state.isBlocked(n.info.senderUserId) == false;
 
+                // A row whose own responses already dismiss it does not get
+                // this build's Dismiss on top of them.
+                bool ownDismiss = n.info.canDelete && hasOwnDismiss(n.info) == false;
+
                 int buttons = cast(int) n.info.responses.length;
                 if (ownAccept)
                     ++buttons;
-                if (n.info.canDelete)
+                if (ownDismiss)
                     ++buttons;
                 if (canBlock)
                     ++buttons;
@@ -2256,7 +2260,7 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
                     // announcement is retracted) and refuses to be told to.
                     // Those rows are read-only rather than wearing a button
                     // that only fails.
-                    if (n.info.canDelete)
+                    if (ownDismiss)
                     {
                         if (iconButton(ctx, ActionIcon.trash,
                             iconTint(ActionIcon.trash), "Dismiss", hoverLabel))
@@ -2404,6 +2408,30 @@ private ActionIcon responseIcon(ref const(NotificationResponse) response)
         case "reply":       return ActionIcon.reply;
         default:            return ActionIcon.dots;
     }
+}
+
+/// Whether a v2 response already does what the row's own Dismiss would.
+///
+/// VRChat sends one of these on the rows with nothing to accept -- a group
+/// post, a group join request -- and drawing the row's own Dismiss beside it
+/// put two trash cans in the same row. VRChat's own wins: it is the button
+/// VRChat named, and it carries whatever `data` goes back with it.
+///
+/// Mirrors `NOTIFY_DISMISS_TYPES` in the web front-end.
+private bool responseDismisses(ref const(NotificationResponse) response)
+{
+    return response.type == "delete" || response.type == "acknowledge";
+}
+
+/// Whether any of a notification's own responses dismisses it.
+private bool hasOwnDismiss(ref const(NotificationInfo) info)
+{
+    foreach (ref const(NotificationResponse) response; info.responses)
+    {
+        if (responseDismisses(response))
+            return true;
+    }
+    return false;
 }
 
 /// Ink for an icon that is neither a yes nor a no.
