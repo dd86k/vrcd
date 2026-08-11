@@ -43,6 +43,7 @@ var PLATFORMS = {
     "standalonewindows": "PC",
     "android": "Quest",
     "ios": "iOS",
+    "nativemobile": "Mobile",
     "web": "Web"
 };
 
