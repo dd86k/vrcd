@@ -235,7 +235,10 @@ button.head { cursor: pointer; }
 .tag.fake { color: #1c1810; background: #d8b24a; }
 .notify .when { flex: none; color: var(--dim); font-size: .75rem; }
 .notify .ntitle { margin-top: .6rem; font-weight: 600; overflow-wrap: anywhere; }
-.notify .msg { margin-top: .6rem; font-size: .9rem; overflow-wrap: anywhere; }
+/* A group post is prose somebody typed into a box, so the newlines in it are
+   part of what they wrote, same as a bio. */
+.notify .msg { margin-top: .6rem; font-size: .9rem; overflow-wrap: anywhere;
+    white-space: pre-wrap; }
 .notify .note { margin-top: .6rem; color: var(--dim); font-size: .8rem; }
 /* Side by side while there is room. A v2 notification names its own buttons
    and can offer three or four, so they wrap onto a second line rather than
