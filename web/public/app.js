@@ -178,13 +178,20 @@ function responseIcon(response) {
 /* The colour of a card's left edge, by notification type. Grouped by family
    rather than by exact type, since VRChat adds types faster than a palette
    usefully grows - an unlisted `group.somethingNew` still lands on the group
-   colour by prefix. Mirrors `notifAccent` in the SDL client. */
+   colour by prefix. Mirrors `notifAccent` in the SDL client.
+
+   Invites are blue rather than the teal they used to be. Teal sat 42 degrees of
+   hue from the green above it at much the same lightness, which is close enough
+   to confuse on a list and the pair that collapses first under deuteranopia;
+   blue is 83 away and on the axis red-green colour blindness keeps. It is also
+   lighter than the group purple, so those two separate even where hue does not
+   survive. */
 var NOTIFY_ACCENTS = {
     friendRequest: "#46c85a",           // green, someone new
-    invite: "#36d7c0",                  // teal, the app accent
-    requestInvite: "#36d7c0",
-    inviteResponse: "#36d7c0",
-    requestInviteResponse: "#36d7c0",
+    invite: "#4a9eff",                  // blue, somewhere to be
+    requestInvite: "#4a9eff",
+    inviteResponse: "#4a9eff",
+    requestInviteResponse: "#4a9eff",
     votetokick: "#dc4646",              // red, something ending
     "instance.closed": "#dc4646",
     boop: "#dcaa3c",                    // amber, someone talking
