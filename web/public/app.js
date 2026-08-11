@@ -104,6 +104,20 @@ var NOTIFY_RESPONSE_LABELS = {
     deny: "DECLINE"
 };
 
+/* Response types that already do what the card's own dismiss button would.
+   VRChat sends one of these on the rows that have nothing to accept - a group
+   post, a group join request - and drawing the card's dismiss beside it put
+   two trash cans in the same row. VRChat's own wins: it is the button VRChat
+   named, and it carries whatever `data` goes back with it.
+
+   Mirrors `responseDismisses` in the SDL client. */
+var NOTIFY_DISMISS_TYPES = { "delete": true, acknowledge: true };
+
+/* hasOwnProperty because the type comes off the wire. */
+function responseDismisses(response) {
+    return NOTIFY_DISMISS_TYPES.hasOwnProperty(response.type);
+}
+
 /* A button's worth of text: short enough not to wrap in a row of them. */
 var NOTIFY_LABEL_MAX = 14;
 
@@ -866,8 +880,10 @@ function notifyCard(entry) {
 
     /* VRChat clears some of its own (a queue-ready expires, an announcement
        is retracted) and refuses to be told to. Those rows are read-only:
-       a dismiss button on one only fails. */
-    if (entry.can_delete !== false) {
+       a dismiss button on one only fails. And a row whose own responses
+       already include a dismiss has one - drawing this beside it is the same
+       button twice. */
+    if (entry.can_delete !== false && responses.some(responseDismisses) === false) {
         var dismiss = responses.length ? "DISMISS" : kind.hide;
         if (dismiss)
             actions.appendChild(notifyButton(entry, "hide", dismiss, false,
