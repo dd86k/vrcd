@@ -7,7 +7,7 @@ license "BSD-3-Clause-Clear"
 
 dependency "ddlogger" repository="git+https://github.com/dd86k/ddlogger.git" version="4397d8e57a88bd6b3a3e5e4c846ba97ac3bfd364"
 dependency "ddcurl" repository="git+https://github.com/dd86k/ddcurl.git" version="4fc6cfa36811a7fdd6f69e6c76e1e821aa0c8b1b"
-dependency "arsd-official:sqlite" version="~>11.0"
+dependency "arsd-official:sqlite" version="==12.1.2"
 
 # "." for dub.selections.json
 # ".." for VERSION
