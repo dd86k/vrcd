@@ -9,14 +9,35 @@ dependency "bindbc-sdl" version="==1.5.3"
 dependency "ddlogger" repository="git+https://github.com/dd86k/ddlogger.git" version="4397d8e57a88bd6b3a3e5e4c846ba97ac3bfd364"
 dependency "ddui" repository="git+https://github.com/dd86k/ddui.git" version="a70e43e45ceec730a34c5f49f6d3cdb43094b7ab"
 
+# Needed when adding configurations
+mainSourceFile "source/client/main.d"
+
+# ".." for VERSION
 stringImportPaths ".."
+
+# Minimum SDL2, SDL2_ttf, and SDL2_image versions the bindings expose
 versions "SDL" "SDL_2022" "SDL_TTF_2_22" "SDL_Image_200"
 
-// Friend bucketing and ordering is presentation shared with the web
-// front-end: both compile the same module so the two rosters cannot drift.
+# friends.d, events.d: Roster bucketing, ordering, and event presentation
+#                      shared with the web front-end, so both cannot drift
+# notifications.d: Notification model that server and clients speak
 sourceFiles "../common/source/vrcd/friends.d" "../common/source/vrcd/events.d" "../common/source/vrcd/notifications.d"
 
-// Direct-IPC join support: the Windows client talks to VRChat's launch-URI
-// named pipe in-process, sharing the protocol code with the pipehelper
-// executable that Linux runs inside the Proton container instead.
+# Direct-IPC join support: the Windows client talks to VRChat's launch-URI
+# named pipe in-process, sharing the protocol code with the pipehelper
+# executable that Linux runs inside the Proton container instead.
 sourceFiles "../pipehelper/source/vrcpipe.d" platform="windows"
+
+# Using dynamic SDL2 allows SDL2 to be updated with the rest of the system
+configuration "application" {
+	subConfiguration "bindbc-sdl" "dynamic"
+}
+
+# For hosts that ship no SDL2 new enough to load, or where a single
+# self-contained binary is wanted. Needs the SDL2 development libraries at
+# link time (-lSDL2 -lSDL2_ttf -lSDL2_image on POSIX. SDL2.lib, SDL2_ttf.lib,
+# and SDL2_image.lib on Windows).
+configuration "static" {
+	subConfiguration "bindbc-sdl" "static"
+	libs "SDL2" "SDL2_ttf" "SDL2_image"
+}

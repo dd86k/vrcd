@@ -103,7 +103,7 @@ Needs a D compiler with front-end version 2.104 (DMD >=2.104, GDC >=14, LDC >=1.
 See each component's README for dependencies, configuration, and architecture details.
 
 In short:
-- Client needs SDL2 dynamic libraries (SDL2, SDL2_ttf, SDL2_image), and optionally OpenSSL.
+- Client needs SDL2 libraries (SDL2, SDL2_ttf, SDL2_image), and optionally OpenSSL. They are loaded at run time by default, and only needed at build time with `dub build :client -c static`.
 - Server needs the sqlite library, and optionally OpenSSL. libcurl is loaded at run time by default, and only needed at build time with `dub build :server -c static`.
 
 ```bash

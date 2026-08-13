@@ -179,16 +179,37 @@ Except for SDL2, these dependencies are pulled by DUB when building.
 
 | Package | Purpose |
 |---------|---------|
-| `bindbc-sdl` | SDL2 dynamic bindings |
-| SDL2, SDL2_ttf | Windowing, software rendering, font rasterization |
+| `bindbc-sdl` | SDL2 bindings |
+| SDL2, SDL2_ttf, SDL2_image | Windowing, software rendering, font rasterization, image decoding |
 | `ddui` | Immediate-mode UI library |
 | `ddlogger` | Structured logging |
+
+System packages. SDL2 is only needed at link time under the `static` configuration; the default loads it at run time.
+
+| | Always | `-c static` only |
+|---|---|---|
+| Ubuntu | SDL2, SDL2_ttf, SDL2_image runtime libraries | `libsdl2-dev`, `libsdl2-ttf-dev`, `libsdl2-image-dev` |
+| Alpine | `sdl2`, `sdl2_ttf`, `sdl2_image` | `sdl2-dev`, `sdl2_ttf-dev`, `sdl2_image-dev` |
+
+OpenSSL 3.x shared libraries (`libssl.so.3`, `libcrypto.so.3`) are loaded dynamically at run time for TLS support. They are not a build dependency under either configuration.
 
 ## Building
 
 ```bash
-dub build :client
+dub build :client              # SDL2 loaded at run time (default)
+dub build :client -c static    # SDL2 linked at build time
 dub test :client
 ```
+
+### Configurations
+
+| Configuration | SDL2 | Notes |
+|---------------|------|-------|
+| `application` (default) | loaded at run time through bindbc-loader | Nothing links against the build host's SDL2, so the binary moves between distributions and picks up system SDL2 updates |
+| `static` | linked at build time | For hosts with no loadable SDL2, or when a self-contained binary is wanted. Needs the SDL2 development libraries present (`-lSDL2 -lSDL2_ttf -lSDL2_image`, `SDL2.lib` and friends on Windows) |
+
+The versions in [Requirements](#requirements) apply either way. Under the default configuration that is a property of the libraries present at run time (checked by `loadSDL()` and friends, which report "library too old" and exit), rather than one frozen into the binary by whichever machine built it.
+
+Which one a build used is logged at startup as `SDL2 binding: dynamic` or `SDL2 binding: static`, next to the linked library versions.
 
 > **Note:** If you get linking issues on Windows, try with LDC: `--compiler=ldc2`

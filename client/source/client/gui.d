@@ -120,6 +120,76 @@ void requestRepaint()
 }
 private bool wakeRequested;
 
+/// Load SDL2, SDL2_ttf, and SDL2_image at run time.
+///
+/// Under the "static" configuration, bindbc-sdl binds the libraries at link
+/// time and emits no loader functions at all, so there is nothing to load and
+/// nothing that can fail here.
+///
+/// Returns: True if every library was loaded (or statically linked).
+private bool loadSDLLibraries()
+{
+    version (BindSDL_Static)
+    {
+        return true;
+    }
+    else
+    {
+        // Load SDL2.
+        SDLSupport sdlStatus = loadSDL();
+        if (sdlStatus == SDLSupport.noLibrary)
+        {
+            logError("No SDL2 library found");
+            return false;
+        }
+        if (sdlStatus == SDLSupport.badLibrary)
+        {
+            logError("SDL2 library too old");
+            return false;
+        }
+
+        // Load SDL2_ttf.
+        SDLTTFSupport ttfStatus = loadSDLTTF();
+        if (ttfStatus == SDLTTFSupport.noLibrary)
+        {
+            // Debian/Ubuntu ship libSDL2_ttf-2.0.so.0 which bindbc doesn't
+            // search for by default; try it explicitly.
+            ttfStatus = loadSDLTTF("libSDL2_ttf-2.0.so.0");
+        }
+        if (ttfStatus == SDLTTFSupport.noLibrary)
+        {
+            logError("No SDL2_ttf library found");
+            return false;
+        }
+        if (ttfStatus == SDLTTFSupport.badLibrary)
+        {
+            logError("SDL2_ttf library too old");
+            return false;
+        }
+
+        // Load SDL2_image.
+        SDLImageSupport imgStatus = loadSDLImage();
+        if (imgStatus == SDLImageSupport.noLibrary)
+        {
+            // Debian/Ubuntu ship libSDL2_image-2.0.so.0 which bindbc doesn't
+            // search for by default; try it explicitly.
+            imgStatus = loadSDLImage("libSDL2_image-2.0.so.0");
+        }
+        if (imgStatus == SDLImageSupport.noLibrary)
+        {
+            logError("No SDL2_image library found");
+            return false;
+        }
+        if (imgStatus == SDLImageSupport.badLibrary)
+        {
+            logError("SDL2_image library too old");
+            return false;
+        }
+
+        return true;
+    }
+}
+
 int runGui(string host, ushort port, string secret, long sinceId,
     bool hostExplicit, bool portExplicit, bool secretExplicit, bool sinceExplicit,
     bool hardwareAccel)
@@ -171,56 +241,9 @@ int runGui(string host, ushort port, string secret, long sinceId,
     // Attempt to load OpenSSL for TLS support.
     loadTLS();
 
-    // Load SDL2.
-    SDLSupport sdlStatus = loadSDL();
-    if (sdlStatus == SDLSupport.noLibrary)
-    {
-        logError("No SDL2 library found");
+    // Load SDL2, SDL2_ttf, and SDL2_image (nothing to do when linked statically).
+    if (loadSDLLibraries() == false)
         return 1;
-    }
-    if (sdlStatus == SDLSupport.badLibrary)
-    {
-        logError("SDL2 library too old");
-        return 1;
-    }
-
-    // Load SDL2_ttf.
-    SDLTTFSupport ttfStatus = loadSDLTTF();
-    if (ttfStatus == SDLTTFSupport.noLibrary)
-    {
-        // Debian/Ubuntu ship libSDL2_ttf-2.0.so.0 which bindbc doesn't
-        // search for by default; try it explicitly.
-        ttfStatus = loadSDLTTF("libSDL2_ttf-2.0.so.0");
-    }
-    if (ttfStatus == SDLTTFSupport.noLibrary)
-    {
-        logError("No SDL2_ttf library found");
-        return 1;
-    }
-    if (ttfStatus == SDLTTFSupport.badLibrary)
-    {
-        logError("SDL2_ttf library too old");
-        return 1;
-    }
-    
-    // Load SDL2_image.
-    SDLImageSupport imgStatus = loadSDLImage();
-    if (imgStatus == SDLImageSupport.noLibrary)
-    {
-        // Debian/Ubuntu ship libSDL2_image-2.0.so.0 which bindbc doesn't
-        // search for by default; try it explicitly.
-        imgStatus = loadSDLImage("libSDL2_image-2.0.so.0");
-    }
-    if (imgStatus == SDLImageSupport.noLibrary)
-    {
-        logError("No SDL2_image library found");
-        return 1;
-    }
-    if (imgStatus == SDLImageSupport.badLibrary)
-    {
-        logError("SDL2_image library too old");
-        return 1;
-    }
 
     // Content image disk cache (gallery thumbnails, prints, ...).
     initImageCache();
@@ -2173,6 +2196,12 @@ private void logStartupInfo()
     const(SDL_version)* imgVer = IMG_Linked_Version();
     if (imgVer)
         logInfo("SDL2_image: %s", sformat(buffer, "%d.%d.%d", imgVer.major, imgVer.minor, imgVer.patch));
+
+    // How SDL2 was bound: linked at build time, or loaded at run time.
+    version (BindSDL_Static)
+        logInfo("SDL2 binding: static");
+    else
+        logInfo("SDL2 binding: dynamic");
 
     // Number of available video drivers.
     int numDrivers = SDL_GetNumVideoDrivers();
