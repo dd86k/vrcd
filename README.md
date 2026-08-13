@@ -98,6 +98,8 @@ Targets Windows and Linux.
 
 ## Compiling
 
+Needs a D compiler with front-end version 2.104 (DMD >=2.104, GDC >=14, LDC >=1.34).
+
 See each component's README for dependencies, configuration, and architecture details.
 
 In short:
