@@ -444,4 +444,24 @@ libcurl 8.11+ is required for WebSocket support either way. Under the default co
 dub build :server -c static -b static-release
 ```
 
+Do that on musl (Alpine) rather than glibc: a statically linked glibc binary
+still resolves names through NSS, which is loaded at run time, so it works on
+the machine that built it and fails on the next one. musl resolves in-process
+and has no such split. CI builds this in an `alpine:3.21` container and
+attaches the binary to releases.
+
+The trade is that a fully static binary cannot `dlopen` anything, so the
+server's *own* TLS listener is unavailable in that build (OpenSSL is loaded at
+run time; see [`stream.d`](#streamd)). It starts, logs that TLS is
+unavailable, and serves the JSON-L API in plain TCP. Outgoing HTTPS to VRChat
+is unaffected, since that TLS comes from the statically linked libcurl.
+
+Linking it needs the archives of everything libcurl itself pulls in, which
+`-lcurl` alone does not name. `pkg-config` does:
+
+```bash
+DFLAGS="$(pkg-config --static --libs libcurl sqlite3 | xargs -n1 printf -- '-L%s ')" \
+    dub build :server -c static -b static-release
+```
+
 > **Note:** If you get linking issues on Windows, try with LDC: `--compiler=ldc2`

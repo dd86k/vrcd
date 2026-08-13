@@ -183,10 +183,83 @@ jobs:
           path: '*.deb'
           if-no-files-found: error
 
+  package-alpine:
+    name: Package (static server, musl)
+    # There is no Alpine runner image, only Windows, macOS and Ubuntu, so the
+    # musl side runs in a container on an Ubuntu one.
+    runs-on: ubuntu-24.04
+    container: alpine:3.21
+    # A musl build that deadlocks would otherwise sit here for six hours.
+    timeout-minutes: 30
+    defaults:
+      run:
+        # Alpine has no bash, and the default shell for a container job is
+        # bash. Everything below is POSIX.
+        shell: sh
+    steps:
+      # First, and before any JS action: the Node that GitHub injects into the
+      # container to run actions/checkout and friends is built against glibc,
+      # so it needs libc6-compat (and libstdc++) to start at all.
+      #
+      # LDC comes from Alpine rather than setup-dlang, which ships glibc
+      # builds. dub is a separate package there.
+      - name: Install toolchain
+        run: |
+          apk add --no-cache \
+            libstdc++ libc6-compat \
+            git ldc ldc-static dub gcc musl-dev binutils pkgconf \
+            curl-dev sqlite-dev \
+            curl-static sqlite-static openssl-libs-static zlib-static \
+            nghttp2-static brotli-static zstd-static c-ares-static \
+            libidn2-static libunistring-static libpsl-static
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.dub
+          key: dub-alpine-${{ hashFiles('dub.selections.json') }}
+
+      # Tests run against shared libc, which is the point: this is the only job
+      # that runs vrcd code on musl at all.
+      - name: Test server
+        run: dub test :server -c static
+
+      - name: Build static server
+        # A --static link needs every transitive dependency of libcurl and
+        # sqlite3 as an archive, and only the .pc files know what those are:
+        # dub passes -lcurl on its own, which resolves against a shared library
+        # but leaves nghttp2, OpenSSL and the rest undefined here.
+        run: |
+          flags=""
+          for lib in $(pkg-config --static --libs libcurl sqlite3); do
+              flags="${flags} -L${lib}"
+          done
+          DFLAGS="${flags}" dub build :server -c static -b static-release
+
+      # A binary that quietly kept a DT_NEEDED entry is the failure worth
+      # catching, since the whole point is that it runs on a host with no
+      # libcurl, no sqlite3 and no musl.
+      - name: Verify and stage
+        run: |
+          if readelf -d server/vrcd_server | grep -q NEEDED; then
+              echo "error: vrcd_server is not statically linked" >&2
+              readelf -d server/vrcd_server >&2
+              exit 1
+          fi
+          ./server/vrcd_server --version
+          cp server/vrcd_server "vrcd-server-$(cat VERSION)-linux-musl-x86_64"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vrcd-server-musl-x86_64
+          path: vrcd-server-*-linux-musl-x86_64
+          if-no-files-found: error
+
   release:
     name: Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [test-linux, test-windows, package-linux]
+    needs: [test-linux, test-windows, package-linux, package-alpine]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
