@@ -1,0 +1,203 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-linux:
+    name: Test (Linux)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # libsqlite3-dev is needed under every configuration: arsd-official:sqlite
+      # links against it. libcurl and SDL2 are loaded at run time by the default
+      # configurations, so neither is a build dependency here.
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsqlite3-dev
+
+      - uses: dlang-community/setup-dlang@v2
+        with:
+          compiler: ldc-latest
+
+      # dub.selections.json pins every dependency, so it is the cache key: the
+      # git dependencies are clones that would otherwise be re-fetched per run.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.dub
+          key: dub-${{ runner.os }}-${{ hashFiles('dub.selections.json') }}
+
+      - name: Test server
+        run: dub test :server
+      - name: Test client
+        run: dub test :client
+      - name: Test web
+        run: dub test :web
+
+      # 32-bit is a supported target and the errors it catches are size_t ones,
+      # which live in the semantic pass: -b syntax type-checks without needing a
+      # 32-bit toolchain to link against.
+      - name: Type-check 32-bit
+        run: |
+          dub build :server -a x86 -b syntax
+          dub build :client -a x86 -b syntax
+          dub build :web -a x86 -b syntax
+
+  test-windows:
+    name: Test (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # DMD rather than LDC: LDC 1.41 on Windows fails to link with an
+      # undefined PAGESIZE in core.thread.fiber (see README).
+      - uses: dlang-community/setup-dlang@v2
+        with:
+          compiler: dmd-latest
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/AppData/Local/dub
+          key: dub-${{ runner.os }}-${{ hashFiles('dub.selections.json') }}
+
+      - name: Test client
+        run: dub test :client
+      - name: Test web
+        run: dub test :web
+      - name: Build pipehelper
+        run: dub build :pipehelper --build=release
+
+      # The server links sqlite3 statically and Windows runners ship no import
+      # library for it, so this is a semantic check rather than a test run.
+      # Producing one would mean building the amalgamation on the runner first.
+      - name: Type-check server
+        run: dub build :server -b syntax
+
+  build-pipehelper:
+    name: Build pipehelper (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dlang-community/setup-dlang@v2
+        with:
+          compiler: dmd-latest
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/AppData/Local/dub
+          key: dub-${{ runner.os }}-${{ hashFiles('dub.selections.json') }}
+
+      - name: Build
+        run: dub build :pipehelper --build=release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vrcd-pipehelper
+          path: pipehelper/vrcd-pipehelper.exe
+          if-no-files-found: error
+
+  package-linux:
+    name: Package (Linux)
+    # 22.04, not 24.04: it is the oldest image still offered, and its glibc
+    # (2.35) is the floor the AppImage can run on. The SDL2 it ships (2.0.20,
+    # SDL2_ttf 2.0.18) is also exactly what client/dub.sdl declares as its
+    # minimum, so nothing newer gets baked in by accident.
+    runs-on: ubuntu-22.04
+    needs: build-pipehelper
+    steps:
+      - uses: actions/checkout@v4
+
+      # The AppImage builds the client under -c static, which links SDL2 at
+      # build time and so needs the development packages. The .deb builds it
+      # under the default configuration, which does not.
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libsdl2-dev libsdl2-ttf-dev libsdl2-image-dev libsqlite3-dev \
+            patchelf desktop-file-utils file
+
+      - uses: dlang-community/setup-dlang@v2
+        with:
+          compiler: ldc-latest
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.dub
+          key: dub-${{ runner.os }}-package-${{ hashFiles('dub.selections.json') }}
+
+      - name: Install AppImage tooling
+        run: |
+          cd /tmp
+          curl -fsSLO https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          curl -fsSLO https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x linuxdeploy-x86_64.AppImage appimagetool-x86_64.AppImage
+          sudo mv linuxdeploy-x86_64.AppImage appimagetool-x86_64.AppImage /usr/local/bin/
+
+      # The Windows build of the pipe helper, for "Open in VRChat" on Linux.
+      - uses: actions/download-artifact@v4
+        with:
+          name: vrcd-pipehelper
+          path: pipehelper
+
+      - name: Build AppImage
+        # GitHub runners have no FUSE, so the tools cannot mount themselves;
+        # this makes them unpack to a temporary directory and run from there.
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: 1
+        run: ./packaging/package-appimage.sh
+
+      - name: Build .deb packages
+        run: ./packaging/package-deb.sh all
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vrcd-linux-x86_64
+          path: |
+            *.AppImage
+            *.deb
+          if-no-files-found: error
+
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test-linux, test-windows, package-linux]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        # Re-running the job must not fail on a release that already exists,
+        # which is also how a tag gets a second set of artifacts.
+        run: |
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" artifacts/* --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" \
+              --title "${GITHUB_REF_NAME}" \
+              --generate-notes \
+              --verify-tag \
+              artifacts/*
+          fi
