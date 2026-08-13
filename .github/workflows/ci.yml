@@ -104,9 +104,14 @@ jobs:
       - name: Build
         run: dub build :pipehelper --build=release
 
+      # Named for the platform it runs on, not the one that needs it: the file
+      # is a Windows executable, and a Linux client is what runs it (inside the
+      # game's Proton prefix). Downloading it on its own is for a .deb install,
+      # where it goes next to vrcd_client or in ~/.config/vrcd. The AppImage
+      # carries its own copy.
       - uses: actions/upload-artifact@v4
         with:
-          name: vrcd-pipehelper
+          name: vrcd-pipehelper-windows-x86_64
           path: pipehelper/vrcd-pipehelper.exe
           if-no-files-found: error
 
@@ -151,7 +156,7 @@ jobs:
       # The Windows build of the pipe helper, for "Open in VRChat" on Linux.
       - uses: actions/download-artifact@v4
         with:
-          name: vrcd-pipehelper
+          name: vrcd-pipehelper-windows-x86_64
           path: pipehelper
 
       - name: Build AppImage
@@ -164,12 +169,18 @@ jobs:
       - name: Build .deb packages
         run: ./packaging/package-deb.sh all
 
+      # Separate artifacts: the AppImage is the whole client on its own, and
+      # somebody who wants it has no use for the .deb of the same client.
       - uses: actions/upload-artifact@v4
         with:
-          name: vrcd-linux-x86_64
-          path: |
-            *.AppImage
-            *.deb
+          name: vrcd-client-appimage-x86_64
+          path: '*.AppImage'
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vrcd-deb-x86_64
+          path: '*.deb'
           if-no-files-found: error
 
   release:
