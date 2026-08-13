@@ -1002,7 +1002,30 @@ var imageTypes = {};
 /* Key -> the callbacks waiting on it. One fetch serves all of them, which is
    what stops a redraw mid-fetch from starting a second. */
 var imageWaiting = {};
+/* Key -> when it is worth asking again, and how long that wait was.
+
+   A failure is remembered but never permanently, because every layer under
+   this one treats a failure as passing: the web server forgets its own after a
+   minute, VRChat's rate limit lifts, and a link that was down comes back. A
+   page is open for hours and reloaded almost never, so a tombstone that
+   outlived its cause would leave a face blank for the rest of the day over one
+   bad moment -- which is exactly what a restart appeared to fix, since what it
+   really did was force a reload. */
 var imageFailed = {};
+
+/* The web server refused it. It caches its own failures for a minute
+   (FAILURE_TTL in web/source/web/images.d), so asking again before that is
+   over only replays the same answer -- and a retry that lands a moment early
+   would double the wait below over an answer that was already stale. */
+var IMAGE_FAIL_MS = 65000;
+/* Nothing refused it: the retries ran out with the picture still on its way,
+   or the web server itself was unreachable. The wait is only to let the bytes
+   land, and by then they are usually already cached there. */
+var IMAGE_SLOW_MS = 15000;
+/* Each further failure on one key waits twice as long, up to this. A picture
+   that has failed all afternoon is not worth a fetch a minute for every face
+   on screen. */
+var IMAGE_FAIL_MAX_MS = 600000;
 
 /* Thumbnail edges asked for behind a face. A row avatar is 36 CSS pixels and
    the profile hero 80, so these cover both at twice the density; VRChat serves
@@ -1019,6 +1042,28 @@ function imageKey(fileId, version, size) {
     return fileId + "/" + version + "/" + size;
 }
 
+/* Whether this key is inside the wait left by its last failure. An expired
+   mark is kept rather than dropped: it is what the next failure doubles from,
+   and a key that keeps failing should back off rather than start over. */
+function imageBlocked(key) {
+    var mark = imageFailed[key];
+    return mark !== undefined && Date.now() < mark.until;
+}
+
+function rememberImageFailure(key, base) {
+    var mark = imageFailed[key];
+    var wait = mark ? Math.min(Math.max(base, mark.wait * 2), IMAGE_FAIL_MAX_MS)
+                    : base;
+    imageFailed[key] = { until: Date.now() + wait, wait: wait };
+}
+
+/* A link or a socket that came back is a reason to stop remembering that a
+   picture could not be had while it was down. What was actually fetched stays:
+   a file, version and size never change what they point at. */
+function forgetImageErrors() {
+    imageFailed = {};
+}
+
 /* Fetch a proxied image and hand the object URL to `then`, or null when it
    could not be had. One fetch per key however many callers ask for it, and a
    key already held answers on the spot.
@@ -1029,7 +1074,7 @@ function imageKey(fileId, version, size) {
 function imageThen(fileId, version, size, then) {
     var key = imageKey(fileId, version, size);
     if (imageURLs[key]) { then(imageURLs[key]); return; }
-    if (imageFailed[key]) { then(null); return; }
+    if (imageBlocked(key)) { then(null); return; }
 
     if (imageWaiting[key]) { imageWaiting[key].push(then); return; }
     imageWaiting[key] = [then];
@@ -1058,7 +1103,7 @@ var imageObserver = null;
 function imageWhenVisible(img, fileId, version, size) {
     var key = imageKey(fileId, version, size);
     if (imageURLs[key]) { img.src = imageURLs[key]; return; }
-    if (imageFailed[key]) return;
+    if (imageBlocked(key)) return;
 
     if (window.IntersectionObserver === undefined) {
         imageInto(img, fileId, version, size);
@@ -1093,7 +1138,7 @@ function badgeInto(img, url) {
     var give = function (found) { if (found) img.src = found; };
 
     if (imageURLs[key]) { give(imageURLs[key]); return; }
-    if (imageFailed[key]) return;
+    if (imageBlocked(key)) return;
 
     if (imageWaiting[key]) { imageWaiting[key].push(give); return; }
     imageWaiting[key] = [give];
@@ -1107,15 +1152,15 @@ function fetchBadge(key, url, tries) {
                 setTimeout(function () { fetchBadge(key, url, tries - 1); },
                     IMAGE_RETRY_MS);
             else
-                imageDone(key, null);
+                imageDone(key, null, null, IMAGE_SLOW_MS);
             return null;
         }
-        if (r.ok === false) { imageDone(key, null); return null; }
+        if (r.ok === false) { imageDone(key, null, null, IMAGE_FAIL_MS); return null; }
         return r.blob();
     }).then(function (blob) {
         if (blob) imageDone(key, URL.createObjectURL(blob), blob.type);
     }).catch(function () {
-        imageDone(key, null);
+        imageDone(key, null, null, IMAGE_SLOW_MS);
     });
 }
 
@@ -1128,26 +1173,31 @@ function fetchImage(key, fileId, version, size, tries) {
                     fetchImage(key, fileId, version, size, tries - 1);
                 }, IMAGE_RETRY_MS);
             } else {
-                imageDone(key, null);
+                imageDone(key, null, null, IMAGE_SLOW_MS);
             }
             return null;
         }
-        if (r.ok === false) { imageDone(key, null); return null; }
+        if (r.ok === false) { imageDone(key, null, null, IMAGE_FAIL_MS); return null; }
         return r.blob();
     }).then(function (blob) {
         if (blob) imageDone(key, URL.createObjectURL(blob), blob.type);
     }).catch(function () {
-        imageDone(key, null);
+        imageDone(key, null, null, IMAGE_SLOW_MS);
     });
 }
 
-function imageDone(key, url, type) {
+/* `retryAfter` is how long to leave a failed key alone before a redraw may ask
+   for it again, and says which kind of failure this was: a refusal that the
+   web server will repeat from its own cache, or bytes that simply had not
+   arrived yet. */
+function imageDone(key, url, type, retryAfter) {
     var waiting = imageWaiting[key] || [];
     delete imageWaiting[key];
 
     if (url === null) {
-        imageFailed[key] = true;
+        rememberImageFailure(key, retryAfter || IMAGE_FAIL_MS);
     } else {
+        delete imageFailed[key];
         imageURLs[key] = url;
         imageTypes[key] = type || "";
     }
@@ -4251,6 +4301,11 @@ function applyState(message) {
         // that has just gone away. What was actually fetched stays.
         linkWasDown = false;
         forgetProfileErrors();
+        // Pictures the same way, and this is the common case rather than the
+        // odd one: a proxied image asked for while the link was down is
+        // refused on the spot, and a roster is hundreds of faces. The render
+        // below is what asks for them again.
+        forgetImageErrors();
     }
 
     render();
@@ -4500,6 +4555,14 @@ function connect() {
 function openSocket(ticket) {
     var proto = location.protocol === "https:" ? "wss://" : "ws://";
     var socket = new WebSocket(proto + location.host + "/ws/" + ticket);
+
+    // A socket that opened means the web server is answering again, which is
+    // the other half of the story above: while it was away every image fetch
+    // failed on the network rather than on an answer. A snapshot follows this
+    // immediately, so nothing needs redrawing here.
+    socket.onopen = function () {
+        forgetImageErrors();
+    };
 
     socket.onmessage = function (ev) {
         var message = JSON.parse(ev.data);
