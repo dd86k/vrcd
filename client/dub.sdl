@@ -16,7 +16,7 @@ mainSourceFile "source/client/main.d"
 stringImportPaths ".."
 
 # Minimum SDL2, SDL2_ttf, and SDL2_image versions the bindings expose
-versions "SDL" "SDL_2022" "SDL_TTF_2_22" "SDL_Image_200"
+versions "SDL_2018" "SDL_TTF_2018" "SDL_Image_200"
 
 # friends.d, events.d: Roster bucketing, ordering, and event presentation
 #                      shared with the web front-end, so both cannot drift
@@ -28,7 +28,7 @@ sourceFiles "../common/source/vrcd/friends.d" "../common/source/vrcd/events.d" "
 # executable that Linux runs inside the Proton container instead.
 sourceFiles "../pipehelper/source/vrcpipe.d" platform="windows"
 
-# Using dynamic SDL2 allows SDL2 to be updated with the rest of the system
+# Using dynamic libraries allows SDL2 to be updated with the rest of the system
 configuration "application" {
 	subConfiguration "bindbc-sdl" "dynamic"
 }
