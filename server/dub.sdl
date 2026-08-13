@@ -7,23 +7,34 @@ license "BSD-3-Clause-Clear"
 
 dependency "ddlogger" repository="git+https://github.com/dd86k/ddlogger.git" version="4397d8e57a88bd6b3a3e5e4c846ba97ac3bfd364"
 dependency "ddcurl" repository="git+https://github.com/dd86k/ddcurl.git" version="4fc6cfa36811a7fdd6f69e6c76e1e821aa0c8b1b"
+# Packages requires static sqlite3 package (like libsqlite3-dev) and emits no other configurations
 dependency "arsd-official:sqlite" version="==12.1.2"
+
+# Needed when adding configurations
+mainSourceFile "source/server/main.d"
 
 # "." for dub.selections.json
 # ".." for VERSION
 stringImportPaths "." ".."
 
-subConfiguration "ddcurl" "static"
-
-// The notification shape is decoded identically here and in both front-ends:
-// the server normalizes VRChat's REST listing through this module, the
-// front-ends keep the list current from WebSocket events with the same code.
-//
-// badgeurl.d is the rule for what may be fetched as badge art. Badge art is
-// the one request where a client names a URL rather than an object, so both
-// sides check it: if they disagreed, the looser one would be the real rule.
+# notifications.d: Notification model that server and clients speak
+# badgeurl.d: Badge info/art URLs
 sourceFiles "../common/source/vrcd/notifications.d" "../common/source/vrcd/badgeurl.d"
 
+# Using dynamic libcurl allows libcurl to be updated with the rest of the system
+configuration "application" {
+	subConfiguration "ddcurl" "dynamic"
+}
+
+# For hosts that ship no libcurl new enough to load, or where a single
+# self-contained binary is wanted. Needs libcurl's import library at link
+# time (libcurl-x64.lib on Windows, -lcurl on POSIX).
+configuration "static" {
+	subConfiguration "ddcurl" "static"
+}
+
+# Make an optimized static binary of the server binary
+# Highly recommended to use static configuration
 buildType "static-release" {
 	buildOptions "releaseMode" "optimize" "inline"
 	dflags "-L=-static" platform="dmd"
