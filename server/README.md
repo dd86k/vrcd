@@ -400,19 +400,48 @@ These are pulled by DUB when upgrading and building.
 | `ddcurl` | HTTP client and WebSocket (libcurl wrapper) |
 | `arsd-official:sqlite` | SQLite database access |
 
-System packages:
-- Alpine: `sqlite-static curl-static` (+ `openssl-dev` for TLS)
-- Ubuntu: `libsqlite3-dev libcurl4-openssl-dev` (+ `libssl-dev` for TLS, and build libcurl if <8.11)
+System packages. SQLite is always needed at link time: `arsd-official:sqlite` declares `libs: ["sqlite3"]` unconditionally and offers no configuration to avoid it. libcurl is only needed at link time under the `static` configuration.
 
-OpenSSL 3.x shared libraries (`libssl.so.3`, `libcrypto.so.3`) are loaded dynamically at runtime for TLS support. They are not a build dependency.
+| | Always | `-c static` only |
+|---|---|---|
+| Ubuntu | `libsqlite3-dev` | `libcurl4-openssl-dev` (build libcurl yourself if the distribution ships <8.11) |
+| Alpine | `sqlite-dev` | `curl-dev` |
+
+For `-b static-release`, use the fully static variants on Alpine (`sqlite-static`, `curl-static`).
+
+OpenSSL 3.x shared libraries (`libssl.so.3`, `libcrypto.so.3`) are loaded dynamically at runtime for TLS support. They are not a build dependency under either configuration.
+
+### Version pinning
+
+Registry dependencies are pinned exactly (`==`), git dependencies to a commit SHA. `dub build` never corrects a `dub.selections.json` that disagrees with those pins. A version conflict at least fails the build; a stale git commit is accepted silently and used in preference to the manifest. After changing any dependency, run:
+
+```bash
+dub upgrade -s
+```
+
+`-s` (`--sub-packages`) is required. Without it dub upgrades only the root package, which declares no dependencies of its own, so the command reports success while changing nothing.
 
 ## Building
 
 ```bash
-dub build :server
+dub build :server              # dynamic libcurl (default)
+dub build :server -c static    # libcurl linked at build time
 dub test :server
 ```
 
-> **Note:** If you get linking issues on Windows, try with LDC: `--compiler=ldc2`
+### Configurations
 
-Requires libcurl 8.11+ for WebSocket support. Uses a static libcurl build by default via ddcurl.
+| Configuration | libcurl | Notes |
+|---------------|---------|-------|
+| `application` (default) | loaded at run time through ddloader | Nothing links against the build host's libcurl, so the binary moves between distributions and picks up system libcurl updates |
+| `static` | linked at build time | For hosts with no loadable libcurl, or when a self-contained binary is wanted. Needs libcurl's import library present (`-lcurl`, `libcurl-x64.lib` on Windows) |
+
+libcurl 8.11+ is required for WebSocket support either way. Under the default configuration that is a property of the library present at run time, rather than one frozen into the binary by whichever machine built it.
+
+`static-release` is a *build type*, not a configuration, and covers a different axis: it links libc itself statically and enables optimizations. Combine the two for a fully self-contained binary:
+
+```bash
+dub build :server -c static -b static-release
+```
+
+> **Note:** If you get linking issues on Windows, try with LDC: `--compiler=ldc2`
