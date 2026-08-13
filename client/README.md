@@ -212,4 +212,6 @@ The versions in [Requirements](#requirements) apply either way. Under the defaul
 
 Which one a build used is logged at startup as `SDL2 binding: dynamic` or `SDL2 binding: static`, next to the linked library versions.
 
+The AppImage (`packaging/package-appimage.sh`) uses `static`, which is what makes it packageable: SDL2 becomes a DT_NEEDED entry, so linuxdeploy finds and bundles it and its own dependencies. Under the default configuration the libraries are dlopen'd, so `ldd` reports nothing and every one of them has to be named by hand. The `.deb` uses the default configuration instead, since it can declare `libsdl2-2.0-0` and friends as package dependencies and let the system update them.
+
 > **Note:** If you get linking issues on Windows, try with LDC: `--compiler=ldc2`

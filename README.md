@@ -125,6 +125,14 @@ dub test :client
 
 See [API.md](./API.md) for server-client API details.
 
+### Packaging
+
+```bash
+./packaging/package-appimage.sh   # client AppImage (builds with -c static)
+./packaging/package-deb.sh all    # client and server .deb
+./packaging/package-deb.sh --static server
+```
+
 ### Issues
 
 - Using LDC 1.41 on Windows will lead to compiling issues: undefined PAGESIZE in core.thread.fiber

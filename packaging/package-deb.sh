@@ -137,9 +137,12 @@ case "${TARGET}" in
     server|all)
         if [[ "${STATIC}" -eq 1 ]]; then
             # static-release links libcurl/sqlite into the binary, so the only
-            # remaining runtime dep is libc.
+            # remaining runtime dep is libc. The configuration has to come with
+            # it: the default one dlopens libcurl, which a statically linked
+            # binary cannot do, so -b without -c builds something that links
+            # and then finds no libcurl at run time.
             build_deb server vrcd_server "libc6" \
-                --build=static-release
+                -c static --build=static-release
         else
             build_deb server vrcd_server \
                 "libc6, libcurl4, libsqlite3-0" \

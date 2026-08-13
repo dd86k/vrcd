@@ -1,6 +1,8 @@
 #!/bin/bash
 # package-appimage.sh: Build and package vrcd client as an AppImage
 # Usage: [DC=COMPILER] ./package-appimage.sh [-c COMPILER]
+# Needs: appimagetool, linuxdeploy, and the SDL2 development libraries
+#        (libsdl2-dev, libsdl2-ttf-dev, libsdl2-image-dev)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -46,13 +48,22 @@ WORKDIR="$(mktemp -d /tmp/vrcd-appimage.XXXXXX)"
 APPDIR="${WORKDIR}/vrcd-client.AppDir"
 trap 'rm -rf "${WORKDIR}"' EXIT
 
-echo "==> Building vrcd client (release)..."
+echo "==> Building vrcd client (release, static configuration)..."
 DUB_COMPILER_ARG=()
 if [[ -n "${COMPILER}" ]]; then
     DUB_COMPILER_ARG=(--compiler="${COMPILER}")
     echo "    compiler: ${COMPILER}"
 fi
-dub build :client --build=release "${DUB_COMPILER_ARG[@]}"
+# The "static" configuration is what makes an AppImage of this buildable at
+# all: bindbc-sdl binds SDL2 at link time, so libSDL2, libSDL2_ttf, and
+# libSDL2_image become DT_NEEDED entries that linuxdeploy resolves and bundles
+# on its own, along with what they in turn need. Under the default
+# configuration they are dlopen'd, invisible to ldd, and every one of them
+# (and every transitive dependency) has to be named by hand.
+#
+# Needs the SDL2 development libraries on the build host:
+#   apt install libsdl2-dev libsdl2-ttf-dev libsdl2-image-dev
+dub build :client -c static --build=release "${DUB_COMPILER_ARG[@]}"
 
 echo "==> Creating AppDir in ${WORKDIR}..."
 mkdir -p "${APPDIR}/usr/bin"
@@ -84,11 +95,35 @@ EOF
 # Icon (linuxdeploy expects it named to match Icon= field)
 cp "${ICON}" "${APPDIR}/vrcd-client.png"
 
-# AppRun
+echo "==> Bundling libraries with linuxdeploy..."
+run_tool linuxdeploy \
+    --appdir "${APPDIR}" \
+    --executable "${APPDIR}/usr/bin/vrcd_client" \
+    --desktop-file "${APPDIR}/vrcd-client.desktop" \
+    --icon-file "${APPDIR}/vrcd-client.png"
+
+# Fail loudly rather than shipping an AppImage that dies on a missing SDL2:
+# linuxdeploy reports a library it could not deploy as a warning and carries on.
+for lib in libSDL2-2.0 libSDL2_ttf-2.0 libSDL2_image-2.0; do
+    if ! compgen -G "${APPDIR}/usr/lib/${lib}.so*" >/dev/null; then
+        echo "error: ${lib} was not bundled into the AppDir" >&2
+        exit 1
+    fi
+done
+
+# AppRun, written after linuxdeploy: it leaves an existing AppRun alone but
+# creates one as a symlink to the executable when there is none, and writing
+# through that symlink would overwrite the binary.
+#
+# Nothing sets LD_LIBRARY_PATH here. linuxdeploy patches the RPATH of what it
+# deploys to $ORIGIN/../lib, so the bundle is found without it, and the client
+# spawns processes that belong to the host (notify-send, and Proton's own wine
+# under the game's prefix for "Open in VRChat") -- those inherit the
+# environment, and a bundled library ahead of the system one is how they break.
+rm -f "${APPDIR}/AppRun"
 cat > "${APPDIR}/AppRun" <<'EOF'
 #!/bin/bash
 HERE="$(dirname "$(readlink -f "${0}")")"
-export LD_LIBRARY_PATH="${HERE}/usr/lib:${LD_LIBRARY_PATH:-}"
 # Install/refresh the "Open in VRChat" pipe helper at a stable path (the
 # AppImage mount itself is a new /tmp directory on every run).
 HELPER="${HERE}/usr/share/vrcd/vrcd-pipehelper.exe"
@@ -100,27 +135,6 @@ fi
 exec "${HERE}/usr/bin/vrcd_client" "$@"
 EOF
 chmod +x "${APPDIR}/AppRun"
-
-# SDL2 libs are dlopen'd by bindbc-sdl so ldd won't find them.
-# Locate them via ldconfig and pass explicitly to linuxdeploy.
-# These work best on an Ubuntu 24.04 host, sorry!
-SDL_LIB_ARGS=()
-for lib in libSDL2-2.0 libSDL2_ttf-2.0 libSDL2_image-2.0; do
-    path="$(ldconfig -p | awk -v l="${lib}.so" '$1 ~ l { print $NF; exit }')"
-    if [[ -z "${path}" ]]; then
-        echo "warning: ${lib} not found via ldconfig, AppImage may not run" >&2
-    else
-        SDL_LIB_ARGS+=(--library "${path}")
-    fi
-done
-
-echo "==> Bundling libraries with linuxdeploy..."
-run_tool linuxdeploy \
-    --appdir "${APPDIR}" \
-    --executable "${APPDIR}/usr/bin/vrcd_client" \
-    --desktop-file "${APPDIR}/vrcd-client.desktop" \
-    --icon-file "${APPDIR}/vrcd-client.png" \
-    "${SDL_LIB_ARGS[@]}"
 
 echo "==> Packaging AppImage..."
 ARCH=x86_64 run_tool appimagetool "${APPDIR}" "${WORKDIR}/out.AppImage"
