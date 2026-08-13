@@ -25,7 +25,6 @@ import client.gui : wasClick, requestRepaint;
 import client.state;
 import client.stream : tlsAvailable;
 import client.utils : openFolder, openBrowser;
-import core.int128;
 
 /// Active tab selection.
 enum Tab { feed, online, notifications, inventory, tools, settings }
