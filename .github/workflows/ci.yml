@@ -210,7 +210,7 @@ jobs:
             git ldc ldc-static dub gcc musl-dev binutils pkgconf \
             curl-dev sqlite-dev \
             curl-static sqlite-static openssl-libs-static zlib-static \
-            nghttp2-static brotli-static zstd-static c-ares-static \
+            nghttp2-static brotli-static zstd-static c-ares-dev \
             libidn2-static libunistring-static libpsl-static
 
       - uses: actions/checkout@v4
