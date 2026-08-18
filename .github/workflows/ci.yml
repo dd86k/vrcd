@@ -217,18 +217,27 @@ jobs:
       - name: Build .deb packages
         run: ./packaging/package-deb.sh all
 
-      # Separate artifacts: the AppImage is the whole client on its own, and
-      # somebody who wants it has no use for the .deb of the same client.
+      # One artifact per thing somebody would install, as on Windows: the
+      # AppImage is the whole client on its own, and the two .debs are a client
+      # and a server that are rarely wanted on the same machine.
       - uses: actions/upload-artifact@v4
         with:
           name: vrcd-client-appimage-x86_64
           path: '*.AppImage'
           if-no-files-found: error
 
+      # amd64 in the file name, x86_64 in the artifact name: dpkg's word for the
+      # architecture and everything else's.
       - uses: actions/upload-artifact@v4
         with:
-          name: vrcd-deb-x86_64
-          path: '*.deb'
+          name: vrcd-client-deb-x86_64
+          path: vrcd-client_*.deb
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vrcd-server-deb-x86_64
+          path: vrcd-server_*.deb
           if-no-files-found: error
 
   test-alpine:
