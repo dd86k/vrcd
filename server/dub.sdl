@@ -6,7 +6,7 @@ copyright "Copyright © 2026, dd86k <dd@dax.moe>"
 license "BSD-3-Clause-Clear"
 
 dependency "ddlogger" repository="git+https://github.com/dd86k/ddlogger.git" version="4397d8e57a88bd6b3a3e5e4c846ba97ac3bfd364"
-dependency "ddcurl" repository="git+https://github.com/dd86k/ddcurl.git" version="4fc6cfa36811a7fdd6f69e6c76e1e821aa0c8b1b"
+dependency "ddcurl" repository="git+https://github.com/dd86k/ddcurl.git" version="e3661edd185851ab10b472de69ea4c658e550319"
 # Packages requires static sqlite3 package (like libsqlite3-dev) and emits no other configurations
 dependency "arsd-official:sqlite" version="==12.1.2"
 
