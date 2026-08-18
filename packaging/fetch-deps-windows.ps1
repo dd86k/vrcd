@@ -10,10 +10,11 @@
 
     Everything lands under -Dest:
         bin\        DLLs to ship next to the executables
-        lib\        sqlite3.lib, for the linker only
         licenses\   what the shipped DLLs require us to carry
         cache\      the downloaded archives, kept so a re-run is free
         build\      the same archives expanded, and safe to delete
+
+    Except sqlite3.lib, which goes to the repository root. See Build-Sqlite.
 
     Run this once, then packaging\package-windows.ps1.
 
@@ -59,8 +60,8 @@ $SqliteYear       = '2026'
 $SqliteAmalgam    = 'sqlite-amalgamation-3530400'
 $SqliteSha256     = '1e71ddf93849c6a6ecf58b827c0692073d2dd7ee40196158068f7b29f422e87d'
 
+$RootDir    = Split-Path -Parent $PSScriptRoot
 $BinDir     = Join-Path $Dest 'bin'
-$LibDir     = Join-Path $Dest 'lib'
 $LicenseDir = Join-Path $Dest 'licenses'
 $CacheDir   = Join-Path $Dest 'cache'
 # Expanded archives live apart from the archives themselves, so that cache\ is
@@ -70,7 +71,7 @@ $WorkDir    = Join-Path $Dest 'build'
 
 function New-Directories
 {
-    foreach ($dir in @($BinDir, $LibDir, $LicenseDir, $CacheDir, $WorkDir))
+    foreach ($dir in @($BinDir, $LicenseDir, $CacheDir, $WorkDir))
     {
         if (-not (Test-Path $dir))
         {
@@ -261,14 +262,27 @@ sqlite3 into a library for the server to link against.
 # whatever we do. Building one from the amalgamation rather than making an
 # import library from the official DLL means there is no sqlite3.dll to ship
 # and no chance of the server finding somebody else's copy on PATH.
+#
+# It lands in the repository root rather than under deps\, because that is where
+# the linker looks. pragma(lib) becomes /DEFAULTLIB:sqlite3, which link.exe
+# resolves against /LIBPATH, then the LIB environment variable, then the working
+# directory - and dub runs the compiler from wherever dub itself was invoked,
+# which is the root. LIB is not an option: DMD's sc.ini sets it for the linker
+# and so overwrites anything we put there. Neither is passing /LIBPATH through
+# DFLAGS, since dub splits that on spaces and a path like
+# C:\Users\Some Name\vrcd would arrive in pieces.
 function Build-Sqlite
 {
     Write-Host '==> sqlite3...'
 
-    $lib = Join-Path $LibDir 'sqlite3.lib'
+    $lib = Join-Path $RootDir 'sqlite3.lib'
     if ((Test-Path $lib) -and (-not $Force))
     {
-        Write-Host '  up to date'
+        # Named rather than just "up to date", because an sqlite3.lib that was
+        # already sitting here is kept: an import library for sqlite3.dll links
+        # just as well and fails only at run time, on a machine without the DLL.
+        # Pass -Force to replace it.
+        Write-Host "  keeping existing $lib"
         return
     }
 
@@ -314,6 +328,6 @@ Build-Sqlite
 
 Write-Host ''
 Write-Host "Dependencies ready in $Dest"
-Get-ChildItem -Path $BinDir, $LibDir | ForEach-Object {
+Get-ChildItem -Path $BinDir, (Join-Path $RootDir 'sqlite3.lib') | ForEach-Object {
     Write-Host ("  {0,-20} {1,10:N0} bytes" -f $_.Name, $_.Length)
 }

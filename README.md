@@ -146,6 +146,12 @@ Windows ships none of them, and compiles the sqlite3 amalgamation into
 needing Visual Studio Build Tools with the C++ workload; it finds them itself
 through `vswhere`, so a plain PowerShell prompt is enough.
 
+`sqlite3.lib` is dropped in the repository root, not under `packaging/deps/`,
+because that is where the linker looks: `pragma(lib, "sqlite3")` becomes
+`/DEFAULTLIB:sqlite3`, and after `/LIBPATH` and `LIB` the linker falls back to
+the working directory, which is wherever `dub` was invoked. Having run the fetch
+script once, a plain `dub build :server` from the root works too.
+
 The zips are self-contained: the client carries SDL2, SDL2_ttf and SDL2_image,
 and the server carries libcurl (`sqlite3` is linked in). libcurl comes from
 curl.se and is built against the Windows certificate store, so no CA bundle is

@@ -49,7 +49,6 @@ if (-not $OutputDir)
 
 $Version = (Get-Content -Path (Join-Path $RootDir 'VERSION') -Raw).Trim()
 $BinDir     = Join-Path $Deps 'bin'
-$LibDir     = Join-Path $Deps 'lib'
 $LicenseDir = Join-Path $Deps 'licenses'
 
 if (-not (Get-Command 'dub' -ErrorAction SilentlyContinue))
@@ -62,6 +61,9 @@ if (-not (Test-Path $BinDir))
     throw "dependencies not found in $Deps - run packaging\fetch-deps-windows.ps1 first"
 }
 
+# Always from the repository root, whatever directory this was called from: the
+# linker finds sqlite3.lib in the working directory, and dub runs the compiler
+# from wherever dub itself was invoked rather than from the package directory.
 function Invoke-Dub
 {
     param([Parameter(Mandatory)] [string[]] $Arguments)
@@ -72,10 +74,19 @@ function Invoke-Dub
     }
 
     Write-Host "==> dub $($Arguments -join ' ')"
-    & dub $Arguments
-    if ($LASTEXITCODE -ne 0)
+
+    Push-Location $RootDir
+    try
     {
-        throw "dub failed with exit code $LASTEXITCODE"
+        & dub $Arguments
+        if ($LASTEXITCODE -ne 0)
+        {
+            throw "dub failed with exit code $LASTEXITCODE"
+        }
+    }
+    finally
+    {
+        Pop-Location
     }
 }
 
@@ -159,10 +170,12 @@ if ($Target -in @('client', 'all'))
 
 if ($Target -in @('server', 'all'))
 {
-    # The linker resolves arsd.sqlite's pragma(lib, "sqlite3") out of LIB.
-    # Going through the environment rather than dub's flags keeps the release
-    # build type exactly as the recipe declares it.
-    $env:LIB = "$LibDir;$env:LIB"
+    # Built by fetch-deps-windows.ps1, which puts it here rather than under
+    # deps\ because the working directory is where the linker will look for it.
+    if (-not (Test-Path (Join-Path $RootDir 'sqlite3.lib')))
+    {
+        throw 'sqlite3.lib not found in the repository root - run packaging\fetch-deps-windows.ps1 first'
+    }
 
     Invoke-Dub @('build', ':server', '--build=release')
 
