@@ -188,7 +188,7 @@ jobs:
     # There is no Alpine runner image, only Windows, macOS and Ubuntu, so the
     # musl side runs in a container on an Ubuntu one.
     runs-on: ubuntu-24.04
-    container: alpine:3.21
+    container: alpine:3.24
     # A musl build that deadlocks would otherwise sit here for six hours.
     timeout-minutes: 30
     defaults:
@@ -199,21 +199,19 @@ jobs:
     steps:
       # First, and before any JS action: the Node that GitHub injects into the
       # container to run actions/checkout and friends is built against glibc,
-      # so it needs libc6-compat (and libstdc++) to start at all.
-      #
-      # LDC comes from Alpine rather than setup-dlang, which ships glibc
-      # builds. dub is a separate package there.
-      - name: Install toolchain
-        run: |
-          apk add --no-cache \
-            libstdc++ libc6-compat \
-            git ldc ldc-static dub gcc musl-dev binutils pkgconf \
-            curl-dev sqlite-dev \
-            curl-static sqlite-static openssl-libs-static zlib-static \
-            nghttp2-static brotli-static zstd-static c-ares-dev \
-            libidn2-static libunistring-static libpsl-static
+      # so it needs libc6-compat (and libstdc++) to start at all. Only these
+      # two, since everything else is installed by a script that has to be
+      # checked out first.
+      - name: Install Node compatibility libraries
+        run: apk add --no-cache libstdc++ libc6-compat
 
       - uses: actions/checkout@v4
+
+      # LDC comes from Alpine rather than setup-dlang, which ships glibc
+      # builds. The same script installs the toolchain on a developer's Alpine
+      # box, so what CI links against is what they link against.
+      - name: Install toolchain
+        run: ./packaging/install-deps-alpine.sh
 
       - uses: actions/cache@v4
         with:
@@ -225,43 +223,20 @@ jobs:
       - name: Test server
         run: dub test :server -c static
 
-      # The static link is disabled for now; only the musl test above runs.
-      #
-      # A --static link needs every transitive dependency of libcurl and
-      # sqlite3 as an archive, and only the .pc files know what those are: dub
-      # passes -lcurl on its own, which resolves against a shared library but
-      # leaves nghttp2, OpenSSL and the rest undefined here. The catch is that
-      # `pkg-config --static --libs` also emits driver flags, not just linker
-      # ones -- `-pthread` among them -- and `-L-pthread` reaches ld.bfd
-      # verbatim, which rejects it. Re-enabling this means keeping only the
-      # -l/-L entries and translating -pthread separately.
-      #
-      # - name: Build static server
-      #   run: |
-      #     flags=""
-      #     for lib in $(pkg-config --static --libs libcurl sqlite3); do
-      #         flags="${flags} -L${lib}"
-      #     done
-      #     DFLAGS="${flags}" dub build :server -c static -b static-release
-      #
-      # # A binary that quietly kept a DT_NEEDED entry is the failure worth
-      # # catching, since the whole point is that it runs on a host with no
-      # # libcurl, no sqlite3 and no musl.
-      # - name: Verify and stage
-      #   run: |
-      #     if readelf -d server/vrcd_server | grep -q NEEDED; then
-      #         echo "error: vrcd_server is not statically linked" >&2
-      #         readelf -d server/vrcd_server >&2
-      #         exit 1
-      #     fi
-      #     ./server/vrcd_server --version
-      #     cp server/vrcd_server "vrcd-server-$(cat VERSION)-linux-musl-x86_64"
-      #
-      # - uses: actions/upload-artifact@v4
-      #   with:
-      #     name: vrcd-server-musl-x86_64
-      #     path: vrcd-server-*-linux-musl-x86_64
-      #     if-no-files-found: error
+      # Deriving this host's libcurl dependencies is the whole difficulty of a
+      # static link, so it lives in a script that can be run on an Alpine box
+      # directly rather than only here. The script verifies the result too.
+      - name: Build static server
+        run: ./packaging/build-server-static.sh
+
+      - name: Stage artifact
+        run: cp server/vrcd_server "vrcd-server-$(cat VERSION)-linux-musl-x86_64"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vrcd-server-musl-x86_64
+          path: vrcd-server-*-linux-musl-x86_64
+          if-no-files-found: error
 
   release:
     name: Release
@@ -276,6 +251,7 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      # Upload artifacts
       - name: Upload to release
         env:
           GH_TOKEN: ${{ github.token }}
