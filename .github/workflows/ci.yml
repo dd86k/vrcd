@@ -199,11 +199,18 @@ jobs:
     steps:
       # First, and before any JS action: the Node that GitHub injects into the
       # container to run actions/checkout and friends is built against glibc,
-      # so it needs libc6-compat (and libstdc++) to start at all. Only these
-      # two, since everything else is installed by a script that has to be
-      # checked out first.
+      # so it needs libc6-compat (and libstdc++) to start at all.
+      #
+      # GNU tar for the same reason, on behalf of actions/cache: the tar in the
+      # base image is BusyBox's, which has no --posix, and the failure lands on
+      # save rather than restore, so the cache silently never populates and
+      # every run re-clones the git dependencies. Alpine installs it as
+      # /usr/bin/tar, ahead of BusyBox's /bin/tar on PATH.
+      #
+      # Only these, since everything else is installed by a script that has to
+      # be checked out first.
       - name: Install Node compatibility libraries
-        run: apk add --no-cache libstdc++ libc6-compat
+        run: apk add --no-cache libstdc++ libc6-compat tar
 
       - uses: actions/checkout@v4
 
