@@ -36,6 +36,9 @@ certs/
 # pipehelper
 /pipehelper/vrcd-pipehelper
 
+# Windows packaging: downloaded DLLs, the sqlite3 amalgamation, and its library
+/packaging/deps/
+
 # Personal
 perso/
 TODO

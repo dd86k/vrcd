@@ -133,6 +133,25 @@ See [API.md](./API.md) for server-client API details.
 ./packaging/package-deb.sh --static server
 ```
 
+On Windows, in PowerShell (no MSYS2 or Git Bash needed):
+
+```powershell
+powershell -executionpolicy bypass packaging/fetch-deps-windows.ps1   # Fetches SDL2, libcurl, builds sqlite3
+powershell -executionpolicy bypass packaging/package-windows.ps1      # Zips client and server
+```
+
+The first script downloads the DLLs the two binaries load at run time, since
+Windows ships none of them, and compiles the sqlite3 amalgamation into
+`sqlite3.lib` for the server to link against. That last step is the only one
+needing Visual Studio Build Tools with the C++ workload; it finds them itself
+through `vswhere`, so a plain PowerShell prompt is enough.
+
+The zips are self-contained: the client carries SDL2, SDL2_ttf and SDL2_image,
+and the server carries libcurl (`sqlite3` is linked in). libcurl comes from
+curl.se and is built against the Windows certificate store, so no CA bundle is
+shipped with it. The pipe helper is not in the client zip, because talking to
+VRChat's launch pipe is in-process on Windows.
+
 ### Issues
 
 - Using LDC 1.41 on Windows will lead to compiling issues: undefined PAGESIZE in core.thread.fiber

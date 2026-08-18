@@ -80,9 +80,9 @@ jobs:
       - name: Build pipehelper
         run: dub build :pipehelper --build=release
 
-      # The server links sqlite3 statically and Windows runners ship no import
-      # library for it, so this is a semantic check rather than a test run.
-      # Producing one would mean building the amalgamation on the runner first.
+      # A semantic check rather than a test run: arsd.sqlite wants an sqlite3
+      # library to link against and Windows ships none. Building one is what
+      # fetch-deps-windows.ps1 does, and package-windows below pays for it.
       - name: Type-check server
         run: dub build :server -b syntax
 
@@ -113,6 +113,54 @@ jobs:
         with:
           name: vrcd-pipehelper-windows-x86_64
           path: pipehelper/vrcd-pipehelper.exe
+          if-no-files-found: error
+
+  package-windows:
+    name: Package (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # DMD for the same reason test-windows uses it: LDC fails to link with an
+      # undefined PAGESIZE in core.thread.fiber (see README).
+      - uses: dlang-community/setup-dlang@v2
+        with:
+          compiler: dmd-latest
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/AppData/Local/dub
+          key: dub-${{ runner.os }}-package-${{ hashFiles('dub.selections.json') }}
+
+      # Keyed on the script, since that is where the pinned versions live: a
+      # bump changes the hash and re-downloads, anything else reuses the zips.
+      # sqlite3.lib is rebuilt regardless, being MSVC output rather than a
+      # download, and the runner already has the C++ tools the script looks for.
+      - uses: actions/cache@v4
+        with:
+          path: packaging/deps/cache
+          key: windeps-${{ hashFiles('packaging/fetch-deps-windows.ps1') }}
+
+      - name: Fetch dependencies
+        run: ./packaging/fetch-deps-windows.ps1
+
+      # SDL2 and libcurl are loaded at run time, so both zips carry their DLLs.
+      # sqlite3 is linked into the server and carries nothing.
+      - name: Build packages
+        run: ./packaging/package-windows.ps1 -Target all
+
+      # Separate artifacts, as on Linux: somebody who wants the client has no
+      # use for the server sitting in the same download.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vrcd-client-windows-x86_64
+          path: vrcd-client-*-windows-x86_64.zip
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vrcd-server-windows-x86_64
+          path: vrcd-server-*-windows-x86_64.zip
           if-no-files-found: error
 
   package-linux:
@@ -248,7 +296,7 @@ jobs:
   release:
     name: Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [test-linux, test-windows, package-linux, test-alpine]
+    needs: [test-linux, test-windows, package-windows, package-linux, test-alpine]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
