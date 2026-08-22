@@ -46,12 +46,12 @@ $ProgressPreference = 'SilentlyContinue'
 # hash off sqlite.org into this, it will never match). SDL publishes neither, so
 # theirs were recorded when the version was pinned, which still catches an asset
 # that changed under a tag that did not.
-$SDL2Version      = '2.32.10'
-$SDL2Sha256       = '6cf9706eefd0a4a06dc764007934d428afaf029fabdd408a9e646048c91e18fb'
-$SDL2TtfVersion   = '2.24.0'
-$SDL2TtfSha256    = '8d72240aafc783d37d6cf960b1a2138e6ca4eb0c1b5b9a9e71ea299d1ef27ef9'
-$SDL2ImageVersion = '2.8.12'
-$SDL2ImageSha256  = 'a85aa359f0d7cf0c7e0586deee464982e4433e63fba407911dd802459f967f5f'
+$SDL3Version      = '3.4.14'
+$SDL3Sha256       = '69a4e55645651af85e6ccfe40981b5a0bc2c594d0004fe7844db680e23cfbdaf'
+$SDL3TtfVersion   = '3.2.2'
+$SDL3TtfSha256    = '13455007029cf487c5aacaa6ff84406be78ffdbed08f933aba3668680ff245f8'
+$SDL3ImageVersion = '3.4.4'
+$SDL3ImageSha256  = '15c88c3f4e20c0bd0640d7e6ebd40c8112cde308fc2bb5d0c92fa921f5745613'
 # curl.se's own builds. 8.11 is the floor: WebSocket support stopped being
 # experimental there, and the server's event stream is a WebSocket.
 $CurlBuild        = '8.21.0_7'
@@ -145,17 +145,16 @@ function Copy-Payload
     Copy-Item -Path $From -Destination $To -Force
 }
 
-# The SDL runtime zips are flat: the DLL and a readme carrying the zlib licence.
-# The devel zips would also bring import libraries, which the default (dynamic)
-# configuration has no use for.
+# The SDL runtime zips are flat: the DLL alongside LICENSE.txt (zlib) and a
+# couple of markdown files. The devel zips would also bring import libraries,
+# which the default (dynamic) configuration has no use for.
 function Get-Sdl
 {
     param(
         [Parameter(Mandatory)] [string] $Repo,
         [Parameter(Mandatory)] [string] $Component,
         [Parameter(Mandatory)] [string] $Version,
-        [Parameter(Mandatory)] [string] $Sha256,
-        [Parameter(Mandatory)] [string] $Readme
+        [Parameter(Mandatory)] [string] $Sha256
     )
 
     $name = "$Component-$Version-win32-x64.zip"
@@ -164,22 +163,20 @@ function Get-Sdl
     $dir = Expand-Package (Get-Archive -Url $url -Name $name -Sha256 $Sha256)
 
     Copy-Payload (Join-Path $dir "$Component.dll") (Join-Path $BinDir "$Component.dll")
-    Copy-Payload (Join-Path $dir $Readme) (Join-Path $LicenseDir "$Component-$Readme")
+    Copy-Payload (Join-Path $dir 'LICENSE.txt') (Join-Path $LicenseDir "$Component-LICENSE.txt")
 }
 
-function Get-Sdl2Libraries
+function Get-Sdl3Libraries
 {
-    Write-Host '==> SDL2 runtime libraries...'
+    Write-Host '==> SDL3 runtime libraries...'
 
-    Get-Sdl -Repo 'SDL'     -Component 'SDL2'     -Version $SDL2Version `
-        -Sha256 $SDL2Sha256 -Readme 'README-SDL.txt'
-    Get-Sdl -Repo 'SDL_ttf' -Component 'SDL2_ttf' -Version $SDL2TtfVersion `
-        -Sha256 $SDL2TtfSha256 -Readme 'README.txt'
-    # SDL2_image also carries an optional\ directory (avif, tiff, webp). Avatar
-    # and world thumbnails are PNG and JPEG, both built into the core DLL, so
-    # those are left behind rather than shipped unused.
-    Get-Sdl -Repo 'SDL_image' -Component 'SDL2_image' -Version $SDL2ImageVersion `
-        -Sha256 $SDL2ImageSha256 -Readme 'README.txt'
+    Get-Sdl -Repo 'SDL'     -Component 'SDL3'     -Version $SDL3Version -Sha256 $SDL3Sha256
+    Get-Sdl -Repo 'SDL_ttf' -Component 'SDL3_ttf' -Version $SDL3TtfVersion -Sha256 $SDL3TtfSha256
+    # SDL3_image also carries an optional\ directory (avif, tiff, webp, and --
+    # unlike SDL2_image -- libpng). Avatar and world thumbnails are PNG and
+    # JPEG, and the core DLL decodes both on its own when those are absent, so
+    # they are left behind rather than shipped unused.
+    Get-Sdl -Repo 'SDL_image' -Component 'SDL3_image' -Version $SDL3ImageVersion -Sha256 $SDL3ImageSha256
 }
 
 function Get-Curl
@@ -322,7 +319,7 @@ function Build-Sqlite
 
 New-Directories
 
-Get-Sdl2Libraries
+Get-Sdl3Libraries
 Get-Curl
 Build-Sqlite
 

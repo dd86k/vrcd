@@ -10,7 +10,7 @@
         vrcd-client-<version>-windows-x86_64.zip
         vrcd-server-<version>-windows-x86_64.zip
 
-    Both are built under the default configuration, which loads SDL2 and
+    Both are built under the default configuration, which loads SDL3 and
     libcurl at run time rather than linking them. sqlite3 is the exception: it
     is linked into the server, so nothing has to sit beside it.
 
@@ -164,8 +164,8 @@ if ($Target -in @('client', 'all'))
     # Windows (client/dub.sdl compiles vrcpipe.d in); the separate executable
     # exists for the Linux client, which runs it inside the game's Proton prefix.
     New-Package -Component 'client' -Executable 'vrcd_client.exe' `
-        -Libraries @('SDL2.dll', 'SDL2_ttf.dll', 'SDL2_image.dll') `
-        -Licenses @('SDL2-README-SDL.txt', 'SDL2_ttf-README.txt', 'SDL2_image-README.txt')
+        -Libraries @('SDL3.dll', 'SDL3_ttf.dll', 'SDL3_image.dll') `
+        -Licenses @('SDL3-LICENSE.txt', 'SDL3_ttf-LICENSE.txt', 'SDL3_image-LICENSE.txt')
 }
 
 if ($Target -in @('server', 'all'))
