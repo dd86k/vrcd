@@ -46,40 +46,11 @@ modules:
         sha256: a7bc9c956138f558cadf9c962352f59d41c80df6eb3ae3f8039f25be14a69303
         strip-components: 1
 
-  ## SDL2_ttf
-  # Required for SDL_TTF_2_22 bindbc version. FreeType2 is provided by the SDK.
-  - name: SDL2_ttf
-    buildsystem: cmake-ninja
-    builddir: true
-    config-opts:
-      - -DSDL2TTF_SAMPLES=OFF
-      - -DCMAKE_INSTALL_LIBDIR=lib
-    cleanup:
-      - /include
-      - /lib/cmake
-      - /lib/pkgconfig
-    sources:
-      - type: archive
-        url: https://github.com/libsdl-org/SDL_ttf/releases/download/release-2.22.0/SDL2_ttf-2.22.0.tar.gz
-        sha256: d48cbd1ce475b9e178206bf3b72d56b66d84d44f64ac05803328396234d67723
-
-  ## SDL2_image
-  # Required for SDL_Image_200 bindbc version.
-  - name: SDL2_image
-    buildsystem: cmake-ninja
-    builddir: true
-    config-opts:
-      - -DSDL2IMAGE_SAMPLES=OFF
-      - -DSDL2IMAGE_TESTS=OFF
-      - -DCMAKE_INSTALL_LIBDIR=lib
-    cleanup:
-      - /include
-      - /lib/cmake
-      - /lib/pkgconfig
-    sources:
-      - type: archive
-        url: https://github.com/libsdl-org/SDL_image/releases/download/release-2.8.4/SDL2_image-2.8.4.tar.gz
-        sha256: f7c06a8783952cfe960adccdd3d8472b63ab31475b4390d10cfdcc1aea61238f
+  # No SDL modules. The 25.08 runtime carries sdl3, sdl3-ttf and sdl3-image
+  # itself, which is what let the hand-built SDL2_ttf and SDL2_image modules go
+  # away with the SDL3 port. The Platform ships the sonames without the bare
+  # `.so` development symlinks, so the client's loader falls back to
+  # libSDL3*.so.0 -- see loadSDLLibraries in client/source/client/gui.d.
 
   ## vrcd client
   - name: vrcd-client
@@ -96,7 +67,7 @@ modules:
         python3 <<'PYEOF'
         import re
         patches = [
-            ('.dub/packages/bindbc-sdl/1.5.2/bindbc-sdl/dub.sdl',         '1.5.2', 'sdl'),
+            ('.dub/packages/bindbc-sdl/2.4.2/bindbc-sdl/dub.json',        '2.4.2', 'json'),
             ('.dub/packages/bindbc-common/1.0.5/bindbc-common/dub.json',   '1.0.5', 'json'),
             ('.dub/packages/bindbc-loader/1.1.5/bindbc-loader/dub.sdl',    '1.1.5', 'sdl'),
         ]
@@ -137,7 +108,7 @@ modules:
             json.dump({"fileVersion": 1, "versions": {
                 "bindbc-common": "1.0.5",
                 "bindbc-loader": "1.1.5",
-                "bindbc-sdl":    "1.5.2",
+                "bindbc-sdl":    "2.4.2",
             }}, f, indent=2)
         PYEOF
 
@@ -162,10 +133,10 @@ modules:
       # directory) directly into the path dub expects for --cache=local:
       #   .dub/packages/<name>/<version>/<name>/
       - type: archive
-        url: https://codeload.github.com/BindBC/bindbc-sdl/tar.gz/refs/tags/v1.5.2
-        sha256: 889a03fa6b014406a2c925bb45ece449a854ef4161c4c30d341e067a29b5885c
-        dest-filename: bindbc-sdl-1.5.2.tar.gz
-        dest: .dub/packages/bindbc-sdl/1.5.2/bindbc-sdl
+        url: https://codeload.github.com/BindBC/bindbc-sdl/tar.gz/refs/tags/v2.4.2
+        sha256: fcab293861551eb8b51551b9dff394a821ebce4d52611595dc7668e0106279f9
+        dest-filename: bindbc-sdl-2.4.2.tar.gz
+        dest: .dub/packages/bindbc-sdl/2.4.2/bindbc-sdl
         strip-components: 1
 
       - type: archive
