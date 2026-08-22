@@ -128,7 +128,7 @@ EOF
 case "${TARGET}" in
     client|all)
         build_deb client vrcd_client \
-            "libc6, libsdl2-2.0-0, libsdl2-image-2.0-0, libsdl2-ttf-2.0-0, libcurl4" \
+            "libc6, libsdl3-0, libsdl3-image0, libsdl3-ttf0, libcurl4" \
             --build=release
         ;;
 esac

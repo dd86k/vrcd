@@ -1,8 +1,8 @@
 #!/bin/bash
 # package-appimage.sh: Build and package vrcd client as an AppImage
 # Usage: [DC=COMPILER] ./package-appimage.sh [-c COMPILER]
-# Needs: appimagetool, linuxdeploy, and the SDL2 development libraries
-#        (libsdl2-dev, libsdl2-ttf-dev, libsdl2-image-dev)
+# Needs: appimagetool, linuxdeploy, and the SDL3 development libraries
+#        (libsdl3-dev, libsdl3-ttf-dev, libsdl3-image-dev)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -55,14 +55,14 @@ if [[ -n "${COMPILER}" ]]; then
     echo "    compiler: ${COMPILER}"
 fi
 # The "static" configuration is what makes an AppImage of this buildable at
-# all: bindbc-sdl binds SDL2 at link time, so libSDL2, libSDL2_ttf, and
-# libSDL2_image become DT_NEEDED entries that linuxdeploy resolves and bundles
+# all: bindbc-sdl binds SDL3 at link time, so libSDL3, libSDL3_ttf, and
+# libSDL3_image become DT_NEEDED entries that linuxdeploy resolves and bundles
 # on its own, along with what they in turn need. Under the default
 # configuration they are dlopen'd, invisible to ldd, and every one of them
 # (and every transitive dependency) has to be named by hand.
 #
-# Needs the SDL2 development libraries on the build host:
-#   apt install libsdl2-dev libsdl2-ttf-dev libsdl2-image-dev
+# Needs the SDL3 development libraries on the build host:
+#   apt install libsdl3-dev libsdl3-ttf-dev libsdl3-image-dev
 dub build :client -c static --build=release "${DUB_COMPILER_ARG[@]}"
 
 echo "==> Creating AppDir in ${WORKDIR}..."
@@ -102,9 +102,9 @@ run_tool linuxdeploy \
     --desktop-file "${APPDIR}/vrcd-client.desktop" \
     --icon-file "${APPDIR}/vrcd-client.png"
 
-# Fail loudly rather than shipping an AppImage that dies on a missing SDL2:
+# Fail loudly rather than shipping an AppImage that dies on a missing SDL3:
 # linuxdeploy reports a library it could not deploy as a warning and carries on.
-for lib in libSDL2-2.0 libSDL2_ttf-2.0 libSDL2_image-2.0; do
+for lib in libSDL3 libSDL3_ttf libSDL3_image; do
     if ! compgen -G "${APPDIR}/usr/lib/${lib}.so*" >/dev/null; then
         echo "error: ${lib} was not bundled into the AppDir" >&2
         exit 1
