@@ -5,7 +5,7 @@ authors "dd86k <dd@dax.moe>"
 copyright "Copyright © 2026, dd86k <dd@dax.moe>"
 license "BSD-3-Clause-Clear"
 
-dependency "bindbc-sdl" version="==1.5.3"
+dependency "bindbc-sdl" version="==2.4.2"
 dependency "ddlogger" repository="git+https://github.com/dd86k/ddlogger.git" version="4397d8e57a88bd6b3a3e5e4c846ba97ac3bfd364"
 dependency "ddui" repository="git+https://github.com/dd86k/ddui.git" version="a70e43e45ceec730a34c5f49f6d3cdb43094b7ab"
 
@@ -15,8 +15,11 @@ mainSourceFile "source/client/main.d"
 # ".." for VERSION
 stringImportPaths ".."
 
-# Minimum SDL2, SDL2_ttf, and SDL2_image versions the bindings expose
-versions "SDL_2018" "SDL_TTF_2018" "SDL_Image_200"
+# Minimum SDL_ttf and SDL_image versions the bindings expose. SDL itself needs
+# no identifier: 3.2.0 is bindbc-sdl's default and the floor we target, and
+# naming a higher one would null out the pointers for anything newer than what
+# the host actually loaded.
+versions "SDL_TTF_3_2" "SDL_Image_3_2"
 
 # friends.d, events.d: Roster bucketing, ordering, and event presentation
 #                      shared with the web front-end, so both cannot drift
@@ -28,16 +31,16 @@ sourceFiles "../common/source/vrcd/friends.d" "../common/source/vrcd/events.d" "
 # executable that Linux runs inside the Proton container instead.
 sourceFiles "../pipehelper/source/vrcpipe.d" platform="windows"
 
-# Using dynamic libraries allows SDL2 to be updated with the rest of the system
+# Using dynamic libraries allows SDL3 to be updated with the rest of the system
 configuration "application" {
 	subConfiguration "bindbc-sdl" "dynamic"
 }
 
-# For hosts that ship no SDL2 new enough to load, or where a single
-# self-contained binary is wanted. Needs the SDL2 development libraries at
-# link time (-lSDL2 -lSDL2_ttf -lSDL2_image on POSIX. SDL2.lib, SDL2_ttf.lib,
-# and SDL2_image.lib on Windows).
+# For hosts that ship no SDL3 new enough to load, or where a single
+# self-contained binary is wanted. Needs the SDL3 development libraries at
+# link time (-lSDL3 -lSDL3_ttf -lSDL3_image on POSIX. SDL3.lib, SDL3_ttf.lib,
+# and SDL3_image.lib on Windows).
 configuration "static" {
 	subConfiguration "bindbc-sdl" "static"
-	libs "SDL2" "SDL2_ttf" "SDL2_image"
+	libs "SDL3" "SDL3_ttf" "SDL3_image"
 }

@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@v4
 
       # libsqlite3-dev is needed under every configuration: arsd-official:sqlite
-      # links against it. libcurl and SDL2 are loaded at run time by the default
+      # links against it. libcurl and SDL3 are loaded at run time by the default
       # configurations, so neither is a build dependency here.
       - name: Install system dependencies
         run: |
@@ -144,7 +144,7 @@ jobs:
       - name: Fetch dependencies
         run: ./packaging/fetch-deps-windows.ps1
 
-      # SDL2 and libcurl are loaded at run time, so both zips carry their DLLs.
+      # SDL3 and libcurl are loaded at run time, so both zips carry their DLLs.
       # sqlite3 is linked into the server and carries nothing.
       - name: Build packages
         run: ./packaging/package-windows.ps1 -Target all
@@ -165,23 +165,24 @@ jobs:
 
   package-linux:
     name: Package (Linux)
-    # 22.04, not 24.04: it is the oldest image still offered, and its glibc
-    # (2.35) is the floor the AppImage can run on. The SDL2 it ships (2.0.20,
-    # SDL2_ttf 2.0.18) is also exactly what client/dub.sdl declares as its
-    # minimum, so nothing newer gets baked in by accident.
-    runs-on: ubuntu-22.04
+    # 26.04, and this sets the floor the AppImage can run on: it links glibc
+    # from the image it was built on, so the oldest usable runner used to be
+    # what this was pinned to (22.04, glibc 2.35). libsdl3-dev exists no
+    # earlier than Ubuntu 25.04, and the AppImage needs it because it builds
+    # -c static, so the floor moves to this image's glibc with the SDL3 port.
+    runs-on: ubuntu-26.04
     needs: build-pipehelper
     steps:
       - uses: actions/checkout@v4
 
-      # The AppImage builds the client under -c static, which links SDL2 at
+      # The AppImage builds the client under -c static, which links SDL3 at
       # build time and so needs the development packages. The .deb builds it
       # under the default configuration, which does not.
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libsdl2-dev libsdl2-ttf-dev libsdl2-image-dev libsqlite3-dev \
+            libsdl3-dev libsdl3-ttf-dev libsdl3-image-dev libsqlite3-dev \
             patchelf desktop-file-utils file
 
       - uses: dlang-community/setup-dlang@v2

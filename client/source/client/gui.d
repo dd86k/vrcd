@@ -120,71 +120,129 @@ void requestRepaint()
 }
 private bool wakeRequested;
 
-/// Load SDL2, SDL2_ttf, and SDL2_image at run time.
+/// Put a fatal startup error on screen as well as in the log.
+///
+/// A failure before the window exists otherwise reaches nobody: the Windows
+/// build is a GUI-subsystem binary (defining WinMain is what makes it one), so
+/// there is no console to print to, and on Linux it is normally started from a
+/// launcher or the AppImage, where stderr goes nowhere the user looks. Only
+/// the log file records it, and somebody whose client "does nothing when I
+/// double-click it" has no reason to go looking for one.
+///
+/// SDL's own box is the whole mechanism, and it needs no SDL_Init, so it
+/// covers every failure from SDL3 itself being loaded onwards -- including a
+/// missing SDL3_ttf or SDL3_image, which are the ones realistically absent
+/// since they are packaged separately from SDL3. SDL3 core missing is the one
+/// case with no window in it, and it stays a log line: there is no toolkit
+/// left to draw with.
+private void showCriticalMessage(string title, string message)
+{
+    import std.string : toStringz;
+
+    logCritical("%s: %s", title, message);
+
+    if (sdlReady == false)
+        return;
+
+    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, toStringz(title), toStringz(message), null);
+}
+
+/// True once SDL3 itself is loaded and calling into it is safe.
+///
+/// Under the static configuration that is from the start, since the process
+/// would not have got this far without it. Under the dynamic one it is set
+/// only when loadSDL reports success: a library too old to provide every
+/// symbol still loads, and bindbc leaves the ones it could not find as null
+/// pointers behind the wrappers. Reporting an error is the last thing that
+/// should be able to crash, so a partial load counts as no SDL at all.
+private __gshared bool sdlReady;
+
+/// What to tell somebody whose SDL3 libraries will not load. On Windows they
+/// ship in the release zip and belong beside the executable; everywhere else
+/// they are the distribution's packages.
+version (Windows)
+    private static immutable string sdlInstallHint =
+        "The SDL3 DLLs must sit beside vrcd_client.exe.\n" ~
+        "They ship in the release zip.";
+else
+    private static immutable string sdlInstallHint =
+        "Install the SDL3 runtime libraries\n" ~
+        "(e.g. libsdl3-0, libsdl3-ttf0, libsdl3-image0 on Debian/Ubuntu).";
+
+version (BindSDL_Static) {}
+else
+{
+    import bindbc.loader : LoadMsg;
+
+    /// Report a library that would not load. Always returns false, so a caller
+    /// can `return reportLibraryFailure(...)`. Both outcomes are fatal, but the
+    /// difference is what the user has to act on: absent is a package that was
+    /// never installed, too old is the wrong one that was.
+    private bool reportLibraryFailure(string name, LoadMsg status)
+    {
+        bool tooOld = status == LoadMsg.badLibrary;
+        showCriticalMessage(
+            tooOld ? "vrcd: " ~ name ~ " too old"
+                   : "vrcd: " ~ name ~ " not found",
+            (tooOld ? name ~ " was found, but is older than vrcd needs."
+                    : name ~ " could not be found.")
+                ~ "\n\n" ~ sdlInstallHint);
+        return false;
+    }
+}
+
+/// Load SDL3, SDL3_ttf, and SDL3_image at run time.
 ///
 /// Under the "static" configuration, bindbc-sdl binds the libraries at link
 /// time and emits no loader functions at all, so there is nothing to load and
 /// nothing that can fail here.
+///
+/// bindbc only searches for the unversioned `libSDL3*.so` names, which are the
+/// symlinks a *development* package installs. A host with only the runtime
+/// package has the sonames and nothing else, so each library gets an explicit
+/// second attempt at `.so.0` before it is called missing.
 ///
 /// Returns: True if every library was loaded (or statically linked).
 private bool loadSDLLibraries()
 {
     version (BindSDL_Static)
     {
+        sdlReady = true;
         return true;
     }
     else
     {
-        // Load SDL2.
-        SDLSupport sdlStatus = loadSDL();
-        if (sdlStatus == SDLSupport.noLibrary)
+        // Load SDL3. Everything below this point, including the message box
+        // the failures use, depends on it having come up cleanly.
+        LoadMsg sdlStatus = loadSDL();
+        version (Posix)
         {
-            logError("No SDL2 library found");
-            return false;
+            if (sdlStatus == LoadMsg.noLibrary)
+                sdlStatus = loadSDL("libSDL3.so.0");
         }
-        if (sdlStatus == SDLSupport.badLibrary)
-        {
-            logError("SDL2 library too old");
-            return false;
-        }
+        if (sdlStatus != LoadMsg.success)
+            return reportLibraryFailure("SDL3", sdlStatus);
+        sdlReady = true;
 
-        // Load SDL2_ttf.
-        SDLTTFSupport ttfStatus = loadSDLTTF();
-        if (ttfStatus == SDLTTFSupport.noLibrary)
+        // Load SDL3_ttf.
+        LoadMsg ttfStatus = loadSDLTTF();
+        version (Posix)
         {
-            // Debian/Ubuntu ship libSDL2_ttf-2.0.so.0 which bindbc doesn't
-            // search for by default; try it explicitly.
-            ttfStatus = loadSDLTTF("libSDL2_ttf-2.0.so.0");
+            if (ttfStatus == LoadMsg.noLibrary)
+                ttfStatus = loadSDLTTF("libSDL3_ttf.so.0");
         }
-        if (ttfStatus == SDLTTFSupport.noLibrary)
-        {
-            logError("No SDL2_ttf library found");
-            return false;
-        }
-        if (ttfStatus == SDLTTFSupport.badLibrary)
-        {
-            logError("SDL2_ttf library too old");
-            return false;
-        }
+        if (ttfStatus != LoadMsg.success)
+            return reportLibraryFailure("SDL3_ttf", ttfStatus);
 
-        // Load SDL2_image.
-        SDLImageSupport imgStatus = loadSDLImage();
-        if (imgStatus == SDLImageSupport.noLibrary)
+        // Load SDL3_image.
+        LoadMsg imgStatus = loadSDLImage();
+        version (Posix)
         {
-            // Debian/Ubuntu ship libSDL2_image-2.0.so.0 which bindbc doesn't
-            // search for by default; try it explicitly.
-            imgStatus = loadSDLImage("libSDL2_image-2.0.so.0");
+            if (imgStatus == LoadMsg.noLibrary)
+                imgStatus = loadSDLImage("libSDL3_image.so.0");
         }
-        if (imgStatus == SDLImageSupport.noLibrary)
-        {
-            logError("No SDL2_image library found");
-            return false;
-        }
-        if (imgStatus == SDLImageSupport.badLibrary)
-        {
-            logError("SDL2_image library too old");
-            return false;
-        }
+        if (imgStatus != LoadMsg.success)
+            return reportLibraryFailure("SDL3_image", imgStatus);
 
         return true;
     }
@@ -241,7 +299,7 @@ int runGui(string host, ushort port, string secret, long sinceId,
     // Attempt to load OpenSSL for TLS support.
     loadTLS();
 
-    // Load SDL2, SDL2_ttf, and SDL2_image (nothing to do when linked statically).
+    // Load SDL3, SDL3_ttf, and SDL3_image (nothing to do when linked statically).
     if (loadSDLLibraries() == false)
         return 1;
 
@@ -250,22 +308,30 @@ int runGui(string host, ushort port, string secret, long sinceId,
 
     // NOTE: SDL_HINT_FRAMEBUFFER_ACCELERATION is not set because we use
     //       SDL_CreateRenderer + owned surface instead of SDL_GetWindowSurface
-    //       (which is unsupported on Wayland / sdl2-compat).
+    //       (which is unsupported on Wayland).
     //       It's a note here because it WAS used to do "software rendering", and
     //       here it meant the Xorg server was just holding the bag for us.
-    SDL_SetHint(SDL_HINT_VIDEO_HIGHDPI_DISABLED, "0");
+    // NOTE: SDL2's SDL_HINT_VIDEO_HIGHDPI_DISABLED is gone in SDL3, where high
+    //       DPI is opted into per window with SDL_WINDOW_HIGH_PIXEL_DENSITY.
+    //       We don't ask for it, so the window stays in logical pixels and the
+    //       owned surface keeps matching it.
     // Match Wayland app_id / X11 WM_CLASS to the desktop file so launchers
     // (and Flatpak) associate the window with the correct icon and entry.
-    SDL_SetHint(SDL_HINT_APP_NAME, "io.github.dd86k.vrcd");
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_EVENTS) != 0)
+    // SDL3 splits that identity off SDL_HINT_APP_NAME, which is the
+    // human-readable name shown to the user, into SDL_HINT_APP_ID.
+    SDL_SetHint(SDL_HINT_APP_ID, "io.github.dd86k.vrcd");
+    SDL_SetHint(SDL_HINT_APP_NAME, "vrcd");
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) == false)
     {
-        logError("SDL_Init failed: %s", fromStringz( SDL_GetError() ));
+        // SDL's own box needs a video driver too, so this is the one startup
+        // failure where it is likely to come to nothing. It costs a call.
+        showCriticalMessage("vrcd: SDL_Init failed", cast(string) fromStringz( SDL_GetError() ).idup);
         return 1;
     }
 
-    if (TTF_Init() != 0)
+    if (TTF_Init() == false)
     {
-        logError("TTF_Init failed: %s", fromStringz( TTF_GetError() ));
+        showCriticalMessage("vrcd: TTF_Init failed", cast(string) fromStringz( SDL_GetError() ).idup);
         SDL_Quit();
         return 1;
     }
@@ -273,18 +339,23 @@ int runGui(string host, ushort port, string secret, long sinceId,
     // Log startup environment info.
     logStartupInfo();
 
-    // Create window.
+    // Create window. SDL3 dropped the position arguments from the call, so
+    // centering it is a separate step.
     window = SDL_CreateWindow("vrcd",
-        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         window_width, window_height,
         SDL_WINDOW_RESIZABLE);
     if (window is null)
     {
-        logError("SDL_CreateWindow failed: %s", fromStringz( SDL_GetError() ));
+        showCriticalMessage("vrcd: cannot create window", cast(string) fromStringz( SDL_GetError() ).idup);
         SDL_Quit();
         return 1;
     }
     SDL_SetWindowMinimumSize(window, 600, 400);
+
+    // SDL3 starts with text input off. ddui's textboxes (server host, secret,
+    // search fields) are fed from SDL_EVENT_TEXT_INPUT, so it has to be asked
+    // for or they take no typing at all.
+    SDL_StartTextInput(window);
 
     // Init renderer.
     initiate_renderer(hardwareAccel);
@@ -292,7 +363,6 @@ int runGui(string host, ushort port, string secret, long sinceId,
     // Load system font.
     if (initFont() == false)
     {
-        logError("No system font found, text will not render");
         version (Windows)
             static immutable string msg =
                 "No usable system font.\n" ~
@@ -301,7 +371,7 @@ int runGui(string host, ushort port, string secret, long sinceId,
             static immutable string msg =
                 "No usable system font.\n" ~
                 "Install a TTF font (e.g. fonts-liberation).";
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "vrcd: No font found", msg.ptr, window);
+        showCriticalMessage("vrcd: No font found", msg);
         return 2;
     }
     
@@ -310,7 +380,7 @@ int runGui(string host, ushort port, string secret, long sinceId,
     if (icon)
     {
         SDL_SetWindowIcon(window, icon);
-        SDL_FreeSurface(icon); // SDL2/SDL3 keeps its own copy
+        SDL_DestroySurface(icon); // SDL keeps its own copy
     }
 
     // Init UI context (heap-allocated since mu_Context is ~4 MB, far too
@@ -376,9 +446,9 @@ private void eventLoop(mu_Context* uictx)
         bool hasMomentum = (momentumVY > MOMENTUM_MIN || momentumVY < -MOMENTUM_MIN);
         bool gotEvent;
         if (hasMomentum)
-            gotEvent = SDL_WaitEventTimeout(&e, 16) != 0;   // ~60 fps
+            gotEvent = SDL_WaitEventTimeout(&e, 16);   // ~60 fps
         else
-            gotEvent = SDL_WaitEvent(&e) != 0;
+            gotEvent = SDL_WaitEvent(&e);
 
         // Clear per-frame flags.
         wasClick = false;
@@ -388,59 +458,68 @@ private void eventLoop(mu_Context* uictx)
         {
             switch (e.type)
             {
-                case SDL_QUIT:
+                case SDL_EVENT_QUIT:
                     running = false;
                     break;
 
-                case SDL_WINDOWEVENT:
-                    if (e.window.event == SDL_WINDOWEVENT_RESIZED)
-                    {
-                        window_width  = e.window.data1;
-                        window_height = e.window.data2;
-                    }
+                // SDL3 gives each window change its own event type instead of
+                // one SDL_WINDOWEVENT carrying a sub-event.
+                case SDL_EVENT_WINDOW_RESIZED:
+                    window_width  = e.window.data1;
+                    window_height = e.window.data2;
                     break;
 
-                case SDL_MOUSEMOTION:
+                case SDL_EVENT_MOUSE_MOTION:
+                    // SDL3 reports pointer positions as floats (sub-pixel on
+                    // touch and high-density displays); ddui works in whole
+                    // pixels, so they are truncated on the way in.
+                    int motionX = cast(int) e.motion.x;
+                    int motionY = cast(int) e.motion.y;
+
                     // Always pass motion to ddui for hover states.
-                    mu_input_mousemove(uictx, e.motion.x, e.motion.y);
+                    mu_input_mousemove(uictx, motionX, motionY);
 
                     if (dragState == DragState.pending)
                     {
-                        int dx = e.motion.x - dragStartX;
-                        int dy = e.motion.y - dragStartY;
+                        int dx = motionX - dragStartX;
+                        int dy = motionY - dragStartY;
                         if (dx*dx + dy*dy > DRAG_THRESHOLD * DRAG_THRESHOLD)
                         {
                             dragState = DragState.dragging;
-                            dragPrevY = e.motion.y;
+                            dragPrevY = motionY;
                             momentumVY = 0.0f;
                         }
                     }
                     else if (dragState == DragState.dragging)
                     {
-                        int dy = dragPrevY - e.motion.y;
+                        int dy = dragPrevY - motionY;
                         pendingScrollY += dy;
                         momentumVY = cast(float) dy;
-                        dragPrevY = e.motion.y;
+                        dragPrevY = motionY;
                     }
                     break;
 
-                case SDL_MOUSEWHEEL:
-                    pendingScrollY += e.wheel.y * -30;
+                case SDL_EVENT_MOUSE_WHEEL:
+                    pendingScrollY += cast(int) (e.wheel.y * -30);
                     momentumVY = 0.0f;
                     break;
 
-                case SDL_TEXTINPUT:
-                    mu_input_text(uictx, e.text.text.ptr);
+                case SDL_EVENT_TEXT_INPUT:
+                    // SDL3 hands out a pointer to the text rather than an
+                    // inline buffer.
+                    mu_input_text(uictx, e.text.text);
                     break;
 
-                case SDL_MOUSEBUTTONDOWN:
+                case SDL_EVENT_MOUSE_BUTTON_DOWN:
+                    int downX = cast(int) e.button.x;
+                    int downY = cast(int) e.button.y;
                     if (e.button.button == SDL_BUTTON_LEFT)
                     {
                         // Click-outside dismissal for the filter popup. The
                         // click is swallowed (no ddui input, no wasClick) so
                         // it doesn't activate something behind the popup.
                         if (filterPopupOpen &&
-                            filterPopupContains(e.button.x, e.button.y) == false)
+                            filterPopupContains(downX, downY) == false)
                         {
                             filterPopupOpen = false;
                             requestRepaint();
@@ -452,13 +531,13 @@ private void eventLoop(mu_Context* uictx)
                         // are checkboxes that toggle on mousedown, so we
                         // withhold the press until the gesture resolves.
                         dragState = DragState.pending;
-                        dragStartX = e.button.x;
-                        dragStartY = e.button.y;
+                        dragStartX = downX;
+                        dragStartY = downY;
                         momentumVY = 0.0f;  // Stop any active momentum.
                         deferredMousedown = filterPopupOpen
-                            && filterPopupContains(e.button.x, e.button.y);
+                            && filterPopupContains(downX, downY);
                         if (deferredMousedown == false)
-                            mu_input_mousedown(uictx, e.button.x, e.button.y, MU_MOUSE_LEFT);
+                            mu_input_mousedown(uictx, downX, downY, MU_MOUSE_LEFT);
                     }
                     else if (e.button.button == SDL_BUTTON_X1)
                     {
@@ -470,11 +549,13 @@ private void eventLoop(mu_Context* uictx)
                     {
                         int b = buttonMap[e.button.button & 0xff];
                         if (b)
-                            mu_input_mousedown(uictx, e.button.x, e.button.y, b);
+                            mu_input_mousedown(uictx, downX, downY, b);
                     }
                     break;
 
-                case SDL_MOUSEBUTTONUP:
+                case SDL_EVENT_MOUSE_BUTTON_UP:
+                    int upX = cast(int) e.button.x;
+                    int upY = cast(int) e.button.y;
                     if (e.button.button == SDL_BUTTON_LEFT)
                     {
                         if (dragState == DragState.pending)
@@ -483,8 +564,8 @@ private void eventLoop(mu_Context* uictx)
                             // deferred (popup case), send it now so the click
                             // registers as a complete press+release this frame.
                             if (deferredMousedown)
-                                mu_input_mousedown(uictx, e.button.x, e.button.y, MU_MOUSE_LEFT);
-                            mu_input_mouseup(uictx, e.button.x, e.button.y, MU_MOUSE_LEFT);
+                                mu_input_mousedown(uictx, upX, upY, MU_MOUSE_LEFT);
+                            mu_input_mouseup(uictx, upX, upY, MU_MOUSE_LEFT);
                             wasClick = true;
                         }
                         else if (dragState == DragState.dragging)
@@ -493,7 +574,7 @@ private void eventLoop(mu_Context* uictx)
                             // we never sent a press, so no release is needed
                             // and ddui never saw the click.
                             if (deferredMousedown == false)
-                                mu_input_mouseup(uictx, e.button.x, e.button.y, MU_MOUSE_LEFT);
+                                mu_input_mouseup(uictx, upX, upY, MU_MOUSE_LEFT);
                         }
                         dragState = DragState.idle;
                         deferredMousedown = false;
@@ -502,16 +583,18 @@ private void eventLoop(mu_Context* uictx)
                     {
                         int b = buttonMap[e.button.button & 0xff];
                         if (b)
-                            mu_input_mouseup(uictx, e.button.x, e.button.y, b);
+                            mu_input_mouseup(uictx, upX, upY, b);
                     }
                     break;
 
-                case SDL_KEYDOWN:
-                case SDL_KEYUP:
+                case SDL_EVENT_KEY_DOWN:
+                case SDL_EVENT_KEY_UP:
                     // Escape dismisses the filter popup first, otherwise it
                     // pops the active tab's subpage like the header Back button.
-                    if (e.type == SDL_KEYDOWN &&
-                        e.key.keysym.sym == SDLK_ESCAPE)
+                    // SDL3 flattened SDL_Keysym into the event, so the keycode
+                    // is e.key.key rather than e.key.keysym.sym.
+                    if (e.type == SDL_EVENT_KEY_DOWN &&
+                        e.key.key == SDLK_ESCAPE)
                     {
                         if (filterPopupOpen)
                         {
@@ -525,19 +608,20 @@ private void eventLoop(mu_Context* uictx)
                     // Clipboard shortcuts (Ctrl+C/X/V/A) are plain key flags in
                     // the map below: ddui only acts on them while Ctrl is held,
                     // and does the editing itself through the clipboard hooks.
-                    int k = keyMap[e.key.keysym.sym & 0xff];
+                    int k = keyMap[e.key.key & 0xff];
                     if (k)
                     {
-                        if (e.type == SDL_KEYDOWN)
+                        if (e.type == SDL_EVENT_KEY_DOWN)
                             mu_input_keydown(uictx, k);
                         else
                             mu_input_keyup(uictx, k);
                     }
                     break;
 
-                case SDL_DROPFILE:
-                    string path = cast(string) fromStringz(e.drop.file).idup;
-                    SDL_free(e.drop.file);
+                case SDL_EVENT_DROP_FILE:
+                    // SDL3 owns the path and frees it once the event has been
+                    // handled, so this copies and does not free.
+                    string path = cast(string) fromStringz(e.drop.data).idup;
                     // Append to queue, skipping duplicates.
                     bool dup;
                     foreach (string p; appState.droppedFiles)
@@ -554,7 +638,7 @@ private void eventLoop(mu_Context* uictx)
                         drainNetworkMessages();
                     break;
             }
-            gotEvent = SDL_PollEvent(&e) != 0;
+            gotEvent = SDL_PollEvent(&e);
         }
 
         // Apply momentum scrolling.
@@ -1084,6 +1168,10 @@ private void guiCleanup()
         netThread.join();
         netThread = null;
     }
+    // Only once the network thread is gone: with TLS, close() leaves the
+    // OpenSSL state alone precisely because that thread may still be in it.
+    if (conn)
+        conn.dispose();
     // Persist the event cursor so the next run resumes instead of
     // replaying everything from id 0.
     saveSettings(saved);
@@ -2171,8 +2259,6 @@ private void checkPlayerJoining(JSONValue msg, string user)
 /// Called after SDL_Init + TTF_Init so all queries are valid.
 private void logStartupInfo()
 {
-    import std.format : sformat;
-
     // Platform (OS).
     const(char)* platform = SDL_GetPlatform();
     logInfo("Platform: %s", platform ? fromStringz( platform ) : "unknown");
@@ -2181,27 +2267,18 @@ private void logStartupInfo()
     const(char)* videoDriver = SDL_GetCurrentVideoDriver();
     logInfo("Video driver: %s", videoDriver ? fromStringz( videoDriver ) : "unknown");
 
-    // SDL2 linked version.
+    // Linked library versions. SDL3 returns them packed into an int rather
+    // than filling in an SDL_version struct.
     char[256] buffer = void;
-    SDL_version ver = void;
-    SDL_GetVersion(&ver);
-    logInfo("SDL2: %s", sformat(buffer, "%d.%d.%d", ver.major, ver.minor, ver.patch));
+    logInfo("SDL3: %s", formatSDLVersion(buffer, SDL_GetVersion()));
+    logInfo("SDL3_ttf: %s", formatSDLVersion(buffer, TTF_Version()));
+    logInfo("SDL3_image: %s", formatSDLVersion(buffer, IMG_Version()));
 
-    // SDL2_ttf linked version.
-    const(SDL_version)* ttfVer = TTF_Linked_Version();
-    if (ttfVer)
-        logInfo("SDL2_ttf: %s", sformat(buffer, "%d.%d.%d", ttfVer.major, ttfVer.minor, ttfVer.patch));
-
-    // SDL2_image linked version.
-    const(SDL_version)* imgVer = IMG_Linked_Version();
-    if (imgVer)
-        logInfo("SDL2_image: %s", sformat(buffer, "%d.%d.%d", imgVer.major, imgVer.minor, imgVer.patch));
-
-    // How SDL2 was bound: linked at build time, or loaded at run time.
+    // How SDL3 was bound: linked at build time, or loaded at run time.
     version (BindSDL_Static)
-        logInfo("SDL2 binding: static");
+        logInfo("SDL3 binding: static");
     else
-        logInfo("SDL2 binding: dynamic");
+        logInfo("SDL3 binding: dynamic");
 
     // Number of available video drivers.
     int numDrivers = SDL_GetNumVideoDrivers();
@@ -2227,6 +2304,17 @@ private void logStartupInfo()
         }
         logInfo("Available video drivers: %s", buffer[0 .. pos]);
     }
+}
+
+/// Format one of SDL3's packed version integers into `buffer`.
+private const(char)[] formatSDLVersion(char[] buffer, int packed)
+{
+    import std.format : sformat;
+
+    return sformat(buffer, "%d.%d.%d",
+        SDL_VERSIONNUM_MAJOR(packed),
+        SDL_VERSIONNUM_MINOR(packed),
+        SDL_VERSIONNUM_MICRO(packed));
 }
 
 /// Map raw event type strings to pretty display names.
@@ -2288,7 +2376,9 @@ private string timeNow()
 }
 
 /// SDL timer callback -- pushes a user event to wake the main loop.
-private extern(C) uint timerCallback(uint interval, void* param) nothrow
+/// SDL3 passes the user data first and the timer's own ID alongside the
+/// interval; the return value still reschedules.
+private extern(C) uint timerCallback(void* param, SDL_TimerID id, uint interval) nothrow
 {
     // NOTE: zero-init is optionally good, but we don't use any other fields...
     SDL_Event ev = void;
@@ -2342,7 +2432,9 @@ private void doReconnect()
 
     logDebugging("doReconnect: tearing down existing connection");
 
-    // Close existing connection and wait for network thread.
+    // Close existing connection and wait for network thread. The socket is
+    // shut down first so the thread's blocked receive() returns; freeing
+    // waits until it has joined, since with TLS it is inside OpenSSL.
     if (conn)
         conn.close();
     if (netThread)
@@ -2350,6 +2442,8 @@ private void doReconnect()
         netThread.join();
         netThread = null;
     }
+    if (conn)
+        conn.dispose();
 
     // Read settings buffers.
     string host = cast(string) appState.settingsHost[0 .. strlen(appState.settingsHost.ptr)].idup;
@@ -2577,9 +2671,11 @@ private immutable ushort[256] keyMap = () {
     m[SDLK_DELETE    & 0xff] = MU_KEY_DELETE;
     // Clipboard shortcuts: ddui only acts on these while Ctrl is held, so
     // mapping the bare letters is safe (typing them still inserts text).
-    m[SDLK_c         & 0xff] = MU_KEY_COPY;
-    m[SDLK_x         & 0xff] = MU_KEY_CUT;
-    m[SDLK_v         & 0xff] = MU_KEY_PASTE;
-    m[SDLK_a         & 0xff] = MU_KEY_SELECTALL;
+    // SDL3 spells the letter keycodes in caps; the values are the lowercase
+    // ASCII ones either way.
+    m[SDLK_C         & 0xff] = MU_KEY_COPY;
+    m[SDLK_X         & 0xff] = MU_KEY_CUT;
+    m[SDLK_V         & 0xff] = MU_KEY_PASTE;
+    m[SDLK_A         & 0xff] = MU_KEY_SELECTALL;
     return m;
 }();

@@ -3752,7 +3752,7 @@ private void drawSettingsTab(mu_Context* ctx, AppState* state, int scrollDelta)
     mu_label(ctx, "Compiler");
     mu_label(ctx, COMPILER);
     
-    // TODO: Compile/runtime settings (compiler, package versions, SDL2 versions, etc.)
+    // TODO: Compile/runtime settings (compiler, package versions, SDL3 versions, etc.)
 
     mu_end_panel(ctx);
 }

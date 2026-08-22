@@ -512,7 +512,24 @@ class ServerConnection
     }
 
     /// Close the connection, unblocking any thread blocked on receive().
+    ///
+    /// Only the socket is shut down here; nothing is freed. The network
+    /// thread is normally sitting inside receive() when this is called, and
+    /// with TLS that call is walking the SSL object -- freeing it from here
+    /// crashes inside OpenSSL. The shutdown makes receive() return, the
+    /// thread unwinds, and dispose() does the freeing afterwards.
     void close()
+    {
+        if (stream)
+        {
+            try stream.unblock();
+            catch (Exception) {}
+        }
+    }
+
+    /// Release the socket and the TLS state.
+    /// Call only after joining the thread that runs the receive loop.
+    void dispose()
     {
         if (stream)
         {
@@ -679,6 +696,10 @@ private:
 
     void sendMessage(JSONValue msg)
     {
+        // Nothing to write to between dispose() and the next connect().
+        if (stream is null)
+            return;
+
         string line = msg.toString() ~ "\n";
         logTrace("sendMessage: len=%d", line.length);
 

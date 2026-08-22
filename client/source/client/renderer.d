@@ -1,4 +1,4 @@
-/// SDL2 renderer
+/// SDL3 renderer
 ///
 /// Copyright: dd86k <dd@dax.moe>
 /// License: BSD-3-Clause-Clear
@@ -22,10 +22,15 @@ __gshared SDL_Texture*  screenTexture;
 __gshared SDL_Surface*  surface;
 __gshared mu_Rect clip;
 
+// SDL3 surfaces carry a format enum rather than a description of it, and the
+// pack/unpack calls want the description. It is a lookup into a static table
+// and the surface format never changes, so it is fetched once.
+private __gshared const(SDL_PixelFormatDetails)* pixelFormat;
+
 // Font fallback chain. fonts[0] is the primary (used for layout metrics);
 // subsequent entries are coverage fonts opened opportunistically for scripts
 // the primary doesn't provide (Thai, Arabic, CJK, etc.). Strings are split
-// into runs per-codepoint via TTF_GlyphIsProvided32 and rendered per-font.
+// into runs per-codepoint via TTF_FontHasGlyph and rendered per-font.
 __gshared TTF_Font*[] fonts;
 
 enum FONT_SIZE = 16;
@@ -33,13 +38,18 @@ __gshared int currentFontSize = FONT_SIZE;
 
 void initiate_renderer(bool hardwareAccel = false)
 {
-    sdlRenderer = SDL_CreateRenderer(window, -1, hardwareAccel ? 0 : SDL_RENDERER_SOFTWARE);
+    pixelFormat = SDL_GetPixelFormatDetails(SDL_PIXELFORMAT_ARGB8888);
+
+    // SDL3 picks the driver by name instead of by flag. A null name lets it
+    // choose, which is what asking for hardware acceleration means here.
+    sdlRenderer = SDL_CreateRenderer(window,
+        hardwareAccel ? null : SDL_SOFTWARE_RENDERER.ptr);
     if (sdlRenderer is null)
         logError("SDL_CreateRenderer failed: %s", fromStringz( SDL_GetError() ));
 
-    surface = SDL_CreateRGBSurfaceWithFormat(0, window_width, window_height, 32, SDL_PIXELFORMAT_ARGB8888);
+    surface = SDL_CreateSurface(window_width, window_height, SDL_PIXELFORMAT_ARGB8888);
     if (surface is null)
-        logError("SDL_CreateRGBSurfaceWithFormat failed: %s", fromStringz( SDL_GetError() ));
+        logError("SDL_CreateSurface failed: %s", fromStringz( SDL_GetError() ));
 
     screenTexture = SDL_CreateTexture(sdlRenderer, SDL_PIXELFORMAT_ARGB8888,
         SDL_TEXTUREACCESS_STREAMING, window_width, window_height);
@@ -52,7 +62,7 @@ void initiate_renderer(bool hardwareAccel = false)
 void destroy_renderer()
 {
     if (screenTexture) SDL_DestroyTexture(screenTexture);
-    if (surface) SDL_FreeSurface(surface);
+    if (surface) SDL_DestroySurface(surface);
     if (sdlRenderer) SDL_DestroyRenderer(sdlRenderer);
 }
 
@@ -65,16 +75,16 @@ void blend_pixel(uint* pixels, int pitch, int x, int y, mu_Color color)
     uint* p = pixels + y * pitch + x;
     if (color.a == 255)
     {
-        *p = SDL_MapRGB(surface.format, color.r, color.g, color.b);
+        *p = SDL_MapRGB(pixelFormat, null, color.r, color.g, color.b);
         return;
     }
     if (color.a == 0) return;
 
     ubyte dr = void, dg = void, db = void;
-    SDL_GetRGB(*p, surface.format, &dr, &dg, &db);
+    SDL_GetRGB(*p, pixelFormat, null, &dr, &dg, &db);
     uint a = color.a;
     uint ia = 255 - a;
-    *p = SDL_MapRGB(surface.format,
+    *p = SDL_MapRGB(pixelFormat, null,
         cast(ubyte)((color.r * a + dr * ia) / 255),
         cast(ubyte)((color.g * a + dg * ia) / 255),
         cast(ubyte)((color.b * a + db * ia) / 255));
@@ -101,7 +111,7 @@ void r_draw_rect(mu_Rect rect, mu_Color color)
     if (color.a == 255)
     {
         SDL_Rect sr = SDL_Rect(x0, y0, x1 - x0, y1 - y0);
-        SDL_FillRect(surface, &sr, SDL_MapRGB(surface.format, color.r, color.g, color.b));
+        SDL_FillSurfaceRect(surface, &sr, SDL_MapRGB(pixelFormat, null, color.r, color.g, color.b));
         return;
     }
     if (color.a == 0) return;
@@ -117,8 +127,8 @@ void r_draw_rect(mu_Rect rect, mu_Color color)
         for (int px = x0; px < x1; ++px)
         {
             ubyte dr = void, dg = void, db = void;
-            SDL_GetRGB(row[px], surface.format, &dr, &dg, &db);
-            row[px] = SDL_MapRGB(surface.format,
+            SDL_GetRGB(row[px], pixelFormat, null, &dr, &dg, &db);
+            row[px] = SDL_MapRGB(pixelFormat, null,
                 cast(ubyte)((color.r * a + dr * ia) / 255),
                 cast(ubyte)((color.g * a + dg * ia) / 255),
                 cast(ubyte)((color.b * a + db * ia) / 255));
@@ -133,19 +143,19 @@ void r_draw_text(const(char)[] text, mu_Vec2 pos, mu_Color color)
 
     SDL_Color fg = SDL_Color(color.r, color.g, color.b, color.a);
     SDL_Rect clipRect = SDL_Rect(clip.x, clip.y, clip.w, clip.h);
-    SDL_SetClipRect(surface, &clipRect);
-    scope(exit) SDL_SetClipRect(surface, null);
+    SDL_SetSurfaceClipRect(surface, &clipRect);
+    scope(exit) SDL_SetSurfaceClipRect(surface, null);
 
     // Fast path: single font loaded, or pure-ASCII string,  render the
     // whole thing with the primary in one shot. Covers the common case of
     // UI labels and log lines.
     if (fonts.length == 1 || isAscii(text))
     {
-        SDL_Surface* s = TTF_RenderUTF8_Blended(fonts[0], text.ptr, fg);
+        SDL_Surface* s = TTF_RenderText_Blended(fonts[0], text.ptr, text.length, fg);
         if (s is null) return;
         SDL_Rect dst = SDL_Rect(pos.x, pos.y, s.w, s.h);
         SDL_BlitSurface(s, null, surface, &dst);
-        SDL_FreeSurface(s);
+        SDL_DestroySurface(s);
         return;
     }
 
@@ -153,7 +163,7 @@ void r_draw_text(const(char)[] text, mu_Vec2 pos, mu_Color color)
     // run separately and blit at a shared baseline so per-font ascent
     // differences line up.
     int penX = pos.x;
-    int baselineY = pos.y + TTF_FontAscent(fonts[0]);
+    int baselineY = pos.y + TTF_GetFontAscent(fonts[0]);
 
     size_t runStart = 0;
     int runFontIdx = -1;
@@ -177,25 +187,18 @@ void r_draw_text(const(char)[] text, mu_Vec2 pos, mu_Color color)
 }
 
 // Returns the advance width (pixels) the run consumed, or 0 on failure.
+// SDL_ttf 3 takes the length alongside the pointer, so a run can be handed
+// over as the slice it already is rather than copied to null-terminate it.
 private int blitRun(const(char)[] run, int fontIdx, int penX, int baselineY, SDL_Color fg)
 {
-    char[1024] stackBuf = void;
-    char[] buf;
-    if (run.length < stackBuf.length)
-        buf = stackBuf[0 .. run.length + 1];
-    else
-        buf = new char[run.length + 1];
-    buf[0 .. run.length] = run[];
-    buf[run.length] = 0;
-
     TTF_Font* f = fonts[fontIdx];
-    SDL_Surface* s = TTF_RenderUTF8_Blended(f, buf.ptr, fg);
+    SDL_Surface* s = TTF_RenderText_Blended(f, run.ptr, run.length, fg);
     if (s is null) return 0;
 
-    SDL_Rect dst = SDL_Rect(penX, baselineY - TTF_FontAscent(f), s.w, s.h);
+    SDL_Rect dst = SDL_Rect(penX, baselineY - TTF_GetFontAscent(f), s.w, s.h);
     SDL_BlitSurface(s, null, surface, &dst);
     int advance = s.w;
-    SDL_FreeSurface(s);
+    SDL_DestroySurface(s);
     return advance;
 }
 
@@ -208,7 +211,7 @@ private int pickFontIndex(dchar cp)
     if (cp < 0x80) return 0;
     foreach (size_t i, TTF_Font* f; fonts)
     {
-        if (TTF_GlyphIsProvided32(f, cast(uint)cp))
+        if (TTF_FontHasGlyph(f, cast(uint)cp))
             return cast(int)i;
     }
     return 0;
@@ -303,9 +306,11 @@ void r_draw_image(int id, mu_Rect rect)
         dw, dh);
 
     SDL_Rect clipRect = SDL_Rect(clip.x, clip.y, clip.w, clip.h);
-    SDL_SetClipRect(surface, &clipRect);
-    SDL_BlitScaled(img, null, surface, &dst);
-    SDL_SetClipRect(surface, null);
+    SDL_SetSurfaceClipRect(surface, &clipRect);
+    // SDL3 makes the filter explicit where SDL2's scaled blit was always
+    // nearest. Kept nearest so thumbnails look as they did.
+    SDL_BlitSurfaceScaled(img, null, surface, &dst, SDL_SCALEMODE_NEAREST);
+    SDL_SetSurfaceClipRect(surface, null);
 }
 
 int r_get_text_width(const(char) *text, int len)
@@ -313,28 +318,18 @@ int r_get_text_width(const(char) *text, int len)
     if (text is null || fonts.length == 0) return 0;
 
     size_t total = (len < 0 || text[len] == 0) ? strlen(text) : cast(size_t)len;
+    // SDL_ttf 3 reads a length of 0 as "null-terminated", so an empty run has
+    // to be answered here rather than handed over as a zero length: the
+    // pointer may sit mid-string, and passing it on would measure the rest of
+    // the buffer instead of nothing.
+    if (total == 0) return 0;
     const(char)[] str = text[0 .. total];
 
-    // Fast path: single font or ASCII,  one TTF_SizeUTF8 call.
+    // Fast path: single font or ASCII,  one TTF_GetStringSize call.
     if (fonts.length == 1 || isAscii(str))
     {
-        char[512] buf = void;
-        const(char)* p;
-        if (str.length < buf.length)
-        {
-            buf[0 .. str.length] = str[];
-            buf[str.length] = 0;
-            p = buf.ptr;
-        }
-        else
-        {
-            char[] tmp = new char[str.length + 1];
-            tmp[0 .. str.length] = str[];
-            tmp[str.length] = 0;
-            p = tmp.ptr;
-        }
         int w;
-        TTF_SizeUTF8(fonts[0], p, &w, null);
+        TTF_GetStringSize(fonts[0], str.ptr, str.length, &w, null);
         return w;
     }
 
@@ -364,24 +359,15 @@ int r_get_text_width(const(char) *text, int len)
 
 private int measureRun(const(char)[] run, int fontIdx)
 {
-    char[1024] stackBuf = void;
-    char[] buf;
-    if (run.length < stackBuf.length)
-        buf = stackBuf[0 .. run.length + 1];
-    else
-        buf = new char[run.length + 1];
-    buf[0 .. run.length] = run[];
-    buf[run.length] = 0;
-
     int w;
-    TTF_SizeUTF8(fonts[fontIdx], buf.ptr, &w, null);
+    TTF_GetStringSize(fonts[fontIdx], run.ptr, run.length, &w, null);
     return w;
 }
 
 int r_get_text_height()
 {
     if (fonts.length == 0) return 18;
-    return TTF_FontHeight(fonts[0]);
+    return TTF_GetFontHeight(fonts[0]);
 }
 
 void r_set_clip_rect(mu_Rect rect)
@@ -394,20 +380,20 @@ void r_clear(mu_Color clr)
     SDL_GetWindowSize(window, &window_width, &window_height);
     if (surface.w != window_width || surface.h != window_height)
     {
-        SDL_FreeSurface(surface);
+        SDL_DestroySurface(surface);
         SDL_DestroyTexture(screenTexture);
-        surface = SDL_CreateRGBSurfaceWithFormat(0, window_width, window_height, 32, SDL_PIXELFORMAT_ARGB8888);
+        surface = SDL_CreateSurface(window_width, window_height, SDL_PIXELFORMAT_ARGB8888);
         screenTexture = SDL_CreateTexture(sdlRenderer, SDL_PIXELFORMAT_ARGB8888,
             SDL_TEXTUREACCESS_STREAMING, window_width, window_height);
     }
     clip = mu_Rect(0, 0, window_width, window_height);
-    SDL_FillRect(surface, null, SDL_MapRGB(surface.format, clr.r, clr.g, clr.b));
+    SDL_FillSurfaceRect(surface, null, SDL_MapRGB(pixelFormat, null, clr.r, clr.g, clr.b));
 }
 
 void r_present()
 {
     SDL_UpdateTexture(screenTexture, null, surface.pixels, surface.pitch);
-    SDL_RenderCopy(sdlRenderer, screenTexture, null, null);
+    SDL_RenderTexture(sdlRenderer, screenTexture, null, null);
     SDL_RenderPresent(sdlRenderer);
 }
 
@@ -551,8 +537,8 @@ enum { ATLAS_WIDTH = 128, ATLAS_HEIGHT = 128 }
 // Basically, this is a 128x128 font texture generated by rxi's atlas
 // program, but could easily be a file on disk loaded as an OpenGL texture.
 //
-// With SDL2_ttf covering font, this is only used for icons. And we currently
-// don't use any icons... SDL2_image might replace this completely soon anyway.
+// With SDL_ttf covering font, this is only used for icons. And we currently
+// don't use any icons... SDL_image might replace this completely soon anyway.
 //
 // The 'x' icon is used for in-app windows, which is another thing we're not
 // using. This atlas (texture and mapping) is about 20K.

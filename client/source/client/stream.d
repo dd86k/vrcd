@@ -23,7 +23,16 @@ abstract class Stream
     /// Write data to the stream. Returns bytes sent, or <=0 on error.
     abstract ptrdiff_t send(const(void)[] data);
 
+    /// Unblock a thread sitting in receive(), without releasing anything.
+    ///
+    /// This is the only method safe to call while another thread is inside
+    /// receive() or send(): it shuts the socket down, so the blocked call
+    /// returns, and touches no library state that call may be walking.
+    /// close() must wait until that thread is gone.
+    abstract void unblock();
+
     /// Close the stream, releasing all resources.
+    /// Only call once no other thread can be inside receive() or send().
     abstract void close();
 }
 
@@ -47,9 +56,14 @@ class PlainStream : Stream
         return sock.send(data);
     }
 
-    override void close()
+    override void unblock()
     {
         try sock.shutdown(SocketShutdown.BOTH); catch (Exception) {}
+    }
+
+    override void close()
+    {
+        unblock();
         sock.close();
     }
 }
@@ -255,6 +269,7 @@ class TLSClientStream : Stream
 {
     private Socket sock;
     private void* ssl;
+    private bool socketDown;
 
     this(Socket s, void* ctx, string hostname, bool verifyHostname = false)
     {
@@ -309,16 +324,30 @@ class TLSClientStream : Stream
         return _SSL_write(ssl, data.ptr, cast(int) data.length);
     }
 
+    /// Shut the TCP socket down so a blocked SSL_read returns.
+    ///
+    /// Deliberately touches no OpenSSL state: an SSL object may not be used
+    /// from two threads at once, so freeing it here while the reader is
+    /// inside SSL_read would pull the BIO out from under that call.
+    override void unblock()
+    {
+        socketDown = true;
+        try sock.shutdown(SocketShutdown.BOTH);
+        catch (Exception) {}
+    }
+
     override void close()
     {
         if (ssl)
         {
-            _SSL_shutdown(ssl);
+            // close_notify has nowhere to go once the socket is down, and
+            // OpenSSL would only report the write failure back to us.
+            if (socketDown == false)
+                _SSL_shutdown(ssl);
             _SSL_free(ssl);
             ssl = null;
         }
-        try sock.shutdown(SocketShutdown.BOTH);
-        catch (Exception) {}
+        unblock();
         sock.close();
     }
 }

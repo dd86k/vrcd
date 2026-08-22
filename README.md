@@ -103,7 +103,7 @@ Needs a D compiler with front-end version 2.104 (DMD >=2.104, GDC >=14, LDC >=1.
 See each component's README for dependencies, configuration, and architecture details.
 
 In short:
-- Client needs SDL2 libraries (SDL2, SDL2_ttf, SDL2_image), and optionally OpenSSL. They are loaded at run time by default, and only needed at build time with `dub build :client -c static`.
+- Client needs SDL3 libraries (SDL3, SDL3_ttf, SDL3_image), and optionally OpenSSL. They are loaded at run time by default, and only needed at build time with `dub build :client -c static`.
 - Server needs the sqlite library, and optionally OpenSSL. libcurl is loaded at run time by default, and only needed at build time with `dub build :server -c static`.
 
 ```bash
@@ -136,7 +136,7 @@ See [API.md](./API.md) for server-client API details.
 On Windows, in PowerShell (no MSYS2 or Git Bash needed):
 
 ```powershell
-powershell -executionpolicy bypass packaging/fetch-deps-windows.ps1   # Fetches SDL2, libcurl, builds sqlite3
+powershell -executionpolicy bypass packaging/fetch-deps-windows.ps1   # Fetches SDL3, libcurl, builds sqlite3
 powershell -executionpolicy bypass packaging/package-windows.ps1      # Zips client and server
 ```
 
@@ -152,7 +152,7 @@ because that is where the linker looks: `pragma(lib, "sqlite3")` becomes
 the working directory, which is wherever `dub` was invoked. Having run the fetch
 script once, a plain `dub build :server` from the root works too.
 
-The zips are self-contained: the client carries SDL2, SDL2_ttf and SDL2_image,
+The zips are self-contained: the client carries SDL3, SDL3_ttf and SDL3_image,
 and the server carries libcurl (`sqlite3` is linked in). libcurl comes from
 curl.se and is built against the Windows certificate store, so no CA bundle is
 shipped with it. The pipe helper is not in the client zip, because talking to

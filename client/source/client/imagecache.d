@@ -16,6 +16,7 @@ module client.imagecache;
 import std.file : exists, mkdirRecurse, read, rename, write;
 import std.format : format;
 import std.path : buildPath;
+import std.string : fromStringz;
 
 import bindbc.sdl;
 import ddlogger;
@@ -117,24 +118,24 @@ private bool makeResident(string key, const(ubyte)[] data)
     if (data.length == 0)
         return false;
 
-    // IMG_Load_RW with freesrc=1 releases the RWops even on failure.
-    SDL_RWops* rw = SDL_RWFromConstMem(data.ptr, cast(int)data.length);
-    if (rw is null)
+    // IMG_Load_IO with closeIO=true releases the stream even on failure.
+    SDL_IOStream* io = SDL_IOFromConstMem(data.ptr, data.length);
+    if (io is null)
         return false;
-    SDL_Surface* raw = IMG_Load_RW(rw, 1);
+    SDL_Surface* raw = IMG_Load_IO(io, true);
     if (raw is null)
     {
-        logWarn("imagecache: decode failed for %s: %s", key, IMG_GetError());
+        logWarn("imagecache: decode failed for %s: %s", key, fromStringz( SDL_GetError() ));
         return false;
     }
 
-    // Convert to the renderer's format once so BlitScaled never converts
+    // Convert to the renderer's format once so the scaled blit never converts
     // per frame.
-    SDL_Surface* converted = SDL_ConvertSurfaceFormat(raw, SDL_PIXELFORMAT_ARGB8888, 0);
-    SDL_FreeSurface(raw);
+    SDL_Surface* converted = SDL_ConvertSurface(raw, SDL_PIXELFORMAT_ARGB8888);
+    SDL_DestroySurface(raw);
     if (converted is null)
     {
-        logWarn("imagecache: convert failed for %s: %s", key, SDL_GetError());
+        logWarn("imagecache: convert failed for %s: %s", key, fromStringz( SDL_GetError() ));
         return false;
     }
 
@@ -170,7 +171,7 @@ private void evictFor(long incoming)
             return;
         CachedImage victim = resident[oldestKey];
         r_unregister_image(victim.iconId);
-        SDL_FreeSurface(victim.surface);
+        SDL_DestroySurface(victim.surface);
         residentBytes -= victim.bytes;
         resident.remove(oldestKey);
     }
