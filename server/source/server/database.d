@@ -128,12 +128,22 @@ class Database
         return -1;
     }
 
-    /// Query events after a given ID (for client catch-up).
-    auto queryEventsAfter(long afterId, int limit = 1000)
+    /// Query the newest `limit` events after a given ID, oldest first
+    /// (for client catch-up).
+    ///
+    /// The limit is taken from the newest end, not the oldest: walking forward
+    /// from an ID hands out the *oldest* page first, which on a long backlog is
+    /// the page nobody wants and the one a front-end with a capped feed throws
+    /// away again. Selecting the tail descending and re-ordering it keeps
+    /// catch-up ascending, which is what makes the last id sent a usable
+    /// cursor.
+    auto queryEventsAfterTail(long afterId, int limit)
     {
-        logDebugging("queryEventsAfter: afterId=%d limit=%d", afterId, limit);
+        logDebugging("queryEventsAfterTail: afterId=%d limit=%d", afterId, limit);
         return db.query(
-            "SELECT id, received_at, event_type, data FROM ws_events WHERE id > ? ORDER BY id ASC LIMIT ?",
+            "SELECT id, received_at, event_type, data FROM " ~
+            "(SELECT id, received_at, event_type, data FROM ws_events " ~
+            "WHERE id > ? ORDER BY id DESC LIMIT ?) ORDER BY id ASC",
             afterId.to!string,
             limit.to!string,
         );
@@ -466,6 +476,66 @@ private:
 private string toISO(SysTime t)
 {
     return t.toUTC().toISOExtString();
+}
+
+// Bounded catch-up: the tail query hands back the *newest* page of what is
+// after the cursor, in ascending order. The ordering is what makes the last
+// row a usable cursor, and the two orderings in that statement are easy to
+// get backwards.
+unittest
+{
+    import std.file : remove, tempDir;
+    import std.path : buildPath;
+    import std.datetime.systime : Clock;
+    import std.json : parseJSON;
+
+    string path = buildPath(tempDir(), "vrcd-catchup-test.db");
+
+    static void scrub(string file)
+    {
+        import std.file : exists;
+
+        foreach (string suffix; [ "", "-wal", "-shm" ])
+            if (exists(file ~ suffix))
+                remove(file ~ suffix);
+    }
+
+    scrub(path);
+    scope(exit) scrub(path);
+
+    Database db = new Database(path);
+    scope(exit) db.close();
+
+    long[] ids;
+    foreach (int i; 0 .. 10)
+    {
+        VRCEvent ev;
+        ev.type       = EventType.friendOnline;
+        ev.typeRaw    = "friend-online";
+        ev.content    = parseJSON(`{"n":` ~ i.to!string ~ `}`);
+        ev.receivedAt = Clock.currTime;
+        ev.rawJson    = `{"type":"friend-online"}`;
+        ids ~= db.storeEvent(ev);
+    }
+
+    // Fewer rows than the limit: everything after the cursor, oldest first.
+    long[] got;
+    foreach (row; db.queryEventsAfterTail(ids[6], 100))
+        got ~= row[0].to!long;
+    assert(got == ids[7 .. $]);
+
+    // More rows than the limit: the newest three, still oldest first. The
+    // oldest two after the cursor are the ones dropped, not the newest.
+    got = null;
+    foreach (row; db.queryEventsAfterTail(ids[4], 3))
+        got ~= row[0].to!long;
+    assert(got == ids[7 .. $]);
+
+    // Cursor at the end: nothing to replay.
+    got = null;
+    foreach (row; db.queryEventsAfterTail(ids[$ - 1], 100))
+        got ~= row[0].to!long;
+    assert(got.length == 0);
 }
 
 // The world cache round-trip: the columns, the upsert, and `added_at` coming

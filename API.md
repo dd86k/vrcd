@@ -41,7 +41,7 @@ Authentication uses a shared secret token. If the server's secret is empty, auth
 
 **Success:**
 ```json
-{"type": "auth_ok", "server_version": 8}
+{"type": "auth_ok", "server_version": 9}
 ```
 
 Protocol versions:
@@ -53,6 +53,7 @@ Protocol versions:
 - `6` = adds the forced roster refresh (`refresh_friends`)
 - `7` = adds full user profiles (`get_user`) and badge art (`get_badge_image`).
 - `8` = adds profile editing (`set_profile`)
+- `9` = bounds catch-up (`catch_up` takes a `limit`, `caught_up` reports a gap)
 
 **Failure:**
 ```json
@@ -82,12 +83,15 @@ Request current server status.
 
 ### `catch_up`
 
-Request events since a given ID. Server sends up to 1000 events in ascending order, followed by a `caught_up` message. To paginate, send another `catch_up` with the last received event ID.
+Request events since a given ID. Server sends the **newest** `limit` of them in ascending order, followed by a `caught_up` message.
+
+The limit exists because the event log does not shrink: a server running for months holds tens of thousands of events, and replaying all of them takes long enough that the keepalive gives up on a client that is perfectly healthy. What was skipped is not lost — `caught_up` says so with `gap`, and the client back-fills a page at a time with `fetch_older`.
 
 | Field      | Type | Description                        |
 |------------|------|------------------------------------|
 | `type`     | string | `"catch_up"`                     |
 | `since_id` | long | Last known event ID (0 for all)    |
+| `limit`    | int  | Max events to replay (default 1000, max 5000) |
 
 ### `fetch_older`
 
@@ -416,7 +420,7 @@ Authentication succeeded.
 | Field            | Type   | Description              |
 |------------------|--------|--------------------------|
 | `type`           | string | `"auth_ok"`              |
-| `server_version` | int    | Protocol version (currently 8) |
+| `server_version` | int    | Protocol version (currently 9) |
 
 ### `auth_error`
 
@@ -468,10 +472,14 @@ Ephemeral events (`id == 0`) are live-only signals that the server never writes 
 
 Sent after all catch-up events have been delivered.
 
-| Field     | Type   | Description                  |
-|-----------|--------|------------------------------|
-| `type`    | string | `"caught_up"`                |
-| `last_id` | long   | ID of the last event in the database |
+| Field      | Type   | Description                  |
+|------------|--------|------------------------------|
+| `type`     | string | `"caught_up"`                |
+| `last_id`  | long   | ID of the last event sent, or `since_id` when none were |
+| `first_id` | long   | ID of the first event sent. Absent when none were |
+| `gap`      | bool   | True when older events after `since_id` were skipped to stay under the limit. Absent when no events were sent |
+
+A client that gets `gap: true` is missing the events between `since_id` and `first_id`; `fetch_older` from `first_id` is what pulls them in.
 
 ### `event_older`
 
@@ -866,11 +874,13 @@ After a successful upload, VRChat emits a `content-refresh` event on the WebSock
 
 ### `ping`
 
-Server keepalive. Client must respond with `pong`.
+Server keepalive, sent every 30 seconds. Client must respond with `pong` within 15 seconds or the server closes the connection.
 
 ```json
 {"type": "ping"}
 ```
+
+A send that moved bytes in that window counts in place of the `pong`. Pongs are read on the connection's own thread, and that thread is not reading while it is answering a request — a long reply would otherwise be killed by its own keepalive, with the client's `pong` sitting unread in the receive buffer. A client that has stopped reading stops the sends too, and the 10-second send timeout ends the connection there.
 
 ### `error`
 
@@ -949,9 +959,10 @@ Client                          Server
   |<- {"type":"friends",...} ------|
   |                                |
   |-- {"type":"catch_up",          |
-  |    "since_id": 0} ------------>|
+  |    "since_id": 0,              |
+  |    "limit": 1000} ------------>|
   |                                |
-  |<- {"type":"event",...} --------|  (up to 1000 events)
+  |<- {"type":"event",...} --------|  (newest 1000 events)
   |<- {"type":"event",...} --------|
   |<- {"type":"caught_up",...} ----|
   |                                |

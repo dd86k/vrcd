@@ -39,8 +39,9 @@ import vrcd.notifications;
 /// 5 = v2 notifications (every type, per-notification responses),
 /// 6 = forced roster refresh (`refresh_friends`),
 /// 7 = full user profiles (`get_user`),
-/// 8 = profile editing (`set_profile`).
-private enum int PROTOCOL_VERSION = 8;
+/// 8 = profile editing (`set_profile`),
+/// 9 = bounded catch-up (`catch_up` takes a `limit`, `caught_up` reports a gap).
+private enum int PROTOCOL_VERSION = 9;
 
 /// Shortest gap between two re-seed passes. A pass paginates the whole
 /// friends list, so this is what keeps a reconnect storm -- or somebody
@@ -586,6 +587,18 @@ private enum Duration PONG_DEADLINE  = dur!"seconds"(15);
 /// How long a single send may make no progress before the client is dropped.
 private enum Duration SEND_TIMEOUT   = dur!"seconds"(10);
 
+/// How many events a catch-up replays when the client names no limit, and the
+/// most it will replay when it does.
+///
+/// Catch-up is bounded because the event log is not: a server that has been
+/// running for months holds tens of thousands of events, and replaying all of
+/// them takes long enough that the keepalive gives up on a client that is
+/// perfectly healthy. The backlog is not lost -- the client back-fills from
+/// `fetch_older`, which is paged and asked for a page at a time.
+private enum int CATCH_UP_DEFAULT_LIMIT = 1000;
+/// ditto
+private enum int CATCH_UP_MAX_LIMIT     = 5000;
+
 /// Handles a single client connection.
 private class ClientHandler
 {
@@ -596,6 +609,12 @@ private class ClientHandler
     private Mutex pongMutex;
     private MonoTime lastPongAt;
     private shared bool disconnected;
+    /// `MonoTime.ticks` of the last send that moved bytes. Written from
+    /// whichever thread is sending and read by the ping thread, so it is an
+    /// atomic rather than something under `pongMutex`: `sendLine` holds
+    /// `sendMutex` while it writes this, and taking a second lock underneath
+    /// the first is how a lock order gets invented by accident.
+    private shared long lastSendProgressTicks;
 
     this(Stream stream, APIServer server)
     {
@@ -632,6 +651,7 @@ private class ClientHandler
                     break;
                 }
                 remaining = remaining[sent .. $];
+                atomicStore(lastSendProgressTicks, MonoTime.currTime.ticks);
             }
         }
         catch (Exception e)
@@ -1045,6 +1065,15 @@ private class ClientHandler
         }
     }
 
+    /// Replay events after `since_id`, newest `limit` of them, oldest first.
+    ///
+    /// A client that asked for fewer events than exist is told so: `caught_up`
+    /// carries `first_id` and `gap`, so the front-end can say the history is
+    /// not continuous rather than quietly drawing a feed with a hole in it.
+    /// A client from before the limit existed sends none and gets the default,
+    /// which is still a change in what it receives -- but every front-end caps
+    /// its feed well below that anyway, so what it loses is events it would
+    /// have drawn and immediately dropped.
     void handleCatchUp(JSONValue msg)
     {
         long sinceId = 0;
@@ -1057,40 +1086,66 @@ private class ClientHandler
                 sinceId = val.str.to!long;
         }
 
-        logInfo("Client catching up from event #%d", sinceId);
-
-        enum int batchSize = 1000;
-        long lastId = sinceId;
-        long sent;
-        while (true)
+        int limit = CATCH_UP_DEFAULT_LIMIT;
+        if (const(JSONValue)* v = "limit" in msg)
         {
-            long batchSent;
-            foreach (row; server.store.queryEventsAfter(lastId, batchSize))
-            {
-                long id = row[0].to!long;
-                JSONValue eventMsg = JSONValue([
-                    "type": JSONValue("event"),
-                    "id": JSONValue(id),
-                    "received_at": JSONValue(row[1].to!string),
-                    "event_type": JSONValue(row[2].to!string),
-                    "content": vrcContent(row[3].to!string),
-                ]);
-                sendLine(eventMsg.toString() ~ "\n");
-                lastId = id;
-                ++sent;
-                ++batchSent;
-            }
-            if (batchSent < batchSize)
-                break;
+            if (v.type == JSONType.integer)
+                limit = cast(int) v.integer;
+            else if (v.type == JSONType.string)
+                limit = v.str.to!int;
+        }
+        if (limit <= 0)
+            limit = CATCH_UP_DEFAULT_LIMIT;
+        if (limit > CATCH_UP_MAX_LIMIT)
+            limit = CATCH_UP_MAX_LIMIT;
+
+        logInfo("Client catching up from event #%d (limit %d)", sinceId, limit);
+
+        // One row past the limit: getting it back is what says the backlog was
+        // truncated, and it costs one row rather than a second COUNT over a
+        // table that can hold years of events.
+        string[][] rows;
+        foreach (row; server.store.queryEventsAfterTail(sinceId, limit + 1))
+            rows ~= [row[0].to!string, row[1].to!string, row[2].to!string, row[3].to!string];
+
+        bool gap = rows.length > limit;
+        if (gap)
+            rows = rows[$ - limit .. $];
+
+        long lastId = sinceId;
+        long firstId;
+        foreach (string[] row; rows)
+        {
+            long id = row[0].to!long;
+            JSONValue eventMsg = JSONValue([
+                "type": JSONValue("event"),
+                "id": JSONValue(id),
+                "received_at": JSONValue(row[1]),
+                "event_type": JSONValue(row[2]),
+                "content": vrcContent(row[3]),
+            ]);
+            sendLine(eventMsg.toString() ~ "\n");
+            if (firstId == 0)
+                firstId = id;
+            lastId = id;
         }
 
         JSONValue doneMsg = JSONValue([
             "type": JSONValue("caught_up"),
             "last_id": JSONValue(lastId),
         ]);
+        // Only meaningful when something was actually sent: with no events
+        // there is no id the client could back-fill from.
+        if (firstId)
+        {
+            doneMsg["first_id"] = JSONValue(firstId);
+            doneMsg["gap"] = JSONValue(gap);
+        }
         sendLine(doneMsg.toString() ~ "\n");
-        logDebugging("handleCatchUp: sent %d events, lastId=%d", sent, lastId);
-        logInfo("Client caught up to event #%d", lastId);
+        logDebugging("handleCatchUp: sent %d events, firstId=%d lastId=%d gap=%s",
+            rows.length, firstId, lastId, gap);
+        logInfo("Client caught up to event #%d%s", lastId,
+            gap ? " (older events skipped)" : "");
     }
 
     /// Refresh instance occupancy for every public instance that has at
@@ -3035,7 +3090,16 @@ private class ClientHandler
             bool gotPong = lastPongAt >= pingSentAt;
             pongMutex.unlock();
 
-            if (gotPong == false)
+            // A send that moved bytes counts as proof of life even without the
+            // pong. Pongs are read on the connection's own thread, and that
+            // thread is not reading while it is answering a request -- a long
+            // catch-up would otherwise be killed by its own keepalive, with
+            // the client's pong sitting unread in the receive buffer. TCP only
+            // takes bytes the peer has room for, so a client that has stopped
+            // reading stops the sends too, and `SEND_TIMEOUT` ends it there.
+            bool sending = MonoTime(atomicLoad(lastSendProgressTicks)) >= pingSentAt;
+
+            if (gotPong == false && sending == false)
             {
                 logWarn("Client pong timeout (%ds deadline), closing stale connection",
                     PONG_DEADLINE.total!"seconds");
