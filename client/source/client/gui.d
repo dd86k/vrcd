@@ -1238,7 +1238,14 @@ private void drainNetworkMessages()
                     dispatchNotification(eventType, user, detail, saved);
 
                 // Keep the inbox current from the same event.
-                storeNotification(eventType, msg, user, rawReceivedAt);
+                //
+                // Live events only. The inbox is seeded from the server's
+                // `get_notifications`, which is what is actually pending;
+                // replaying the backlog through here would resurrect
+                // notifications that were answered long ago, since the event
+                // that answered one is not always in the replayed range.
+                if (catchUpComplete)
+                    storeNotification(eventType, msg, user, rawReceivedAt);
 
                 // The user's files/prints/inventory changed somewhere else
                 // (in-game upload, another device). Mark the section stale
@@ -1265,7 +1272,24 @@ private void drainNetworkMessages()
                 if (lastId > saved.lastEventId)
                     saved.lastEventId = lastId;
                 saveSettings(saved);
-                appState.addFeedEntry(0, "system", "", "Caught up to event #" ~ lastId.to!string, timeNow(), "", false, EventSource.system);
+                // The server replays a bounded page. When it had more than
+                // that to give, say so: the feed is missing the events between
+                // the cursor and the first one drawn, and "Fetch older" is
+                // what pulls them in. Silence there would read as a complete
+                // history with a hole in the middle.
+                bool gap;
+                if (const(JSONValue) *jgap = "gap" in msg)
+                    gap = jgap.type == JSONType.true_;
+                string caughtUpText = "Caught up to event #" ~ lastId.to!string;
+                if (gap)
+                {
+                    long firstId;
+                    if (const(JSONValue) *jfirst = "first_id" in msg)
+                        firstId = jfirst.integer;
+                    caughtUpText ~= ", older events skipped (from #"
+                        ~ firstId.to!string ~ ", use Fetch older)";
+                }
+                appState.addFeedEntry(0, "system", "", caughtUpText, timeNow(), "", false, EventSource.system);
                 catchUpComplete = true;
                 break;
 

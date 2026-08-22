@@ -95,6 +95,10 @@ class MessageQueue
 /// Origin of a feed entry, used to colour the accent strip.
 enum EventSource { server, local, dropaportal, system }
 
+/// How many live feed entries to keep. Back-fill from `fetch_older` may push
+/// past it; the next live event trims back down from the oldest end.
+enum size_t FEED_CAPACITY = 2000;
+
 /// A single event entry for the feed tab.
 struct FeedEntry
 {
@@ -288,7 +292,19 @@ struct AppState
 
     // Feed tab
     float feedPageSize = 25.0f; // items per page (float for slider)
+
+    /// Feed entries, oldest first. The tab draws them newest first, with
+    /// `foreach_reverse`.
+    ///
+    /// Stored this way because appending is the operation that has to be
+    /// cheap and drawing is not: a catch-up hands over a page of events one
+    /// at a time, oldest first, and prepending each of them into a full feed
+    /// copies the whole array per event. Drawing walks it either way.
     FeedEntry[] feedEntries;
+    /// Server event ids currently held in `feedEntries`, for deduplication.
+    /// A set rather than a scan: the same reason as above, a catch-up does
+    /// this once per event.
+    private bool[long] feedIds;
 
     // Feed filter (int for mu_checkbox compatibility). 1 = visible, 0 = hidden.
     int[feedEventLabels.length] feedEventVisible = 1;
@@ -464,25 +480,38 @@ struct AppState
         string rawContent = "", bool isSelf = false, EventSource source = EventSource.server)
     {
         // Deduplicate server events by ID (guards against catch-up/live race).
+        // Entries with no id are local or synthetic and never collide.
         if (id > 0)
         {
-            foreach (ref FeedEntry e; feedEntries)
-                if (e.id == id) return;
+            if (id in feedIds)
+                return;
+            feedIds[id] = true;
         }
-        // Prepend (newest first), cap at 2000 entries.
-        if (feedEntries.length >= 2000)
-            feedEntries = feedEntries[0 .. 1999];
-        feedEntries = FeedEntry(id, eventType, user, detail, receivedAt, rawContent, isSelf, source) ~ feedEntries;
+        // Newest goes at the end; drop the oldest once the cap is reached.
+        if (feedEntries.length >= FEED_CAPACITY)
+        {
+            if (feedEntries[0].id > 0)
+                feedIds.remove(feedEntries[0].id);
+            feedEntries = feedEntries[1 .. $];
+        }
+        feedEntries ~= FeedEntry(id, eventType, user, detail, receivedAt, rawContent, isSelf, source);
         if (id > 0 && id < oldestLoadedEventId)
             oldestLoadedEventId = id;
     }
 
-    /// Append an older event at the tail (oldest position).
-    /// Used by `fetch_older` back-fill, does not cap.
+    /// Add an older event at the oldest end of the feed.
+    /// Used by `fetch_older` back-fill, does not cap: the user asked for this
+    /// history, so it is not the thing to throw away to stay under the cap.
     void appendOldFeedEntry(long id, string eventType, string user, string detail, string receivedAt,
         string rawContent = "", bool isSelf = false, EventSource source = EventSource.server)
     {
-        feedEntries ~= FeedEntry(id, eventType, user, detail, receivedAt, rawContent, isSelf, source);
+        if (id > 0)
+        {
+            if (id in feedIds)
+                return;
+            feedIds[id] = true;
+        }
+        feedEntries = FeedEntry(id, eventType, user, detail, receivedAt, rawContent, isSelf, source) ~ feedEntries;
         if (id > 0 && id < oldestLoadedEventId)
             oldestLoadedEventId = id;
     }
@@ -565,4 +594,51 @@ struct AppState
         }
         notifications = kept;
     }
+}
+
+// Feed order: live events land at the end, back-fill at the front, and the cap
+// takes from the front. The tab reads the array with `foreach_reverse`, so an
+// order inverted here is a feed that draws backwards -- and the cap dropping
+// from the wrong end would throw away what just arrived.
+unittest
+{
+    AppState st;
+
+    // Catch-up arrives oldest first.
+    foreach (long id; 10 .. 14)
+        st.addFeedEntry(id, "friend-online", "somebody", "", "");
+
+    assert(st.feedEntries.length == 4);
+    assert(st.feedEntries[0].id == 10);
+    assert(st.feedEntries[$ - 1].id == 13);
+    assert(st.oldestLoadedEventId == 10);
+
+    // A repeat of one already held is dropped, whichever way it arrives.
+    st.addFeedEntry(12, "friend-online", "somebody", "", "");
+    st.appendOldFeedEntry(12, "friend-online", "somebody", "", "");
+    assert(st.feedEntries.length == 4);
+
+    // Back-fill goes in front, and keeps its own order: the server sends a
+    // page newest first, so each one is older than the last.
+    st.appendOldFeedEntry(9, "friend-offline", "somebody", "", "");
+    st.appendOldFeedEntry(8, "friend-offline", "somebody", "", "");
+    assert(st.feedEntries[0].id == 8);
+    assert(st.feedEntries[1].id == 9);
+    assert(st.feedEntries[2].id == 10);
+    assert(st.oldestLoadedEventId == 8);
+
+    // Entries without an id (local, synthetic) are never deduplicated.
+    st.addFeedEntry(0, "system", "", "one", "");
+    st.addFeedEntry(0, "system", "", "two", "");
+    assert(st.feedEntries[$ - 1].detail == "two");
+    assert(st.feedEntries[$ - 2].detail == "one");
+
+    // The cap drops the oldest, and forgets its id along with it.
+    AppState capped;
+    foreach (long id; 1 .. FEED_CAPACITY + 10)
+        capped.addFeedEntry(id, "friend-online", "somebody", "", "");
+
+    assert(capped.feedEntries.length == FEED_CAPACITY);
+    assert(capped.feedEntries[$ - 1].id == FEED_CAPACITY + 9);
+    assert(capped.feedEntries[0].id == 10);
 }

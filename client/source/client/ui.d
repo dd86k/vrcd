@@ -455,7 +455,8 @@ private void drawFeedTab(mu_Context* ctx, AppState* state, int scrollDelta)
         int skipEnd = skipStart + cast(int) state.feedPageSize;
         bool anyVisible;
 
-        foreach (ref FeedEntry entry; state.feedEntries)
+        // Reverse: the feed is stored oldest first and read newest first.
+        foreach_reverse (ref FeedEntry entry; state.feedEntries)
         {
             if (passesFilter(entry, searchQuery, state) == false)
                 continue;
@@ -797,7 +798,8 @@ private void drawFeedPagination(mu_Context* ctx, AppState* state)
 {
     string searchQuery = searchStr();
 
-    // Count how many entries pass the filter.
+    // Count how many entries pass the filter. Order does not matter here,
+    // but the feed is stored oldest first (see AppState.feedEntries).
     int filteredCount;
     foreach (ref FeedEntry entry; state.feedEntries)
     {

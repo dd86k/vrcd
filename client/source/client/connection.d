@@ -32,6 +32,13 @@ enum long PROTOCOL_NOTIFICATIONS = 4;
 /// the server already has.
 enum long PROTOCOL_REFRESH = 6;
 
+/// How many events to ask a catch-up for.
+///
+/// The feed keeps `FEED_CAPACITY` entries and back-fills the rest a page at a
+/// time from `fetch_older`, so asking for more than it can hold is time spent
+/// on the wire for events that get dropped on arrival.
+enum int CATCH_UP_LIMIT = 1000;
+
 /// TCP connection to the vrcd server.
 /// Handles auth, catch-up, and live event streaming via JSON-L.
 /// Supports optional TLS encryption when compiled with the openssl dependency.
@@ -177,13 +184,17 @@ class ServerConnection
         }
     }
 
-    /// Request catch-up from a given event ID (0 = all events).
-    void catchUp(long sinceId = 0)
+    /// Request catch-up from a given event ID (0 = from the beginning).
+    /// The server replays at most `limit` events, the newest ones, and says
+    /// in `caught_up` whether it had to skip any. A server older than
+    /// protocol 9 ignores the limit and replays everything after `sinceId`.
+    void catchUp(long sinceId = 0, int limit = CATCH_UP_LIMIT)
     {
-        logDebugging("catchUp: sinceId=%d", sinceId);
+        logDebugging("catchUp: sinceId=%d limit=%d", sinceId, limit);
         sendMessage(JSONValue([
             "type": JSONValue("catch_up"),
             "since_id": JSONValue(sinceId),
+            "limit": JSONValue(limit),
         ]));
     }
 
@@ -648,7 +659,15 @@ class ServerConnection
                     continue;
 
                 // Handle ping/pong in the network thread directly.
-                if (line.length > 10 && line[0] == '{')
+                //
+                // The substring test is what keeps a catch-up cheap: without
+                // it every replayed event is parsed here and then parsed again
+                // on the main thread, two full JSON passes per event to answer
+                // a question about one field. A line that contains `"ping"`
+                // somewhere else -- a world called that, say -- costs the
+                // parse and then falls through to the queue like any other,
+                // so this narrows the work without deciding anything.
+                if (line.length > 10 && line[0] == '{' && line.indexOf(`"ping"`) >= 0)
                 {
                     try
                     {
