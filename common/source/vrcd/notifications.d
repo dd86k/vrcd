@@ -17,10 +17,11 @@
 /// Both reduce to one NotificationInfo, with `apiVersion` recording which
 /// system answers it -- the endpoints for acting on the two do not overlap.
 ///
-/// The server normalizes both REST listings through this module and sends the
-/// result as a `notifications` message; the front-ends parse that message and
-/// then keep the list current from the WebSocket events, which arrive faster
-/// than a refetch would and cost no API call.
+/// The server keeps the authoritative inbox: it normalizes both REST listings
+/// through this module to seed it, folds the WebSocket events in as they
+/// arrive, and sends the result as a `notifications` message on change. The
+/// front-ends parse that message, and also apply the same events themselves
+/// so an older server that only answers `get_notifications` still works.
 ///
 /// Copyright: dd86k <dd@dax.moe>
 /// License: BSD-3-Clause-Clear

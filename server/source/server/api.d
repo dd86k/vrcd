@@ -25,6 +25,7 @@ import server.events;
 import server.friends;
 import server.instancecache;
 import server.moderations;
+import server.notifications;
 import server.ratelimit;
 import server.database;
 import server.stream;
@@ -40,21 +41,23 @@ import vrcd.notifications;
 /// 6 = forced roster refresh (`refresh_friends`),
 /// 7 = full user profiles (`get_user`),
 /// 8 = profile editing (`set_profile`),
-/// 9 = bounded catch-up (`catch_up` takes a `limit`, `caught_up` reports a gap).
-private enum int PROTOCOL_VERSION = 9;
+/// 9 = bounded catch-up (`catch_up` takes a `limit`, `caught_up` reports a gap),
+/// 10 = server-side inbox (`notifications` re-broadcast on change,
+/// `get_notifications` answered from it).
+private enum int PROTOCOL_VERSION = 10;
 
 /// Shortest gap between two re-seed passes. A pass paginates the whole
 /// friends list, so this is what keeps a reconnect storm -- or somebody
 /// leaning on the front-end's REFRESH -- from spending the rate limit.
 private enum Duration RESEED_DEBOUNCE = dur!"seconds"(60);
 
-/// How many notifications to pull from each listing for `get_notifications`.
+/// How many notifications to pull from each listing when seeding the inbox.
 /// A ceiling rather than a page size: an inbox this deep is one nobody has
 /// answered in months, and the front-ends draw the whole thing.
 private enum int NOTIFICATION_FETCH_LIMIT = 100;
 
-/// How many GET /users/:id calls one `get_notifications` may spend resolving
-/// sender names the friend roster could not answer.
+/// How many GET /users/:id calls one inbox seed may spend resolving sender
+/// names the friend roster could not answer.
 private enum int NOTIFICATION_SENDER_LOOKUPS = 12;
 
 /// Callback invoked by the re-seed worker to actually perform a full
@@ -78,6 +81,7 @@ class APIServer
     private string vrchatLastError;
     private FriendsTracker friendsTracker;
     private ModerationsTracker moderationsTracker;
+    private NotificationsTracker notificationsTracker;
     private WorldCache worldCache;
     private InstanceCache instanceCache;
     private UserProfileCache userProfiles;
@@ -113,6 +117,7 @@ class APIServer
         this.clientsMutex = new Mutex();
         this.friendsTracker = new FriendsTracker();
         this.moderationsTracker = new ModerationsTracker();
+        this.notificationsTracker = new NotificationsTracker();
         this.userProfiles = new UserProfileCache();
         this.badgeImages = new BadgeImageService();
         this.reseedSignalMutex = new Mutex();
@@ -376,6 +381,286 @@ class APIServer
             delivered, clients.length);
     }
 
+    /// Broadcast the current inbox to all authenticated clients. Called
+    /// whenever the server-side inbox changes: a live notification event, a
+    /// successful `notification_action`, a re-seed that found drift.
+    void broadcastNotificationsSnapshot()
+    {
+        string line = notificationsTracker.buildNotificationsMessage().toString() ~ "\n";
+
+        clientsMutex.lock();
+        scope(exit) clientsMutex.unlock();
+
+        size_t delivered;
+        foreach (client; clients)
+        {
+            if (client.authenticated)
+            {
+                client.sendLine(line);
+                ++delivered;
+            }
+        }
+        logDebugging("broadcastNotificationsSnapshot: clients=%d/%d",
+            delivered, clients.length);
+    }
+
+    /// Fold one notification event into the server-side inbox and, when it
+    /// changed anything, push the new snapshot to every client. Called from
+    /// the WebSocket event callback for the types isNotificationEvent names.
+    void processNotificationEvent(VRCEvent event)
+    {
+        // VRChat stopped sending sender names, so fall back to the roster: a
+        // friend request aside, the sender is nearly always already in it.
+        string sender;
+        if (event.content.type == JSONType.object)
+            if (const(JSONValue)* v = "senderUserId" in event.content)
+                if (v.type == JSONType.string)
+                    sender = friendsTracker.getDisplayName(v.str);
+
+        JSONValue msg = JSONValue([ "content": event.content ]);
+        if (notificationsTracker.applyEvent(event.typeRaw, msg, sender,
+            event.receivedAt.toUTC().toISOExtString()))
+            broadcastNotificationsSnapshot();
+    }
+
+    /// Seed or re-seed the server-side inbox from VRChat's two listings: v1
+    /// carries friend requests and invites, v2 everything VRChat added since,
+    /// and neither endpoint returns the other's notifications. Broadcasts the
+    /// snapshot when the list actually changed.
+    ///
+    /// Returns false with `error` set when even the v1 half could not be
+    /// fetched; the v2 half is allowed to fail alone, since friend requests
+    /// without group announcements beat an error that keeps a stale inbox.
+    bool seedNotifications(out string error)
+    {
+        if (httpClient is null || apiMutex is null)
+        {
+            error = "Server HTTP client not configured";
+            return false;
+        }
+
+        NotificationInfo[] parsed;
+        size_t v1Count;
+
+        apiMutex.lock();
+        scope(exit) apiMutex.unlock();
+
+        if (rateLimiter && rateLimiter.isBlocked())
+        {
+            error = "Rate limited by VRChat, try again later";
+            return false;
+        }
+
+        try
+        {
+            HTTPResponse resp = httpClient.get(
+                "/auth/user/notifications?n=" ~ NOTIFICATION_FETCH_LIMIT.to!string());
+            logDebugging("seedNotifications: VRC GET /auth/user/notifications -> HTTP %d",
+                resp.code);
+            if (rateLimiter)
+            {
+                rateLimiter.update(resp);
+                broadcastStatus();
+            }
+            if (resp.code < 200 || resp.code >= 300)
+            {
+                error = "HTTP " ~ resp.code.to!string;
+                return false;
+            }
+
+            JSONValue json = parseJSON(resp.text);
+            if (json.type != JSONType.array)
+            {
+                error = "Unexpected notifications response";
+                return false;
+            }
+
+            foreach (JSONValue entry; json.array)
+            {
+                string senderId;
+                if (const(JSONValue)* v = "senderUserId" in entry)
+                    if (v.type == JSONType.string)
+                        senderId = v.str;
+
+                NotificationInfo info = parseNotificationObject(entry,
+                    senderId.length ? friendsTracker.getDisplayName(senderId) : null);
+                if (info.id.length == 0) // Unusable object.
+                    continue;
+                parsed ~= info;
+            }
+            v1Count = parsed.length;
+
+            fetchNotificationsV2Locked(parsed);
+
+            // A friend request is precisely the case the roster cannot
+            // answer: the sender is not a friend yet, which is the whole
+            // point of the request. Look those up, since "accept or decline
+            // usr_c3f2..." is not a question anyone can answer.
+            resolveSenderNamesLocked(parsed);
+        }
+        catch (Exception e)
+        {
+            error = e.msg;
+            return false;
+        }
+
+        bool changed = notificationsTracker.replaceAll(parsed);
+        logInfo("Notifications seeded: %d entries (%d v1, %d v2)%s",
+            parsed.length, v1Count, parsed.length - v1Count,
+            changed ? "" : ", unchanged");
+        if (changed)
+            broadcastNotificationsSnapshot();
+        return true;
+    }
+
+    /// Append the v2 listing to a list already holding the v1 one. Caller
+    /// holds the API mutex.
+    ///
+    /// Failures are logged and swallowed rather than raised: this half is an
+    /// addition to an inbox that already has something in it, and the caller
+    /// would otherwise throw away a good v1 fetch over a bad v2 one.
+    private void fetchNotificationsV2Locked(ref NotificationInfo[] list)
+    {
+        if (rateLimiter && rateLimiter.isBlocked())
+        {
+            logWarn("Skipping v2 notifications: rate limited by VRChat");
+            return;
+        }
+
+        try
+        {
+            HTTPResponse resp = httpClient.get(
+                "/notifications?n=" ~ NOTIFICATION_FETCH_LIMIT.to!string());
+            logDebugging("fetchNotificationsV2Locked: VRC GET /notifications -> HTTP %d",
+                resp.code);
+            if (rateLimiter)
+            {
+                rateLimiter.update(resp);
+                broadcastStatus();
+            }
+            if (resp.code < 200 || resp.code >= 300)
+            {
+                logWarn("Could not fetch v2 notifications: HTTP %d", resp.code);
+                return;
+            }
+
+            JSONValue json = parseJSON(resp.text);
+            if (json.type != JSONType.array)
+            {
+                logWarn("Unexpected v2 notifications response");
+                return;
+            }
+
+            foreach (JSONValue entry; json.array)
+            {
+                string senderId;
+                if (const(JSONValue)* v = "senderUserId" in entry)
+                    if (v.type == JSONType.string)
+                        senderId = v.str;
+
+                NotificationInfo info = parseNotificationV2Object(entry,
+                    senderId.length ? friendsTracker.getDisplayName(senderId) : null);
+                if (info.id.length == 0)
+                    continue;
+
+                // The two systems have overlapped before (an invite showing
+                // up in both listings), and two rows for one notification
+                // means two sets of buttons for one answer.
+                bool seen;
+                foreach (ref NotificationInfo existing; list)
+                {
+                    if (existing.id == info.id)
+                    {
+                        seen = true;
+                        break;
+                    }
+                }
+                if (seen == false)
+                    list ~= info;
+            }
+        }
+        catch (Exception e)
+        {
+            logWarn("Could not fetch v2 notifications: %s", e.msg);
+        }
+    }
+
+    /// Fill in sender names the roster could not, with one GET /users/:id
+    /// each. Caller holds the API mutex.
+    ///
+    /// Capped rather than unbounded: an inbox someone let pile up should not
+    /// turn a seed into a hundred API calls. Past the cap the ID stands in,
+    /// which is ugly but honest. Senders repeat across notifications, so the
+    /// cap counts lookups, not entries.
+    private void resolveSenderNamesLocked(ref NotificationInfo[] list)
+    {
+        string[string] resolved;
+        int lookups;
+
+        foreach (ref NotificationInfo info; list)
+        {
+            if (info.senderName.length > 0 || info.senderUserId.length == 0)
+                continue;
+
+            // A v2 notification from a group puts the group ID here, and
+            // GET /users/grp_... is a 404 spent for nothing. The title says
+            // which group it is anyway.
+            if (startsWith(info.senderUserId, "usr_") == false)
+                continue;
+
+            if (string *cached = info.senderUserId in resolved)
+            {
+                info.senderName = *cached;
+                continue;
+            }
+
+            if (lookups >= NOTIFICATION_SENDER_LOOKUPS)
+            {
+                info.senderName = info.senderUserId;
+                continue;
+            }
+
+            // Checked per lookup, not once up front: the first few calls can
+            // be what tips the budget over.
+            if (rateLimiter && rateLimiter.isBlocked())
+            {
+                info.senderName = info.senderUserId;
+                continue;
+            }
+
+            ++lookups;
+            string name = info.senderUserId;
+            try
+            {
+                HTTPResponse resp = httpClient.get("/users/" ~ info.senderUserId);
+                if (rateLimiter)
+                    rateLimiter.update(resp);
+                if (resp.code == 200)
+                {
+                    JSONValue user = parseJSON(resp.text);
+                    if (user.type == JSONType.object)
+                        if (const(JSONValue)* v = "displayName" in user)
+                            if (v.type == JSONType.string && v.str.length > 0)
+                                name = v.str;
+                }
+                else
+                    logWarn("Notification sender: GET /users/%s -> HTTP %d",
+                        info.senderUserId, resp.code);
+            }
+            catch (Exception e)
+            {
+                logWarn("Notification sender: GET /users/%s failed: %s",
+                    info.senderUserId, e.msg);
+            }
+
+            resolved[info.senderUserId] = name;
+            info.senderName = name;
+        }
+
+        if (lookups > 0)
+            logDebugging("resolveSenderNamesLocked: %d lookup(s)", lookups);
+    }
+
     /// Broadcast a single event line to all authenticated clients.
     /// Tracker orchestration (state diff, synthetics, friends snapshot)
     /// lives in main.d so the suppression decision is in one place.
@@ -564,6 +849,13 @@ private:
             {
                 reseedCallback();
                 broadcastFriendsSnapshot(true);
+
+                // The inbox re-seeds on the same rhythm: the disconnect gap
+                // that loses friend movement loses notification events too.
+                string notifError;
+                if (seedNotifications(notifError) == false)
+                    logWarn("Re-seed worker: notifications seed failed: %s",
+                        notifError);
             }
             catch (Exception e)
             {
@@ -1447,277 +1739,34 @@ private class ClientHandler
         }
     }
 
-    /// Reply to `get_notifications`: fetch the pending notification list from
-    /// VRChat and send a normalized `notifications` snapshot.
+    /// Reply to `get_notifications`: send the server-side inbox.
     ///
-    /// The WebSocket only ever reports *changes*, so a front-end that starts
-    /// mid-session has no way to learn about a friend request that arrived
-    /// while it was down; reconstructing the inbox from the event log would
-    /// only reach as far back as whatever page of events was fetched. This is
-    /// the authoritative list, and the front-ends keep it current from the
-    /// events afterwards.
-    ///
-    /// Always refetches. Notifications are few, asked for once per connect,
-    /// and a stale inbox shows actions that no longer exist. Failures are
-    /// reported inside the `notifications` message (not via `error`) so the
-    /// client's loading state resolves.
+    /// The server keeps the inbox itself -- seeded from VRChat's listings at
+    /// startup and on every re-seed pass, then maintained from the WebSocket
+    /// events -- so this answers from memory and a front-end connecting late
+    /// still sees what arrived while nobody was watching. Only when no seed
+    /// has ever succeeded (startup rate-limited, VRChat down) does this retry
+    /// it. Failures are reported inside the `notifications` message (not via
+    /// `error`) so the client's loading state resolves.
     void handleGetNotifications()
     {
-        void sendNotificationsError(string error)
+        if (server.notificationsTracker.isSeeded() == false)
         {
-            JSONValue result = JSONValue([
-                "type": JSONValue("notifications"),
-                "notifications": JSONValue.emptyArray,
-                "error": JSONValue(error),
-            ]);
-            sendLine(result.toString() ~ "\n");
-        }
-
-        if (server.httpClient is null || server.apiMutex is null)
-        {
-            sendNotificationsError("Server HTTP client not configured");
-            return;
-        }
-
-        server.apiMutex.lock();
-        scope(exit) server.apiMutex.unlock();
-
-        if (server.rateLimiter && server.rateLimiter.isBlocked())
-        {
-            sendNotificationsError("Rate limited by VRChat, try again later");
-            return;
-        }
-
-        try
-        {
-            // v1 carries friend requests and invites, v2 everything VRChat
-            // added since: group invites and join requests, announcements,
-            // queue-ready, instance closures, moderation. Neither endpoint
-            // returns the other's notifications, so the inbox needs both.
-            HTTPResponse resp = server.httpClient.get(
-                "/auth/user/notifications?n=" ~ NOTIFICATION_FETCH_LIMIT.to!string());
-            logDebugging("handleGetNotifications: VRC GET /auth/user/notifications -> HTTP %d",
-                resp.code);
-            if (server.rateLimiter)
+            string error;
+            if (server.seedNotifications(error) == false)
             {
-                server.rateLimiter.update(resp);
-                server.broadcastStatus();
-            }
-            if (resp.code < 200 || resp.code >= 300)
-            {
-                sendNotificationsError("HTTP " ~ resp.code.to!string);
+                JSONValue result = JSONValue([
+                    "type": JSONValue("notifications"),
+                    "notifications": JSONValue.emptyArray,
+                    "error": JSONValue(error),
+                ]);
+                sendLine(result.toString() ~ "\n");
                 return;
             }
-
-            JSONValue json = parseJSON(resp.text);
-            if (json.type != JSONType.array)
-            {
-                sendNotificationsError("Unexpected notifications response");
-                return;
-            }
-
-            NotificationInfo[] parsed;
-            foreach (JSONValue entry; json.array)
-            {
-                // VRChat no longer returns sender names, so try the roster
-                // first: a raw usr_ ID reads as nothing, and an invite is
-                // nearly always from someone already in it.
-                string senderId;
-                if (const(JSONValue)* v = "senderUserId" in entry)
-                    if (v.type == JSONType.string)
-                        senderId = v.str;
-
-                NotificationInfo info = parseNotificationObject(entry,
-                    senderId.length ? server.friendsTracker.getDisplayName(senderId) : null);
-                if (info.id.length == 0) // Unusable object.
-                    continue;
-                parsed ~= info;
-            }
-            size_t v1Count = parsed.length;
-
-            // The v2 half is fetched second and is allowed to fail on its
-            // own: a front-end that gets friend requests and no group
-            // announcements is in better shape than one that gets an error
-            // and keeps whatever stale list it had.
-            fetchNotificationsV2Locked(parsed);
-
-            // A friend request is precisely the case the roster cannot
-            // answer: the sender is not a friend yet, which is the whole
-            // point of the request. Look those up, since "accept or decline
-            // usr_c3f2..." is not a question anyone can answer.
-            resolveSenderNamesLocked(parsed);
-
-            JSONValue[] items;
-            items.reserve(parsed.length);
-            foreach (ref NotificationInfo info; parsed)
-                items ~= buildNotificationJSON(info);
-
-            // Oldest first: the front-ends draw the inbox in this order, so a
-            // new notification appends to the end instead of pushing every
-            // Accept button down a row under the user's finger.
-            sortNotificationsOldestFirst(items);
-
-            JSONValue result = JSONValue([
-                "type": JSONValue("notifications"),
-                "notifications": JSONValue(items),
-            ]);
-            sendLine(result.toString() ~ "\n");
-            logDebugging("handleGetNotifications: %d entries (%d v1, %d v2)",
-                items.length, v1Count, parsed.length - v1Count);
-        }
-        catch (Exception e)
-        {
-            sendNotificationsError(e.msg);
-        }
-    }
-
-    /// Append the v2 listing to a list already holding the v1 one. Caller
-    /// holds the API mutex.
-    ///
-    /// Failures are logged and swallowed rather than raised: this half is an
-    /// addition to an inbox that already has something in it, and the caller
-    /// would otherwise throw away a good v1 fetch over a bad v2 one.
-    void fetchNotificationsV2Locked(ref NotificationInfo[] list)
-    {
-        if (server.rateLimiter && server.rateLimiter.isBlocked())
-        {
-            logWarn("Skipping v2 notifications: rate limited by VRChat");
-            return;
         }
 
-        try
-        {
-            HTTPResponse resp = server.httpClient.get(
-                "/notifications?n=" ~ NOTIFICATION_FETCH_LIMIT.to!string());
-            logDebugging("fetchNotificationsV2Locked: VRC GET /notifications -> HTTP %d",
-                resp.code);
-            if (server.rateLimiter)
-            {
-                server.rateLimiter.update(resp);
-                server.broadcastStatus();
-            }
-            if (resp.code < 200 || resp.code >= 300)
-            {
-                logWarn("Could not fetch v2 notifications: HTTP %d", resp.code);
-                return;
-            }
-
-            JSONValue json = parseJSON(resp.text);
-            if (json.type != JSONType.array)
-            {
-                logWarn("Unexpected v2 notifications response");
-                return;
-            }
-
-            foreach (JSONValue entry; json.array)
-            {
-                string senderId;
-                if (const(JSONValue)* v = "senderUserId" in entry)
-                    if (v.type == JSONType.string)
-                        senderId = v.str;
-
-                NotificationInfo info = parseNotificationV2Object(entry,
-                    senderId.length ? server.friendsTracker.getDisplayName(senderId) : null);
-                if (info.id.length == 0)
-                    continue;
-
-                // The two systems have overlapped before (an invite showing
-                // up in both listings), and two rows for one notification
-                // means two sets of buttons for one answer.
-                bool seen;
-                foreach (ref NotificationInfo existing; list)
-                {
-                    if (existing.id == info.id)
-                    {
-                        seen = true;
-                        break;
-                    }
-                }
-                if (seen == false)
-                    list ~= info;
-            }
-        }
-        catch (Exception e)
-        {
-            logWarn("Could not fetch v2 notifications: %s", e.msg);
-        }
-    }
-
-    /// Fill in sender names the roster could not, with one GET /users/:id
-    /// each. Caller holds the API mutex.
-    ///
-    /// Capped rather than unbounded: this runs on every front-end connect,
-    /// and an inbox someone let pile up should not turn a reconnect into a
-    /// hundred API calls. Past the cap the ID stands in, which is ugly but
-    /// honest. Senders repeat across notifications, so the cap counts
-    /// lookups, not entries.
-    void resolveSenderNamesLocked(ref NotificationInfo[] list)
-    {
-        string[string] resolved;
-        int lookups;
-
-        foreach (ref NotificationInfo info; list)
-        {
-            if (info.senderName.length > 0 || info.senderUserId.length == 0)
-                continue;
-
-            // A v2 notification from a group puts the group ID here, and
-            // GET /users/grp_... is a 404 spent for nothing. The title says
-            // which group it is anyway.
-            if (startsWith(info.senderUserId, "usr_") == false)
-                continue;
-
-            if (string *cached = info.senderUserId in resolved)
-            {
-                info.senderName = *cached;
-                continue;
-            }
-
-            if (lookups >= NOTIFICATION_SENDER_LOOKUPS)
-            {
-                info.senderName = info.senderUserId;
-                continue;
-            }
-
-            // Checked per lookup, not once up front: the first few calls can
-            // be what tips the budget over.
-            if (server.rateLimiter && server.rateLimiter.isBlocked())
-            {
-                info.senderName = info.senderUserId;
-                continue;
-            }
-
-            ++lookups;
-            string name = info.senderUserId;
-            try
-            {
-                HTTPResponse resp = server.httpClient.get("/users/" ~ info.senderUserId);
-                if (server.rateLimiter)
-                    server.rateLimiter.update(resp);
-                if (resp.code == 200)
-                {
-                    JSONValue user = parseJSON(resp.text);
-                    if (user.type == JSONType.object)
-                        if (const(JSONValue)* v = "displayName" in user)
-                            if (v.type == JSONType.string && v.str.length > 0)
-                                name = v.str;
-                }
-                else
-                    logWarn("Notification sender: GET /users/%s -> HTTP %d",
-                        info.senderUserId, resp.code);
-            }
-            catch (Exception e)
-            {
-                logWarn("Notification sender: GET /users/%s failed: %s",
-                    info.senderUserId, e.msg);
-            }
-
-            resolved[info.senderUserId] = name;
-            info.senderName = name;
-        }
-
-        if (lookups > 0)
-            logDebugging("resolveSenderNamesLocked: %d lookup(s)", lookups);
+        sendLine(server.notificationsTracker.buildNotificationsMessage()
+            .toString() ~ "\n");
     }
 
     void handleNotificationAction(JSONValue msg)
@@ -1855,6 +1904,13 @@ private class ClientHandler
             if (success == false)
                 result["error"] = JSONValue("HTTP " ~ resp.code.to!string);
             sendLine(result.toString() ~ "\n");
+
+            // Resolve the row in the server-side inbox now: VRChat's own
+            // hide/response echo arrives whenever it arrives, and the other
+            // front-ends should stop offering buttons for an answered
+            // notification immediately.
+            if (success && server.notificationsTracker.remove([ notifId ]))
+                server.broadcastNotificationsSnapshot();
         }
         catch (Exception e)
         {
@@ -3168,23 +3224,4 @@ JSONValue buildEventMessage(VRCEvent event, long eventId)
         "event_type": JSONValue(event.typeRaw),
         "content": event.content,
     ]);
-}
-
-/// The `received_at_unix` of an encoded notification, 0 when it has none.
-private long notificationStamp(JSONValue item)
-{
-    if (const(JSONValue)* v = "received_at_unix" in item)
-        if (v.type == JSONType.integer)
-            return v.integer;
-    return 0;
-}
-
-/// Order encoded notifications oldest first. Entries VRChat gave no timestamp
-/// for sort as 0, so they lead; that keeps them in one place rather than
-/// scattered through the list.
-private void sortNotificationsOldestFirst(JSONValue[] items)
-{
-    import std.algorithm.sorting : sort;
-
-    sort!((JSONValue a, JSONValue b) => notificationStamp(a) < notificationStamp(b))(items);
 }

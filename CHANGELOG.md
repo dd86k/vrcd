@@ -9,6 +9,7 @@
 ### API
 
 - APIv9 brings a `limit` property to `catch_up` to avoid drowning new setups when synchronizing.
+- APIv10 moves the notification inbox into the server: seeded from VRChat at startup and on every re-seed, kept current from the WebSocket, and `notifications` is re-broadcast to every client on change. A front-end connecting late still sees what arrived while nobody was watching.
 
 ## 0.2.0
 

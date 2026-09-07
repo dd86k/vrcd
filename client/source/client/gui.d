@@ -2104,11 +2104,12 @@ private void applyFriendsSnapshot(JSONValue msg)
             appState.friendsRefreshing = false;
 }
 
-/// Apply a `moderations` snapshot: mute and block lists.
-/// Replace the inbox from a server `notifications` snapshot, sent once per
-/// connect. This is the only way the client learns about a friend request
-/// that arrived while it was closed: the WebSocket reports changes, not
-/// state, so there is no event to replay for one.
+/// Replace the inbox from a server `notifications` snapshot: the answer to
+/// `get_notifications`, and since APIv10 also re-broadcast whenever the
+/// server-side inbox changes. This is how the client learns about a friend
+/// request that arrived -- or was answered elsewhere -- while it was closed:
+/// the WebSocket reports changes, not state, so there is no event to replay
+/// for one.
 ///
 /// A failure leaves whatever is already there rather than blanking the tab,
 /// since a stale inbox is more useful than an empty one, and the events keep
@@ -2128,6 +2129,7 @@ private void applyNotificationsSnapshot(JSONValue msg)
     logInfo("Inbox seeded with %d notification(s)", list.length);
 }
 
+/// Apply a `moderations` snapshot: mute and block lists.
 private void applyModerationsSnapshot(JSONValue msg)
 {
     appState.moderationsLoading = false;

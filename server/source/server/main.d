@@ -352,6 +352,12 @@ void cmdRun(ref Config config)
             apiServer.broadcast(syn, synId);
         }
 
+        // The inbox lives server-side: fold the event in and push the new
+        // snapshot, so a front-end connecting later still sees a request
+        // that arrived -- or stops seeing one answered -- while it was down.
+        if (isNotificationEvent(event.type))
+            apiServer.processNotificationEvent(event);
+
         if (friendsChanged.snapshot)
             apiServer.broadcastFriendsSnapshot();
 
@@ -408,6 +414,15 @@ void cmdRun(ref Config config)
     // wired (so a stale startup cookie can recover) and before the WS starts
     // (so tracker state is ready for the first live events).
     doReseed(client, rateLimiter, vrcApiMutex, worldCache, instanceCache, tracker, reauth);
+
+    // The inbox seeds here for the same reason the roster does: without it,
+    // a friend request that arrived while the server was down is invisible
+    // until the next re-seed pass, since no event replays it.
+    {
+        string notifError;
+        if (apiServer.seedNotifications(notifError) == false)
+            logWarn("Notification seed failed (retried on re-seed): %s", notifError);
+    }
 
     vrcws.start();
 

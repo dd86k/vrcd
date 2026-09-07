@@ -98,6 +98,25 @@ bool isAvatarNoiseEvent(EventType type)
     }
 }
 
+/// True for events the server-side notification inbox consumes: both
+/// notification systems and their lifecycle events.
+bool isNotificationEvent(EventType type)
+{
+    switch (type)
+    {
+        case EventType.notification:
+        case EventType.notificationV2:
+        case EventType.notificationV2Delete:
+        case EventType.notificationV2Update:
+        case EventType.seeNotification:
+        case EventType.hideNotification:
+        case EventType.responseNotification:
+            return true;
+        default:
+            return false;
+    }
+}
+
 /// Obtain content out of a raw VRChat WS message.
 ///
 /// WebSocket messages are JSON with structure: {"type": "...", "content": "..."}

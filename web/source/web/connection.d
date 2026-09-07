@@ -1565,8 +1565,9 @@ private:
 
         // The inbox cannot be rebuilt from the event log: the WebSocket only
         // reports changes, so anything that arrived while this process was
-        // down has no event to replay. Ask the server for the authoritative
-        // list, then keep it current from the events that follow.
+        // down has no event to replay. Ask the server for its authoritative
+        // inbox; an APIv10 server re-broadcasts it on every change, and the
+        // events keep it current against older servers.
         // Not cleared first: the reply replaces it a round trip later, and
         // blanking the inbox in between would blink every browser's list.
         if (status().serverVersion >= PROTOCOL_NOTIFICATIONS)
@@ -1731,10 +1732,19 @@ private:
 
             NotificationInfo[] parsed = parseNotificationsMessage(message);
             synchronized (stateMutex)
+            {
+                // Since APIv10 this arrives on every server-side inbox
+                // change, not just as the answer to get_notifications, and a
+                // bare replacement would silently take the fakes with it.
+                if (debugFakes)
+                    foreach (ref NotificationInfo entry; inbox)
+                        if (isDebugNotification(entry.id))
+                            parsed ~= entry;
                 inbox = parsed;
+            }
             notifyChange();
 
-            logInfo("Inbox seeded with %d notification(s)", parsed.length);
+            logInfo("Inbox: %d notification(s)", parsed.length);
             break;
 
         case "notification_action_result":
