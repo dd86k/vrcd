@@ -283,12 +283,17 @@ var SECTIONS = [
     { id: "inventory", label: "ITEMS",    kind: "item" }
 ];
 
-/* The stickers VRChat handed out rather than ones uploaded here. They are
-   inventory entries drawn as a second group inside STICKERS, so they are named
-   as a section wherever an entry's shape is asked for -- the card, the picture
-   and the detail pane all need to know what they are holding. Never a chip:
-   there is no listing of its own to switch to. */
+/* The stickers and emoji VRChat handed out rather than ones uploaded here.
+   They are inventory entries drawn as a second group inside their section, so
+   they are named as a section wherever an entry's shape is asked for -- the
+   card, the picture and the detail pane all need to know what they are
+   holding. Never a chip: there is no listing of its own to switch to. */
 var EXCLUSIVE = { id: "exclusive", label: "EXCLUSIVE", kind: "item" };
+
+/* The sections with a second group in them. Both are things an account can
+   upload and also be given, and a gift arrives as an inventory entry rather
+   than as a file. */
+var EXCLUSIVE_SECTIONS = ["sticker", "emoji"];
 
 /* What each section is, and what VRChat will not accept there. Shown under the
    grid rather than on the upload button: it is worth reading once. The shape
@@ -303,7 +308,8 @@ var SECTION_HINTS = {
              "rather than files, so there is nothing to delete.",
     emoji: "Emoji you can play. Square PNG, at most 2000x2000. Animated emoji " +
            "upload as a sprite sheet, which this page cannot describe yet, so " +
-           "they arrive as a still.",
+           "they arrive as a still. Exclusive ones are what VRChat handed out: " +
+           "inventory entries rather than files, so there is nothing to delete.",
     prints: "Photos printed in-world. Goes up as PNG, at most 2000x2000. " +
             "VRChat keeps 64.",
     inventory: "Props, bundles and skins. Emoji and stickers are not here: " +
@@ -1275,11 +1281,22 @@ function entryDetail(entry, section) {
     return entry.itemTypeLabel || entry.itemType || "";
 }
 
-function findEntry(section, id) {
-    var items = section === EXCLUSIVE.id
-        ? (content.sticker.exclusive || []) : content[section].items;
+function entryById(items, id) {
     for (var i = 0; i < items.length; i++)
         if (items[i].id === id) return items[i];
+    return null;
+}
+
+/* An exclusive entry is not in its section's own list, and "exclusive" is all
+   the caller knows about where it came from, so the sections that can hold one
+   are searched in turn. */
+function findEntry(section, id) {
+    if (section !== EXCLUSIVE.id) return entryById(content[section].items, id);
+
+    for (var i = 0; i < EXCLUSIVE_SECTIONS.length; i++) {
+        var found = entryById(content[EXCLUSIVE_SECTIONS[i]].exclusive || [], id);
+        if (found) return found;
+    }
     return null;
 }
 
@@ -1342,7 +1359,7 @@ function renderStuff(body) {
     var exclusive = filterEntries(held.exclusive || [], EXCLUSIVE.id);
 
     // Headings appear only once there is a second group for the first to be
-    // told apart from, which is the stickers and nothing else.
+    // told apart from, which is the stickers and the emoji and nothing else.
     var grouped = exclusive.length > 0 || (held.exclusive_error || "") !== "";
     if (grouped) body.appendChild(el("div", "section", "Uploaded"));
 
@@ -1391,7 +1408,7 @@ function sectionSwitcher() {
         var chip = el("button", "chip" + (section.id === view.section ? " on" : ""),
             section.label);
         var held = state.content && state.content[section.id];
-        // Both of the stickers' groups, since the chip stands for the whole
+        // Both of a section's groups, since the chip stands for the whole
         // section the way the switcher shows it.
         var count = held ? held.count + (held.exclusive_count || 0) : 0;
         if (held && held.loaded && count)

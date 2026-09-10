@@ -287,14 +287,22 @@ The STUFF tab is six sections over one mechanism:
 |---------|--------|---------|
 | Gallery | `get_files` tag `gallery` | Upload, delete |
 | Icons | `get_files` tag `icon` | Upload, delete, set or clear the profile icon |
-| Stickers | `get_files` tag `sticker` | Upload, delete |
-| Emoji | `get_files` tag `emoji` | Upload, delete |
+| Stickers | `get_files` tag `sticker`, plus `get_inventory` `types=sticker` `not_flags=ugc` | Upload, delete |
+| Emoji | `get_files` tag `emoji`, plus `get_inventory` `types=emoji` `not_flags=ugc` | Upload, delete |
 | Prints | `get_prints` | Upload with a caption, delete |
 | Items | `get_inventory` | Equip, unequip, consume |
 
 Items are props, bundles, drone and portal skins and warp effects. Emoji and
 stickers are not among them: vrcd-server filters them out of `get_inventory`
 because they have sections of their own above.
+
+Stickers and emoji are the two sections drawn as two groups, since they are the
+two an account can both upload and be given. The second group is what VRChat
+handed out: inventory entries rather than files, so they carry no delete and
+are drawn as items wherever one is opened. They ride in the same section rather
+than a chip of their own, and each of the two listings keeps its own loading
+flag and error so neither answer holds the other's list back. The headings
+appear only once there is a second group for the first to be told apart from.
 
 The entries do *not* ride in the state snapshot. A few hundred of them would be
 re-encoded and fanned out to every browser on every friend movement, and the

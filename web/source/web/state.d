@@ -278,7 +278,7 @@ string buildContentJSON(ServerLink link, string name)
     root["items"] = JSONValue(section.items);
 
     // Present for every section so the page needs no special case; only the
-    // stickers ever have a second group in them.
+    // stickers and emoji ever have a second group in them.
     root["exclusive"] = JSONValue(section.exclusive);
     root["exclusive_loading"] = JSONValue(section.exclusiveLoading);
     root["exclusive_error"] = JSONValue(section.exclusiveError);
