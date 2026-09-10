@@ -5,8 +5,9 @@
 ### Client
 
 - Officially upgraded from SDL2 to SDL3.
-- Stickers are split into two groups: the ones you uploaded, and the exclusive
-  ones VRChat handed out (inventory entries, so nothing to delete).
+- Stickers and emoji are each split into two groups: the ones you uploaded, and
+  the exclusive ones VRChat handed out (inventory entries, so nothing to
+  delete).
 - STUFF detail pages have a "Download Image" button: the original file (not the
   thumbnail) is written to your Downloads folder, named after the entry.
 - Fix the client dying on SIGPIPE (POSIX) when the server connection drops:
@@ -21,7 +22,7 @@
 
 ### Web
 
-- Same split in the STICKERS section.
+- Same split in the STICKERS and EMOJI sections.
 - Ignore SIGPIPE (POSIX) as well, so a browser disconnecting can never take the
   front-end down on a platform whose sends lack MSG_NOSIGNAL.
 - DOWNLOAD button on every STUFF entry with artwork, saving the original file
@@ -31,7 +32,7 @@
 
 - APIv9 brings a `limit` property to `catch_up` to avoid drowning new setups when synchronizing.
 - APIv10 moves the notification inbox into the server: seeded from VRChat at startup and on every re-seed, kept current from the WebSocket, and `notifications` is re-broadcast to every client on change. A front-end connecting late still sees what arrived while nobody was watching.
-- APIv11 lets `get_inventory` be filtered by item type and capability flag, which is how the exclusive stickers are asked for apart from the props. The reply echoes the filter, since one endpoint now feeds two of a front-end's sections.
+- APIv11 lets `get_inventory` be filtered by item type and capability flag, which is how the exclusive stickers and emoji are asked for apart from the props. The reply echoes the filter, since one endpoint now feeds three of a front-end's listings.
 
 ## v0.2.0
 

@@ -220,6 +220,20 @@ string invSectionTag(InvSection section)
     }
 }
 
+/// Inventory item type for a section's second group, or null when it has none.
+///
+/// Stickers and emoji are the two an account can both upload and be given: an
+/// upload is a file, a gift is an inventory entry, and only a filtered
+/// inventory listing separates the second from the props.
+string invSectionExclusiveType(InvSection section)
+{
+    final switch (section) with (InvSection) {
+    case stickers: return "sticker";
+    case emoji:    return "emoji";
+    case gallery, icons, prints, items: return null;
+    }
+}
+
 /// An image download to request from the server, drained by gui.d.
 struct ImageRequest
 {
@@ -430,13 +444,14 @@ struct AppState
     PrintEntry[] invPrints;
     InventoryEntry[] invItems;
     long invItemsTotal;
-    // Stickers VRChat handed out rather than ones you uploaded: inventory
-    // items, not files, so they carry no delete and sit in their own group
-    // under the Stickers section. Their own loading flag, since the section
+    // Stickers and emoji VRChat handed out rather than ones you uploaded:
+    // inventory items, not files, so they carry no delete and sit in their own
+    // group under their section. Their own loading flag, since such a section
     // asks two endpoints and neither answer should hold the other's list back.
-    InventoryEntry[] invStickerItems;
-    bool invStickerItemsLoading;
-    string invStickerItemsError;
+    // Indexed by InvSection like the flags below; only two are ever filled.
+    InventoryEntry[][INV_SECTIONS] invExclusive;
+    bool[INV_SECTIONS] invExclusiveLoading;
+    string[INV_SECTIONS] invExclusiveError;
     bool[INV_SECTIONS] invLoading;
     bool[INV_SECTIONS] invLoaded;
     bool[INV_SECTIONS] invStale;    // content-refresh received, reload on view
@@ -456,9 +471,9 @@ struct AppState
     ContentFile selectedInvFile;
     PrintEntry selectedInvPrint;
     InventoryEntry selectedInvItem;
-    // Which of the Stickers section's two groups the open detail came from,
-    // since only one of them is a file this account may delete.
-    bool invStickerItemSelected;
+    // Which of a two-group section's groups the open detail came from, since
+    // only one of them is a file this account may delete.
+    bool invExclusiveSelected;
 
     // Management actions queued by the UI, drained by gui.d.
     ContentAction[] pendingContentActions;

@@ -296,7 +296,7 @@ Item types are `bundle`, `droneskin`, `emoji`, `portalskin`, `prop`, `sticker` a
 
 A request with none of the three filters means the Items view and defaults to `not_types=emoji,sticker`: emoji and stickers have their own sections, sourced from the files endpoint. That default is what a front-end older than these fields gets.
 
-The exclusive stickers — the ones VRChat handed out rather than ones this account uploaded — are `types=sticker` with `not_flags=ugc`, since an uploaded sticker also has an inventory entry, flagged `ugc`, alongside the file the files listing carries.
+The exclusive stickers and emoji — the ones VRChat handed out rather than ones this account uploaded — are `types=sticker` or `types=emoji` with `not_flags=ugc`, since an uploaded sticker or emoji also has an inventory entry, flagged `ugc`, alongside the file the files listing carries.
 
 ### `get_inventory_drops`
 
@@ -813,7 +813,7 @@ Reply to `get_inventory`.
 | `items`       | array  | Inventory entries (empty on failure)                 |
 | `error`       | string | Error description (present only on failure)          |
 
-The filter is echoed because a front-end draws two sections out of this one endpoint (its items and its exclusive stickers), and nothing else in the reply says which of them it answers.
+The filter is echoed because a front-end draws three listings out of this one endpoint (its items, its exclusive stickers and its exclusive emoji), and nothing else in the reply says which of them it answers.
 
 Each inventory entry:
 

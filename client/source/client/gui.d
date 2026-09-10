@@ -1002,14 +1002,15 @@ private void eventLoop(mu_Context* uictx)
                     conn.requestPrints();
                 else
                     conn.requestInventory();
-                // Stickers come from two places: the files you uploaded and
-                // the ones VRChat handed out, which live in the inventory.
-                if (appState.invSection == InvSection.stickers
-                    && conn.serverVersion >= PROTOCOL_INVENTORY_FILTER)
+                // Stickers and emoji come from two places: the files you
+                // uploaded and the ones VRChat handed out, which live in the
+                // inventory.
+                string exclusiveType = invSectionExclusiveType(appState.invSection);
+                if (exclusiveType && conn.serverVersion >= PROTOCOL_INVENTORY_FILTER)
                 {
-                    conn.requestInventory("sticker", "ugc");
-                    appState.invStickerItemsLoading = true;
-                    appState.invStickerItemsError = null;
+                    conn.requestInventory(exclusiveType, "ugc");
+                    appState.invExclusiveLoading[sec] = true;
+                    appState.invExclusiveError[sec] = null;
                 }
                 appState.invLoading[sec] = true;
                 appState.invStale[sec] = false;
@@ -1803,9 +1804,14 @@ private void markContentStale(JSONValue msg)
     case "emoji":            section = InvSection.emoji; break;
     case "print", "prints":  section = InvSection.prints; break;
     case "inventory":
-        // An inventory refresh names the item's type, and a sticker arriving
-        // there is one of the exclusives rather than an Items entry.
-        section = itemType == "sticker" ? InvSection.stickers : InvSection.items;
+        // An inventory refresh names the item's type, and a sticker or emoji
+        // arriving there is one of the exclusives rather than an Items entry.
+        switch (itemType)
+        {
+        case "sticker": section = InvSection.stickers; break;
+        case "emoji":   section = InvSection.emoji; break;
+        default:        section = InvSection.items;
+        }
         break;
     default:
         return;
@@ -1917,18 +1923,25 @@ private void applyPrintsReply(JSONValue msg)
 }
 
 /// Apply an `inventory` listing reply. The echoed filter says which section
-/// asked: the Items view is unfiltered, the exclusive stickers ask for one type.
+/// asked: the Items view is unfiltered, an exclusive group asks for one type.
 private void applyInventoryReply(JSONValue msg)
 {
     string types;
     if (const(JSONValue)* v = "types" in msg)
         if (v.type == JSONType.string)
             types = v.str;
-    bool stickers = types == "sticker";
 
-    int sec = cast(int) InvSection.items;
-    if (stickers)
-        appState.invStickerItemsLoading = false;
+    // -1 for the Items view, else the section whose second group this fills.
+    static immutable InvSection[2] twoGroup = [ InvSection.stickers, InvSection.emoji ];
+    int exclusiveSec = -1;
+    foreach (InvSection s; twoGroup)
+        if (types == invSectionExclusiveType(s))
+            exclusiveSec = cast(int) s;
+    bool exclusive = exclusiveSec >= 0;
+
+    int sec = exclusive ? exclusiveSec : cast(int) InvSection.items;
+    if (exclusive)
+        appState.invExclusiveLoading[sec] = false;
     else
     {
         appState.invLoading[sec] = false;
@@ -1936,20 +1949,20 @@ private void applyInventoryReply(JSONValue msg)
     }
     if (const(JSONValue)* v = "error" in msg)
     {
-        if (stickers)
-            appState.invStickerItemsError = v.str;
+        if (exclusive)
+            appState.invExclusiveError[sec] = v.str;
         else
             appState.invError[sec] = v.str;
         return;
     }
-    if (stickers)
-        appState.invStickerItemsError = null;
+    if (exclusive)
+        appState.invExclusiveError[sec] = null;
     else
+    {
         appState.invError[sec] = null;
-
-    if (stickers == false)
         if (const(JSONValue)* v = "total_count" in msg)
             appState.invItemsTotal = v.integer;
+    }
 
     InventoryEntry[] list;
     if (const(JSONValue)* items = "items" in msg)
@@ -1986,8 +1999,8 @@ private void applyInventoryReply(JSONValue msg)
                 list ~= entry;
         }
     }
-    if (stickers)
-        appState.invStickerItems = list;
+    if (exclusive)
+        appState.invExclusive[sec] = list;
     else
         appState.invItems = list;
 }

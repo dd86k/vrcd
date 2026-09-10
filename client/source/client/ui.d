@@ -2560,16 +2560,13 @@ private void drawInventoryTab(mu_Context* ctx, AppState* state, int scrollDelta)
     {
         final switch (state.invSection) with (InvSection)
         {
-        case stickers:
+        case gallery, icons, stickers, emoji:
             // The exclusive count is said only once there is one: a server too
             // old to have that listing would otherwise report zero of them.
-            status = state.invStickerItems.length > 0
+            status = state.invExclusive[sec].length > 0
                 ? sformat(statusBuf, "%d file(s), %d exclusive",
-                    state.invFiles[sec].length, state.invStickerItems.length)
+                    state.invFiles[sec].length, state.invExclusive[sec].length)
                 : sformat(statusBuf, "%d file(s)", state.invFiles[sec].length);
-            break;
-        case gallery, icons, emoji:
-            status = sformat(statusBuf, "%d file(s)", state.invFiles[sec].length);
             break;
         case prints:
             status = sformat(statusBuf, "%d print(s)", state.invPrints.length);
@@ -2741,13 +2738,12 @@ private void drawFilesGrid(mu_Context* ctx, AppState* state, mu_Container* panel
     static immutable int[1] fullCol = [-1];
     int sec = cast(int) state.invSection;
 
-    // Stickers come from two places: files this account uploaded, and the ones
-    // VRChat handed out, which are inventory items. Headings appear only once
-    // there is a second group to tell apart from the first.
-    bool grouped = state.invSection == InvSection.stickers
-        && (state.invStickerItems.length > 0
-            || state.invStickerItemsError.length > 0
-            || state.invStickerItemsLoading);
+    // Stickers and emoji come from two places: files this account uploaded,
+    // and the ones VRChat handed out, which are inventory items. Headings
+    // appear only once there is a second group to tell apart from the first.
+    bool grouped = state.invExclusive[sec].length > 0
+        || state.invExclusiveError[sec].length > 0
+        || state.invExclusiveLoading[sec];
     if (grouped)
         groupHeading(ctx, "Uploaded");
 
@@ -2757,7 +2753,7 @@ private void drawFilesGrid(mu_Context* ctx, AppState* state, mu_Container* panel
         if (imageCell(ctx, state, panel, f.fileId, f.fileVersion, f.name))
         {
             state.selectedInvFile = f;
-            state.invStickerItemSelected = false;
+            state.invExclusiveSelected = false;
             state.invDetailOpen = true;
             state.armedConfirm = ArmedConfirm.init;
             requestRepaint();
@@ -2775,19 +2771,19 @@ private void drawFilesGrid(mu_Context* ctx, AppState* state, mu_Container* panel
         return;
 
     groupHeading(ctx, "Exclusive");
-    if (state.invStickerItemsError.length > 0)
+    if (state.invExclusiveError[sec].length > 0)
     {
         mu_layout_row(ctx, 1, fullCol.ptr, 0);
-        mu_label(ctx, state.invStickerItemsError);
+        mu_label(ctx, state.invExclusiveError[sec]);
         return;
     }
-    foreach (size_t i, ref InventoryEntry it; state.invStickerItems)
+    foreach (size_t i, ref InventoryEntry it; state.invExclusive[sec])
     {
         gridRow(ctx, i, panel.body_.w);
         if (imageCell(ctx, state, panel, it.imageFileId, it.imageVersion, it.name))
         {
             state.selectedInvItem = it;
-            state.invStickerItemSelected = true;
+            state.invExclusiveSelected = true;
             state.invDetailOpen = true;
             state.armedConfirm = ArmedConfirm.init;
             requestRepaint();
@@ -2804,6 +2800,7 @@ private void drawPrintsGrid(mu_Context* ctx, AppState* state, mu_Container* pane
         if (imageCell(ctx, state, panel, p.fileId, p.fileVersion, caption))
         {
             state.selectedInvPrint = p;
+            state.invExclusiveSelected = false;
             state.invDetailOpen = true;
             state.armedConfirm = ArmedConfirm.init;
             requestRepaint();
@@ -2862,6 +2859,7 @@ private void drawItemsGrid(mu_Context* ctx, AppState* state, mu_Container* panel
             if (imageCell(ctx, state, panel, it.imageFileId, it.imageVersion, it.name))
             {
                 state.selectedInvItem = it;
+                state.invExclusiveSelected = false;
                 state.invDetailOpen = true;
                 state.armedConfirm = ArmedConfirm.init;
                 requestRepaint();
@@ -2882,10 +2880,9 @@ private void drawInventoryDetailPage(mu_Context* ctx, AppState* state, int scrol
 
     // Navigation back to the list is the sticky header Back button.
 
-    // An exclusive sticker is an inventory item, whichever section it was
-    // opened from, so it is drawn as one.
-    bool asItem = state.invSection == InvSection.items
-        || (state.invSection == InvSection.stickers && state.invStickerItemSelected);
+    // An exclusive sticker or emoji is an inventory item, whichever section it
+    // was opened from, so it is drawn as one.
+    bool asItem = state.invSection == InvSection.items || state.invExclusiveSelected;
 
     // Resolve the selected entry's image reference per section, plus what to
     // call it in a saved file.

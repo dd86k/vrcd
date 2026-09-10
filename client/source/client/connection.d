@@ -34,7 +34,7 @@ enum long PROTOCOL_REFRESH = 6;
 
 /// Minimum server protocol version for filtered inventory listings
 /// (`get_inventory` with `types`/`not_flags`), which is how the exclusive
-/// stickers are told apart from the props in the Items section.
+/// stickers and emoji are told apart from the props in the Items section.
 enum long PROTOCOL_INVENTORY_FILTER = 11;
 
 /// How many events to ask a catch-up for.
@@ -398,7 +398,7 @@ class ServerConnection
     ///   types = Comma-separated item types to include, or null for the Items
     ///           listing (everything but emoji and stickers).
     ///   notFlags = Comma-separated capability flags to exclude; "ugc" is what
-    ///              leaves only the stickers VRChat handed out.
+    ///              leaves only what VRChat handed out.
     ///   archived = List archived items instead of active ones.
     void requestInventory(string types = null, string notFlags = null,
         bool archived = false)
