@@ -823,6 +823,19 @@ private int backfillInstancesLocked(JSONValue[] friendsArr,
 // As per tradition, keep main() at the end of module
 int main(string[] args)
 {
+    version (Posix)
+    {
+        import core.sys.posix.signal : signal, SIGPIPE, SIG_IGN;
+
+        // OpenSSL and libcurl both write with write(2) and neither passes
+        // MSG_NOSIGNAL: a front-end that hangs up mid-response, or a VRChat
+        // connection that drops, would otherwise kill the daemon outright
+        // from whichever thread happened to be writing. Ignored, the write
+        // fails, the call returns an error, and the connection is dropped
+        // the way any other lost connection is.
+        signal(SIGPIPE, SIG_IGN);
+    }
+
     Config config = Config.defaults();
     uint cliSet; // Bitmask of fields explicitly set by CLI.
     bool helpConfig;

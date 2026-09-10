@@ -90,6 +90,21 @@ version (Windows)
 else
 int main(string[] args)
 {
+    version (Posix)
+    {
+        import core.sys.posix.signal : signal, SIGPIPE, SIG_IGN;
+
+        // OpenSSL writes with write(2), including from inside SSL_read: a
+        // TLS 1.3 session ticket or key update is answered on the spot, and
+        // so is the alert a shutdown sends. On the default disposition a
+        // peer that has gone away then kills the whole process from the
+        // network thread -- and TLSClientStream.unblock() shuts the socket
+        // down underneath a blocked reader deliberately, so this is the
+        // ordinary way a connection ends here, not an edge case. Ignored,
+        // the write fails, SSL_read returns <= 0, and the reader exits the
+        // way it does for any other closed connection.
+        signal(SIGPIPE, SIG_IGN);
+    }
     return startvrcd(args);
 }
 

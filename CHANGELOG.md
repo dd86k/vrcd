@@ -9,10 +9,21 @@
   ones VRChat handed out (inventory entries, so nothing to delete).
 - STUFF detail pages have a "Download Image" button: the original file (not the
   thumbnail) is written to your Downloads folder, named after the entry.
+- Fix the client dying on SIGPIPE (POSIX) when the server connection drops:
+  OpenSSL writes from inside SSL_read, so a disconnect killed the process from
+  the network thread instead of reconnecting.
+
+### Server
+
+- Ignore SIGPIPE (POSIX): a front-end hanging up mid-response, or a dropped
+  VRChat connection, could kill the daemon from inside an OpenSSL or libcurl
+  write.
 
 ### Web
 
 - Same split in the STICKERS section.
+- Ignore SIGPIPE (POSIX) as well, so a browser disconnecting can never take the
+  front-end down on a platform whose sends lack MSG_NOSIGNAL.
 - DOWNLOAD button on every STUFF entry with artwork, saving the original file
   without going through the viewer first.
 

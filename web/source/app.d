@@ -39,6 +39,16 @@ private enum size_t UPLOAD_MAX_BYTES = 16 * 1024 * 1024;
 
 int main(string[] args)
 {
+    version (Posix)
+    {
+        // Phobos and ddhttpd both set MSG_NOSIGNAL on Linux, so this is
+        // insurance rather than a fix: a browser hanging up mid-response is
+        // ordinary, and it must never be able to take the front-end down on
+        // a platform where a send goes out without that flag.
+        import core.sys.posix.signal : signal, SIGPIPE, SIG_IGN;
+        signal(SIGPIPE, SIG_IGN);
+    }
+
     string listenAddr = "127.0.0.1";
     ushort listenPort = 8080;
     string serverHost = "127.0.0.1";
