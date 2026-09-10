@@ -9,7 +9,7 @@ import core.time : dur, Duration, MonoTime;
 
 import ddlogger;
 import ddcurl;
-import ddcurl.libcurl : CurlException;
+import ddcurl.libcurl : CurlException, CURLWS_PING;
 import ddcurl.websocket : WebSocketMessage, WebSocketStatus;
 
 import server.vrchat.vrcconfig : USER_AGENT;
@@ -37,6 +37,15 @@ private enum : ushort
 /// How long a connection has to stay up before it counts as a good one and
 /// the reconnect backoff is allowed to reset.
 private enum Duration STABLE_CONNECTION = dur!"seconds"(60);
+
+/// How long the socket may stay silent before we ping it.
+///
+/// Something between us and the pipeline drops a connection after exactly two
+/// minutes without a byte -- curl reports CURLE_GOT_NOTHING, no close frame --
+/// and neither end pings on its own, so a quiet friends list is what kills the
+/// connection. Half that leaves room for the ping to land late: the poll wakes
+/// every 30 seconds, so this is checked at that granularity.
+private enum Duration KEEPALIVE_IDLE = dur!"seconds"(60);
 
 /// Human-readable description for an RFC 6455 close code.
 /// A zero code means the peer closed without sending one.
@@ -156,6 +165,7 @@ private:
                 notifyStatus(true, "");
 
                 bool reconnectNow; // Skip backoff and reconnect immediately (e.g. after re-auth).
+                MonoTime lastActivity = connectedAt;
 
                 while (running && connected)
                 {
@@ -163,8 +173,19 @@ private:
                     final switch (msg.status) with (WebSocketStatus)
                     {
                     case data:
+                        lastActivity = MonoTime.currTime;
+
                         const(char)[] message = cast(const(char)[]) msg.data;
                         logTrace("WS recv: %s", message);
+
+                        // ddcurl reports no opcode, so the pong answering our
+                        // keepalive arrives here as an empty data frame. An
+                        // event is never empty; don't hand it to the parser.
+                        if (message.length == 0)
+                        {
+                            logTrace("WS empty frame (pong), ignoring");
+                            break;
+                        }
 
                         try
                         {
@@ -186,9 +207,18 @@ private:
 
                     case timedOut:
                         // No frame within the poll window. The VRChat pipeline can stay
-                        // quiet for long stretches and libcurl answers ping/pong for us,
-                        // so an idle timeout is not a disconnect: keep waiting.
-                        logTrace("WS idle (poll timeout), still connected");
+                        // quiet for long stretches, so an idle timeout is not a
+                        // disconnect: ping to keep the socket from being reaped and
+                        // keep waiting. A ping that cannot be sent throws, which is the
+                        // reconnect path -- the socket is gone either way.
+                        if (MonoTime.currTime - lastActivity >= KEEPALIVE_IDLE)
+                        {
+                            logDebugging("WS idle for %s, sending ping", MonoTime.currTime - lastActivity);
+                            ws.send(cast(ubyte[]) "", CURLWS_PING);
+                            lastActivity = MonoTime.currTime;
+                        }
+                        else
+                            logTrace("WS idle (poll timeout), still connected");
                         break;
 
                     case closed:

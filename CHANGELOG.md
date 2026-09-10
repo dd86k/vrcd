@@ -16,6 +16,9 @@
 
 ### Server
 
+- Ping the VRChat WebSocket after a minute of silence. The connection was being
+  dropped after exactly two minutes without a byte in either direction, so a
+  quiet friends list meant reconnecting every 2.5 minutes all day.
 - Ignore SIGPIPE (POSIX): a front-end hanging up mid-response, or a dropped
   VRChat connection, could kill the daemon from inside an OpenSSL or libcurl
   write.
