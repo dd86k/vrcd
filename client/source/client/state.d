@@ -430,6 +430,13 @@ struct AppState
     PrintEntry[] invPrints;
     InventoryEntry[] invItems;
     long invItemsTotal;
+    // Stickers VRChat handed out rather than ones you uploaded: inventory
+    // items, not files, so they carry no delete and sit in their own group
+    // under the Stickers section. Their own loading flag, since the section
+    // asks two endpoints and neither answer should hold the other's list back.
+    InventoryEntry[] invStickerItems;
+    bool invStickerItemsLoading;
+    string invStickerItemsError;
     bool[INV_SECTIONS] invLoading;
     bool[INV_SECTIONS] invLoaded;
     bool[INV_SECTIONS] invStale;    // content-refresh received, reload on view
@@ -449,6 +456,9 @@ struct AppState
     ContentFile selectedInvFile;
     PrintEntry selectedInvPrint;
     InventoryEntry selectedInvItem;
+    // Which of the Stickers section's two groups the open detail came from,
+    // since only one of them is a file this account may delete.
+    bool invStickerItemSelected;
 
     // Management actions queued by the UI, drained by gui.d.
     ContentAction[] pendingContentActions;

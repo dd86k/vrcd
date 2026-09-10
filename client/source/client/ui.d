@@ -2560,7 +2560,15 @@ private void drawInventoryTab(mu_Context* ctx, AppState* state, int scrollDelta)
     {
         final switch (state.invSection) with (InvSection)
         {
-        case gallery, icons, stickers, emoji:
+        case stickers:
+            // The exclusive count is said only once there is one: a server too
+            // old to have that listing would otherwise report zero of them.
+            status = state.invStickerItems.length > 0
+                ? sformat(statusBuf, "%d file(s), %d exclusive",
+                    state.invFiles[sec].length, state.invStickerItems.length)
+                : sformat(statusBuf, "%d file(s)", state.invFiles[sec].length);
+            break;
+        case gallery, icons, emoji:
             status = sformat(statusBuf, "%d file(s)", state.invFiles[sec].length);
             break;
         case prints:
@@ -2715,10 +2723,33 @@ private bool imageCell(mu_Context* ctx, AppState* state, mu_Container* panel,
     return false;
 }
 
+/// A heading banner spanning the panel width, for a section drawn as more
+/// than one group.
+private void groupHeading(mu_Context* ctx, const(char)[] text)
+{
+    static immutable int[1] fullCol = [-1];
+
+    mu_layout_row(ctx, 1, fullCol.ptr, 34);
+    mu_Rect head = mu_layout_next(ctx);
+    mu_draw_rect(ctx, head, mu_Color(45, 55, 75, 255));
+    // Safe cast: mu_draw_text copies the text into the command queue.
+    mu_draw_control_text(ctx, cast(string) text, head, MU_COLOR_TEXT, 0);
+}
+
 private void drawFilesGrid(mu_Context* ctx, AppState* state, mu_Container* panel)
 {
     static immutable int[1] fullCol = [-1];
     int sec = cast(int) state.invSection;
+
+    // Stickers come from two places: files this account uploaded, and the ones
+    // VRChat handed out, which are inventory items. Headings appear only once
+    // there is a second group to tell apart from the first.
+    bool grouped = state.invSection == InvSection.stickers
+        && (state.invStickerItems.length > 0
+            || state.invStickerItemsError.length > 0
+            || state.invStickerItemsLoading);
+    if (grouped)
+        groupHeading(ctx, "Uploaded");
 
     foreach (size_t i, ref ContentFile f; state.invFiles[sec])
     {
@@ -2726,6 +2757,7 @@ private void drawFilesGrid(mu_Context* ctx, AppState* state, mu_Container* panel
         if (imageCell(ctx, state, panel, f.fileId, f.fileVersion, f.name))
         {
             state.selectedInvFile = f;
+            state.invStickerItemSelected = false;
             state.invDetailOpen = true;
             state.armedConfirm = ArmedConfirm.init;
             requestRepaint();
@@ -2737,6 +2769,29 @@ private void drawFilesGrid(mu_Context* ctx, AppState* state, mu_Container* panel
         mu_layout_row(ctx, 1, fullCol.ptr, 50);
         if (clickButton(ctx, state.invLoading[sec] ? "Loading..." : "Load more"))
             state.invLoadMoreRequested = true;
+    }
+
+    if (grouped == false)
+        return;
+
+    groupHeading(ctx, "Exclusive");
+    if (state.invStickerItemsError.length > 0)
+    {
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        mu_label(ctx, state.invStickerItemsError);
+        return;
+    }
+    foreach (size_t i, ref InventoryEntry it; state.invStickerItems)
+    {
+        gridRow(ctx, i, panel.body_.w);
+        if (imageCell(ctx, state, panel, it.imageFileId, it.imageVersion, it.name))
+        {
+            state.selectedInvItem = it;
+            state.invStickerItemSelected = true;
+            state.invDetailOpen = true;
+            state.armedConfirm = ArmedConfirm.init;
+            requestRepaint();
+        }
     }
 }
 
@@ -2793,13 +2848,7 @@ private void drawItemsGrid(mu_Context* ctx, AppState* state, mu_Container* panel
     foreach (size_t c; 0 .. catCount)
     {
         const(char)[] cat = cats[c];
-
-        // Heading banner spanning the panel width.
-        mu_layout_row(ctx, 1, fullCol.ptr, 34);
-        mu_Rect head = mu_layout_next(ctx);
-        mu_draw_rect(ctx, head, mu_Color(45, 55, 75, 255));
-        // Safe cast: mu_draw_text copies the text into the command queue.
-        mu_draw_control_text(ctx, cast(string) cat, head, MU_COLOR_TEXT, 0);
+        groupHeading(ctx, cat);
 
         // This category's items, indexed within the group so each group
         // packs a fresh set of rows under its heading.
@@ -2833,23 +2882,28 @@ private void drawInventoryDetailPage(mu_Context* ctx, AppState* state, int scrol
 
     // Navigation back to the list is the sticky header Back button.
 
+    // An exclusive sticker is an inventory item, whichever section it was
+    // opened from, so it is drawn as one.
+    bool asItem = state.invSection == InvSection.items
+        || (state.invSection == InvSection.stickers && state.invStickerItemSelected);
+
     // Resolve the selected entry's image reference per section.
     string fileId;
     long fileVersion;
-    final switch (state.invSection) with (InvSection)
+    if (asItem)
     {
-    case gallery, icons, stickers, emoji:
-        fileId = state.selectedInvFile.fileId;
-        fileVersion = state.selectedInvFile.fileVersion;
-        break;
-    case prints:
-        fileId = state.selectedInvPrint.fileId;
-        fileVersion = state.selectedInvPrint.fileVersion;
-        break;
-    case items:
         fileId = state.selectedInvItem.imageFileId;
         fileVersion = state.selectedInvItem.imageVersion;
-        break;
+    }
+    else if (state.invSection == InvSection.prints)
+    {
+        fileId = state.selectedInvPrint.fileId;
+        fileVersion = state.selectedInvPrint.fileVersion;
+    }
+    else
+    {
+        fileId = state.selectedInvFile.fileId;
+        fileVersion = state.selectedInvFile.fileVersion;
     }
 
     // Full image (size 0 = original file), letterboxed into a tall row.
@@ -2876,7 +2930,7 @@ private void drawInventoryDetailPage(mu_Context* ctx, AppState* state, int scrol
         mu_draw_control_text(ctx, "No image", imgRect, MU_COLOR_TEXT, MU_OPT_ALIGNCENTER);
 
     // Metadata + actions per section.
-    final switch (state.invSection) with (InvSection)
+    final switch (asItem ? InvSection.items : state.invSection) with (InvSection)
     {
     case gallery, icons, stickers, emoji:
         if (state.selectedInvFile.name.length > 0)

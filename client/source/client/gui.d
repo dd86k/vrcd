@@ -1002,6 +1002,15 @@ private void eventLoop(mu_Context* uictx)
                     conn.requestPrints();
                 else
                     conn.requestInventory();
+                // Stickers come from two places: the files you uploaded and
+                // the ones VRChat handed out, which live in the inventory.
+                if (appState.invSection == InvSection.stickers
+                    && conn.serverVersion >= PROTOCOL_INVENTORY_FILTER)
+                {
+                    conn.requestInventory("sticker", "ugc");
+                    appState.invStickerItemsLoading = true;
+                    appState.invStickerItemsError = null;
+                }
                 appState.invLoading[sec] = true;
                 appState.invStale[sec] = false;
                 appState.invError[sec] = null;
@@ -1772,11 +1781,17 @@ private void drainNetworkMessages()
 private void markContentStale(JSONValue msg)
 {
     string contentType;
+    string itemType;
     if (const(JSONValue)* content = "content" in msg)
     {
         if (content.type == JSONType.object)
+        {
             if (const(JSONValue)* v = "contentType" in *content)
                 contentType = v.str;
+            if (const(JSONValue)* v = "itemType" in *content)
+                if (v.type == JSONType.string)
+                    itemType = v.str;
+        }
     }
 
     InvSection section;
@@ -1787,7 +1802,11 @@ private void markContentStale(JSONValue msg)
     case "sticker":          section = InvSection.stickers; break;
     case "emoji":            section = InvSection.emoji; break;
     case "print", "prints":  section = InvSection.prints; break;
-    case "inventory":        section = InvSection.items; break;
+    case "inventory":
+        // An inventory refresh names the item's type, and a sticker arriving
+        // there is one of the exclusives rather than an Items entry.
+        section = itemType == "sticker" ? InvSection.stickers : InvSection.items;
+        break;
     default:
         return;
     }
@@ -1897,21 +1916,40 @@ private void applyPrintsReply(JSONValue msg)
     appState.invPrints = list;
 }
 
-/// Apply an `inventory` listing reply.
+/// Apply an `inventory` listing reply. The echoed filter says which section
+/// asked: the Items view is unfiltered, the exclusive stickers ask for one type.
 private void applyInventoryReply(JSONValue msg)
 {
+    string types;
+    if (const(JSONValue)* v = "types" in msg)
+        if (v.type == JSONType.string)
+            types = v.str;
+    bool stickers = types == "sticker";
+
     int sec = cast(int) InvSection.items;
-    appState.invLoading[sec] = false;
-    appState.invLoaded[sec] = true;
+    if (stickers)
+        appState.invStickerItemsLoading = false;
+    else
+    {
+        appState.invLoading[sec] = false;
+        appState.invLoaded[sec] = true;
+    }
     if (const(JSONValue)* v = "error" in msg)
     {
-        appState.invError[sec] = v.str;
+        if (stickers)
+            appState.invStickerItemsError = v.str;
+        else
+            appState.invError[sec] = v.str;
         return;
     }
-    appState.invError[sec] = null;
+    if (stickers)
+        appState.invStickerItemsError = null;
+    else
+        appState.invError[sec] = null;
 
-    if (const(JSONValue)* v = "total_count" in msg)
-        appState.invItemsTotal = v.integer;
+    if (stickers == false)
+        if (const(JSONValue)* v = "total_count" in msg)
+            appState.invItemsTotal = v.integer;
 
     InventoryEntry[] list;
     if (const(JSONValue)* items = "items" in msg)
@@ -1948,7 +1986,10 @@ private void applyInventoryReply(JSONValue msg)
                 list ~= entry;
         }
     }
-    appState.invItems = list;
+    if (stickers)
+        appState.invStickerItems = list;
+    else
+        appState.invItems = list;
 }
 
 /// Apply an `image` reply: decode into the image cache, or record failure.
