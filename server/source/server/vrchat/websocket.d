@@ -88,8 +88,8 @@ class VRCWebSocket
     /// Configure exponential reconnect backoff.
     ///
     /// `base` is the initial delay after a failed connect; the delay doubles
-    /// on each successive failure up to `max`, and resets to `base` after a
-    /// successful connect.
+    /// on each successive failure up to `max`, and resets to `base` once a
+    /// connection has stayed up for STABLE_CONNECTION.
     void setReconnectBackoff(Duration base, Duration max)
     {
         reconnectBase = base;
