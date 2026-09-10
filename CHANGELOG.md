@@ -1,16 +1,20 @@
 # CHANGELOG
 
-## 0.3.0
+## v0.3.0
 
 ### Client
 
 - Officially upgraded from SDL2 to SDL3.
 - Stickers are split into two groups: the ones you uploaded, and the exclusive
   ones VRChat handed out (inventory entries, so nothing to delete).
+- STUFF detail pages have a "Download Image" button: the original file (not the
+  thumbnail) is written to your Downloads folder, named after the entry.
 
 ### Web
 
 - Same split in the STICKERS section.
+- DOWNLOAD button on every STUFF entry with artwork, saving the original file
+  without going through the viewer first.
 
 ### API
 
@@ -18,7 +22,7 @@
 - APIv10 moves the notification inbox into the server: seeded from VRChat at startup and on every re-seed, kept current from the WebSocket, and `notifications` is re-broadcast to every client on change. A front-end connecting late still sees what arrived while nobody was watching.
 - APIv11 lets `get_inventory` be filtered by item type and capability flag, which is how the exclusive stickers are asked for apart from the props. The reply echoes the filter, since one endpoint now feeds two of a front-end's sections.
 
-## 0.2.0
+## v0.2.0
 
 Way too many things changed to list.
 
@@ -34,7 +38,7 @@ New things:
  - server: World cache DB persistence, additional WS logging, crash fixes
  - So, so many bug fixes.
 
-## 0.1.0
+## v0.1.0
 
 - Add DAP (Drop-A-Portal) integration.
 - Add support for setting status.
@@ -47,6 +51,6 @@ New things:
 - Rename "Debugging" to "Diagnostics" in client, tools section header.
 - Various improvements to server and client.
 
-## 0.0.1
+## v0.0.1
 
 Initial release.

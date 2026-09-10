@@ -1006,8 +1006,8 @@ function whenText(unix) {
    nothing. A file, version and size never change what they point at, so a
    cached URL never goes stale. */
 var imageURLs = {};
-/* What the proxy said each held picture is, for the one caller that has to
-   name a file: the viewer's save button. */
+/* What the proxy said each held picture is, for the callers that have to name
+   a file: the viewer's save button and the pane's download. */
 var imageTypes = {};
 /* Key -> the callbacks waiting on it. One fetch serves all of them, which is
    what stops a redraw mid-fetch from starting a second. */
@@ -1479,20 +1479,22 @@ function entryCard(entry, section) {
 
 function detailContent(body, entry, section) {
     var kind = sectionInfo(section).kind;
-    document.getElementById("detailTitle").textContent = entryName(entry, section);
+    var image = entryImage(entry, section);
+    var title = entryName(entry, section);
+    document.getElementById("detailTitle").textContent = title;
 
     // A print is a photograph and a gallery picture was uploaded to be looked
     // at; a card in a pane is not looking at either of them.
     var picture = thumb(entry, section, 512, true);
-    viewable(picture, entryImage(entry, section), entryName(entry, section), 512);
+    viewable(picture, image, title, 512);
     body.appendChild(picture);
 
-    if (kind === "item") detailItemBody(body, entry);
-    else if (kind === "print") detailPrintBody(body, entry);
-    else detailFileBody(body, entry, section);
+    if (kind === "item") detailItemBody(body, entry, image, title);
+    else if (kind === "print") detailPrintBody(body, entry, image, title);
+    else detailFileBody(body, entry, section, image, title);
 }
 
-function detailFileBody(body, file, section) {
+function detailFileBody(body, file, section, image, title) {
     var pills = el("div", "pills");
     if (file.extension)
         pills.appendChild(el("span", "pill", file.extension.replace(".", "").toUpperCase()));
@@ -1523,12 +1525,13 @@ function detailFileBody(body, file, section) {
         actions.appendChild(set);
     }
 
+    appendDownload(actions, image, title);
     appendDelete(actions, file.id, "delete_file", busy);
     actions.appendChild(copyButton("Copy file ID", file.id));
     body.appendChild(actions);
 }
 
-function detailPrintBody(body, print) {
+function detailPrintBody(body, print, image, title) {
     if (print.note) body.appendChild(el("div", "blurb", print.note));
 
     var kv = el("dl", "kv");
@@ -1540,12 +1543,13 @@ function detailPrintBody(body, print) {
     body.appendChild(kv);
 
     var actions = el("div", "actions");
+    appendDownload(actions, image, title);
     appendDelete(actions, print.id, "delete_print", pendingItems[print.id] === true);
     actions.appendChild(copyButton("Copy print ID", print.id));
     body.appendChild(actions);
 }
 
-function detailItemBody(body, item) {
+function detailItemBody(body, item, image, title) {
     var pills = el("div", "pills");
     if (item.itemTypeLabel || item.itemType)
         pills.appendChild(el("span", "pill", (item.itemTypeLabel || item.itemType).toUpperCase()));
@@ -1569,13 +1573,13 @@ function detailItemBody(body, item) {
     pair(kv, "Item ID", item.id);
     body.appendChild(kv);
 
-    body.appendChild(itemActions(item));
+    body.appendChild(itemActions(item, image, title));
 }
 
 /* Equip and unequip are both offered whenever the item can be equipped at all,
    rather than guessing which one applies: VRChat reports the slot, not whether
    the item is sitting in it, and both are one reversible tap. */
-function itemActions(item) {
+function itemActions(item, image, title) {
     var actions = el("div", "actions");
     var busy = pendingItems[item.id] === true;
     var slot = itemSlot(item);
@@ -1591,8 +1595,52 @@ function itemActions(item) {
                 return actionButton(item.id, "consume", "", label, false, busy);
             });
 
+    appendDownload(actions, image, title);
     actions.appendChild(copyButton("Copy item ID", item.id));
     return actions;
+}
+
+/* Keeping the file itself, without going through the viewer first. It asks the
+   proxy for size 0 the way the viewer does: everything the pane draws is a
+   thumbnail fitted to a box, so saving what is on screen would save a 512px
+   copy of a print. The bytes are usually already in hand from having opened it
+   once, and when they are not the button waits rather than saving the small
+   one. */
+function appendDownload(actions, picture, title) {
+    if (!picture) return;
+
+    var save = el("button", "act", "DOWNLOAD");
+    save.onclick = function () { downloadPicture(picture, title, save); };
+    actions.appendChild(save);
+}
+
+function downloadPicture(picture, title, button) {
+    var held = imageURLs[imageKey(picture.id, picture.version, 0)];
+    if (held) { saveImageURL(held, picture, title); return; }
+
+    // The pane is redrawn on every snapshot, so the button this started on may
+    // be gone by the time the bytes land; putting it back is harmless either
+    // way, and the save is not conditional on it.
+    var label = button.textContent;
+    button.disabled = true;
+    button.textContent = "FETCHING...";
+
+    imageThen(picture.id, picture.version, 0, function (url) {
+        button.disabled = false;
+        button.textContent = label;
+        if (url === null) {
+            showToast("That picture could not be fetched", true);
+            return;
+        }
+        saveImageURL(url, picture, title);
+    });
+}
+
+function saveImageURL(url, picture, title) {
+    var link = document.createElement("a");
+    link.href = url;
+    link.download = imageFileName(picture, title);
+    link.click();
 }
 
 function appendDelete(actions, id, action, busy) {
@@ -2607,10 +2655,7 @@ function saveViewer() {
         return;
     }
 
-    var link = document.createElement("a");
-    link.href = viewer.url;
-    link.download = viewerFileName();
-    link.click();
+    saveImageURL(viewer.url, viewer.picture, viewer.title);
 }
 
 var IMAGE_EXTENSIONS = {
@@ -2621,10 +2666,10 @@ var IMAGE_EXTENSIONS = {
 /* A display name is not a file name: it can hold a slash, and on Windows a
    colon or a quote. Everything but letters, digits, dots and dashes becomes an
    underscore, which leaves something recognisable and safe to write. */
-function viewerFileName() {
-    var mime = imageTypes[imageKey(viewer.picture.id, viewer.picture.version, 0)];
-    var name = viewer.title.replace(/[^\w.-]+/g, "_").replace(/^[_.]+/, "");
-    return (name || viewer.picture.id) + "." + (IMAGE_EXTENSIONS[mime] || "png");
+function imageFileName(picture, title) {
+    var mime = imageTypes[imageKey(picture.id, picture.version, 0)];
+    var name = (title || "").replace(/[^\w.-]+/g, "_").replace(/^[_.]+/, "");
+    return (name || picture.id) + "." + (IMAGE_EXTENSIONS[mime] || "png");
 }
 
 /* Make a picture on the page open in the viewer. The node keeps whatever it
