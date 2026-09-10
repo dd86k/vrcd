@@ -24,9 +24,15 @@ immutable Duration DEFAULT_RESEED_INTERVAL = dur!"hours"(2);
 /// Default base delay between VRChat WebSocket reconnect attempts.
 ///
 /// Used as the starting point for exponential backoff, which doubles on each
-/// successive failure up to DEFAULT_RECONNECT_MAX and resets on a successful
-/// connect.
-immutable Duration DEFAULT_RECONNECT_INTERVAL = dur!"seconds"(30);
+/// successive failure up to DEFAULT_RECONNECT_MAX and resets once a connection
+/// has stayed up (see STABLE_CONNECTION in server.vrchat.websocket).
+///
+/// The pipeline drops a connection after about two minutes no matter what is
+/// sent on it, so this delay is paid some thirty times an hour in normal
+/// operation rather than only during an outage: every second of it is a second
+/// of missed friend movement that costs a re-seed to recover. VRChat's own
+/// client carries `websocketQuickReconnectTime: 2` for the same reason.
+immutable Duration DEFAULT_RECONNECT_INTERVAL = dur!"seconds"(2);
 
 /// Cap on the reconnect backoff delay.
 immutable Duration DEFAULT_RECONNECT_MAX = dur!"minutes"(5);

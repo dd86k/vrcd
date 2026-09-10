@@ -258,7 +258,7 @@ Events arrive from VRChat's WebSocket, get parsed and enriched with display name
 ```
 
 - **Main thread** -- initializes all components, then idles
-- **WebSocket thread** -- persistent connection to `wss://pipeline.vrchat.cloud`, exponential reconnect backoff (30s base, doubling to a 5-min cap)
+- **WebSocket thread** -- persistent connection to `wss://pipeline.vrchat.cloud`, exponential reconnect backoff (2s base, doubling to a 5-min cap)
 - **TCP accept thread** -- listens for client connections
 - **Client threads** -- one per connected client, handles JSON-L protocol
 
@@ -381,8 +381,9 @@ VRChat authentication and session management.
 ### `vrchat/websocket.d`
 Persistent WebSocket connection to `wss://pipeline.vrchat.cloud`.
 
-- Background thread with automatic reconnection using exponential backoff (30s base, doubling to a 5-min cap; reset on a successful connect)
-- 30-second receive poll timeout. An idle timeout is treated as still-connected (libcurl answers ping/pong), not a disconnect
+- Background thread with automatic reconnection using exponential backoff (2s base, doubling to a 5-min cap; reset once a connection has stayed up a minute)
+- The pipeline drops a connection after roughly two minutes regardless of traffic, so reconnecting is routine rather than an outage response, and the base delay is kept short for that reason. Each reconnect re-seeds friend state to cover the gap
+- 30-second receive poll timeout. An idle timeout is treated as still-connected, not a disconnect; after a minute of silence a ping is sent, which probes for a half-open socket rather than keeping the connection alive
 - RFC 6455 close codes are logged and acted on: `1008` (policy violation) triggers re-auth like an HTTP 401/403, `1013` (try again later) jumps to the max backoff like a 429
 - Status callback for connection state changes
 - Token refresh support for re-authentication

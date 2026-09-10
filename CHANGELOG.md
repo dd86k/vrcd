@@ -16,9 +16,11 @@
 
 ### Server
 
-- Ping the VRChat WebSocket after a minute of silence. The connection was being
-  dropped after exactly two minutes without a byte in either direction, so a
-  quiet friends list meant reconnecting every 2.5 minutes all day.
+- Reconnect to the VRChat WebSocket after 2 seconds instead of 30.
+  The pipeline drops a connection after about two minutes no matter what is sent on it.
+- Ping the WebSocket after a minute of silence. This does not stop the two-minute
+  drop, nothing does. It keeps the read loop from sitting on a half-open
+  socket, which reads as connected forever otherwise.
 - Ignore SIGPIPE (POSIX): a front-end hanging up mid-response, or a dropped
   VRChat connection, could kill the daemon from inside an OpenSSL or libcurl
   write.

@@ -40,11 +40,13 @@ private enum Duration STABLE_CONNECTION = dur!"seconds"(60);
 
 /// How long the socket may stay silent before we ping it.
 ///
-/// Something between us and the pipeline drops a connection after exactly two
-/// minutes without a byte -- curl reports CURLE_GOT_NOTHING, no close frame --
-/// and neither end pings on its own, so a quiet friends list is what kills the
-/// connection. Half that leaves room for the ping to land late: the poll wakes
-/// every 30 seconds, so this is checked at that granularity.
+/// This is a liveness probe, not a keepalive. The pipeline drops a connection
+/// after about two minutes -- curl reports CURLE_GOT_NOTHING, no close frame --
+/// and putting bytes on the wire does not extend that, so the drop is not an
+/// idle timeout and reconnecting is the only answer to it. What the ping buys
+/// is a read loop that cannot sit forever on a half-open socket, where
+/// receive() reports `timedOut` indefinitely and only a send reports the
+/// failure. Checked at poll granularity (30 seconds).
 private enum Duration KEEPALIVE_IDLE = dur!"seconds"(60);
 
 /// Human-readable description for an RFC 6455 close code.
@@ -208,9 +210,9 @@ private:
                     case timedOut:
                         // No frame within the poll window. The VRChat pipeline can stay
                         // quiet for long stretches, so an idle timeout is not a
-                        // disconnect: ping to keep the socket from being reaped and
-                        // keep waiting. A ping that cannot be sent throws, which is the
-                        // reconnect path -- the socket is gone either way.
+                        // disconnect: probe the socket and keep waiting. A ping that
+                        // cannot be sent throws, which is the reconnect path -- the
+                        // socket is gone either way.
                         if (MonoTime.currTime - lastActivity >= KEEPALIVE_IDLE)
                         {
                             logDebugging("WS idle for %s, sending ping", MonoTime.currTime - lastActivity);
