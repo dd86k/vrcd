@@ -53,6 +53,10 @@ private enum long PROTOCOL_PROFILES = 7;
 /// than offering a SAVE that cannot work.
 private enum long PROTOCOL_PROFILE_EDIT = 8;
 
+/// Protocol version that added filtered inventory listings, which is how the
+/// exclusive stickers are asked for apart from the props in the inventory.
+private enum long PROTOCOL_INVENTORY_FILTER = 11;
+
 /// Byte budget for proxied images. Thumbnails run tens of kilobytes each, so
 /// this holds a few hundred of them; past that the oldest are dropped and
 /// re-fetched if they are looked at again.
@@ -262,6 +266,13 @@ struct ContentSnapshot
     /// side renders them and has no opinion about what a file is.
     JSONValue[] items;
     string error;
+    /// The stickers VRChat handed out, which are inventory items rather than
+    /// files: a second listing, drawn as a second group under the same section.
+    /// Empty for every other section. Its own loading flag and error, since
+    /// neither of the section's two answers should hold the other's list back.
+    JSONValue[] exclusive;
+    bool exclusiveLoading;
+    string exclusiveError;
 }
 
 /// Outcome of the most recent action on a piece of content: an equip, a
@@ -582,6 +593,11 @@ class ServerLink
         if (index < 0)
             return;
 
+        // Stickers come from two places: the files this account uploaded, and
+        // the ones VRChat handed out, which live in the inventory.
+        bool exclusive = section == "sticker"
+            && status().serverVersion >= PROTOCOL_INVENTORY_FILTER;
+
         bool ask;
         synchronized (stateMutex)
         {
@@ -596,6 +612,11 @@ class ServerLink
             {
                 sections[index].loading = true;
                 sections[index].error = null;
+                if (exclusive)
+                {
+                    sections[index].exclusiveLoading = true;
+                    sections[index].exclusiveError = null;
+                }
                 ++sections[index].revision;
                 ask = true;
             }
@@ -604,6 +625,16 @@ class ServerLink
 
         if (ask == false)
             return;
+
+        if (exclusive)
+        {
+            logInfo("Requesting exclusive stickers");
+            if (sendMessage(exclusiveStickerRequest()) == false)
+            {
+                failSection(index, "Not connected to vrcd-server");
+                return;
+            }
+        }
 
         logInfo("Requesting %s", section);
         if (sendMessage(sectionRequest(section, 0)))
@@ -1287,6 +1318,18 @@ private:
         }
     }
 
+    /// The message that fetches the stickers VRChat handed out: inventory
+    /// stickers minus the ones this account uploaded, which the files listing
+    /// already carries.
+    JSONValue exclusiveStickerRequest()
+    {
+        return JSONValue([
+            "type":      JSONValue("get_inventory"),
+            "types":     JSONValue("sticker"),
+            "not_flags": JSONValue("ugc"),
+        ]);
+    }
+
     /// Give up on a section that could not be asked for.
     void failSection(ptrdiff_t index, string error)
     {
@@ -1294,6 +1337,11 @@ private:
         {
             sections[index].loading = false;
             sections[index].error = error;
+            if (sections[index].exclusiveLoading)
+            {
+                sections[index].exclusiveLoading = false;
+                sections[index].exclusiveError = error;
+            }
             ++sections[index].revision;
         }
         notifyChange();
@@ -1787,7 +1835,13 @@ private:
             break;
 
         case "inventory":
-            applySection("inventory", message, "items", 0);
+            // Two of the page's sections are two listings of this one
+            // endpoint, and the echoed filter is what says which: the
+            // inventory asks unfiltered, the exclusive stickers by type.
+            if (jsonString(message, "types") == "sticker")
+                applyExclusiveStickers(message);
+            else
+                applySection("inventory", message, "items", 0);
             break;
 
         case "prints":
@@ -2218,6 +2272,41 @@ private:
             logInfo("%s: %d entries", section, entries.length);
     }
 
+    /// Fold the exclusive-sticker listing into the sticker section's second
+    /// group. Kept apart from `applySection` because it shares a section with
+    /// the files listing: neither reply may clear the other's list, its error,
+    /// or the paging the files half is doing.
+    void applyExclusiveStickers(ref JSONValue message)
+    {
+        ptrdiff_t index = contentSectionIndex("sticker");
+        string error = jsonString(message, "error");
+
+        JSONValue[] entries;
+        if (JSONValue *v = "items" in message)
+            if (v.type == JSONType.array)
+                entries = v.array;
+
+        synchronized (stateMutex)
+        {
+            sections[index].exclusiveLoading = false;
+            // A failed refresh keeps what is on screen, same as a section's.
+            if (error.length > 0)
+                sections[index].exclusiveError = error;
+            else
+            {
+                sections[index].exclusiveError = null;
+                sections[index].exclusive = entries;
+            }
+            ++sections[index].revision;
+        }
+        notifyChange();
+
+        if (error.length > 0)
+            logWarn("Could not fetch exclusive stickers: %s", error);
+        else
+            logInfo("Exclusive stickers: %d entries", entries.length);
+    }
+
     /// Fold one action reply into the last-action slot, then re-list whatever
     /// it changed: VRChat's own view has moved and nothing else says how.
     ///
@@ -2287,7 +2376,8 @@ private:
         if (content is null || content.type != JSONType.object)
             return;
 
-        string section = sectionForContentType(jsonString(*content, "contentType"));
+        string section = sectionForContentType(jsonString(*content, "contentType"),
+            jsonString(*content, "itemType"));
         if (section.length == 0)
             return;
 
@@ -2574,13 +2664,16 @@ private FeedEntry toFeedEntry(ref JSONValue message)
 /// Section a `content-refresh` event names, or null when it names something
 /// this front-end does not show. VRChat's own wording is the section name for
 /// four of the six.
-private string sectionForContentType(string contentType)
+///
+/// An inventory refresh also names the item's type, and a sticker landing there
+/// is one of the exclusives rather than an inventory entry.
+private string sectionForContentType(string contentType, string itemType)
 {
     switch (contentType)
     {
     case "gallery", "icon", "sticker", "emoji": return contentType;
     case "print", "prints":                     return "prints";
-    case "inventory":                           return "inventory";
+    case "inventory": return itemType == "sticker" ? "sticker" : "inventory";
     default:                                    return null;
     }
 }

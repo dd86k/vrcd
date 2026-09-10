@@ -168,6 +168,7 @@ string buildStateJSON(ServerLink link)
             "loading":     JSONValue(section.loading),
             "loaded":      JSONValue(section.loaded),
             "count":       JSONValue(cast(long)section.items.length),
+            "exclusive_count": JSONValue(cast(long)section.exclusive.length),
             "total_count": JSONValue(section.totalCount),
             "more":        JSONValue(section.more),
             "error":       JSONValue(section.error),
@@ -275,6 +276,12 @@ string buildContentJSON(ServerLink link, string name)
         "error":       JSONValue(section.error),
     ]);
     root["items"] = JSONValue(section.items);
+
+    // Present for every section so the page needs no special case; only the
+    // stickers ever have a second group in them.
+    root["exclusive"] = JSONValue(section.exclusive);
+    root["exclusive_loading"] = JSONValue(section.exclusiveLoading);
+    root["exclusive_error"] = JSONValue(section.exclusiveError);
     return root.toString();
 }
 

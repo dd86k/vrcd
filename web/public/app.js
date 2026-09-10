@@ -283,6 +283,13 @@ var SECTIONS = [
     { id: "inventory", label: "ITEMS",    kind: "item" }
 ];
 
+/* The stickers VRChat handed out rather than ones uploaded here. They are
+   inventory entries drawn as a second group inside STICKERS, so they are named
+   as a section wherever an entry's shape is asked for -- the card, the picture
+   and the detail pane all need to know what they are holding. Never a chip:
+   there is no listing of its own to switch to. */
+var EXCLUSIVE = { id: "exclusive", label: "EXCLUSIVE", kind: "item" };
+
 /* What each section is, and what VRChat will not accept there. Shown under the
    grid rather than on the upload button: it is worth reading once. The shape
    and format are what the crop frame is for, so they are stated as what a
@@ -291,7 +298,9 @@ var SECTION_HINTS = {
     gallery: "Your VRC+ gallery. Goes up as PNG, at most 2000x2000.",
     icon: "Profile icons. Goes up as PNG, at most 2000x2000. Setting one " +
           "needs VRC+.",
-    sticker: "Stickers you can drop in a world. Square PNG, at most 2000x2000.",
+    sticker: "Stickers you can drop in a world. Square PNG, at most 2000x2000. " +
+             "Exclusive ones are what VRChat handed out: inventory entries " +
+             "rather than files, so there is nothing to delete.",
     emoji: "Emoji you can play. Square PNG, at most 2000x2000. Animated emoji " +
            "upload as a sprite sheet, which this page cannot describe yet, so " +
            "they arrive as a still.",
@@ -390,7 +399,8 @@ var contentDirty = {};
 var contentRevisions = {};
 SECTIONS.forEach(function (section) {
     content[section.id] = { fetched: false, loading: false, loaded: false,
-                            more: false, error: "", total_count: 0, items: [] };
+                            more: false, error: "", total_count: 0, items: [],
+                            exclusive: [], exclusive_error: "" };
     contentRevisions[section.id] = -1;
 });
 
@@ -1228,6 +1238,7 @@ function thumb(entry, section, size, big) {
 /* -------------------------------------------------------------- stuff */
 
 function sectionInfo(id) {
+    if (id === EXCLUSIVE.id) return EXCLUSIVE;
     for (var i = 0; i < SECTIONS.length; i++)
         if (SECTIONS[i].id === id) return SECTIONS[i];
     return SECTIONS[0];
@@ -1265,7 +1276,8 @@ function entryDetail(entry, section) {
 }
 
 function findEntry(section, id) {
-    var items = content[section].items;
+    var items = section === EXCLUSIVE.id
+        ? (content.sticker.exclusive || []) : content[section].items;
     for (var i = 0; i < items.length; i++)
         if (items[i].id === id) return items[i];
     return null;
@@ -1292,10 +1304,29 @@ function sectionStatus(section) {
     // The inventory is the only section that reports a total, and vrcd-server
     // stops paging at 500, so the two can disagree.
     if (held.total_count > count) return count + " of " + held.total_count;
+
+    var extra = (held.exclusive || []).length;
+    if (extra > 0) return count + " + " + extra + " exclusive";
     return count + (count === 1 ? " entry" : " entries");
 }
 
 /* ------------------------------------------------------------ stuff list */
+
+function filterEntries(entries, section) {
+    return entries.filter(function (entry) {
+        return matches(entryName(entry, section)) ||
+               matches(entryDetail(entry, section)) ||
+               matches(entry.description);
+    });
+}
+
+function entryGrid(entries, section) {
+    var grid = el("div", "items");
+    entries.forEach(function (entry) {
+        grid.appendChild(entryCard(entry, section));
+    });
+    return grid;
+}
 
 function renderStuff(body) {
     var section = view.section;
@@ -1307,22 +1338,23 @@ function renderStuff(body) {
 
     if (held.error) body.appendChild(el("div", "err", held.error));
 
-    var items = held.items.filter(function (entry) {
-        return matches(entryName(entry, section)) ||
-               matches(entryDetail(entry, section)) ||
-               matches(entry.description);
-    });
+    var items = filterEntries(held.items, section);
+    var exclusive = filterEntries(held.exclusive || [], EXCLUSIVE.id);
+
+    // Headings appear only once there is a second group for the first to be
+    // told apart from, which is the stickers and nothing else.
+    var grouped = exclusive.length > 0 || (held.exclusive_error || "") !== "";
+    if (grouped) body.appendChild(el("div", "section", "Uploaded"));
 
     if (items.length === 0) {
-        var why = "Nothing in " + info.label.toLowerCase() + ".";
+        var why = grouped ? "Nothing uploaded."
+            : "Nothing in " + info.label.toLowerCase() + ".";
         if (held.fetched === false || held.loading) why = "Loading...";
         else if (view.filter) why = "Nothing matches that filter.";
         else if (held.error) why = "That section could not be fetched.";
         body.appendChild(placeholder(why));
     } else {
-        var grid = el("div", "items");
-        items.forEach(function (entry) { grid.appendChild(entryCard(entry, section)); });
-        body.appendChild(grid);
+        body.appendChild(entryGrid(items, section));
     }
 
     // Only the files sections page, and only when the last page came back
@@ -1332,6 +1364,14 @@ function renderStuff(body) {
         more.disabled = held.loading || contentInFlight[section] === true;
         more.onclick = function () { loadContent(section, "more"); };
         body.appendChild(more);
+    }
+
+    if (grouped) {
+        body.appendChild(el("div", "section", "Exclusive"));
+        if (held.exclusive_error)
+            body.appendChild(el("div", "err", held.exclusive_error));
+        else
+            body.appendChild(entryGrid(exclusive, EXCLUSIVE.id));
     }
 
     var hint = SECTION_HINTS[section];
@@ -1350,9 +1390,12 @@ function sectionSwitcher() {
     SECTIONS.forEach(function (section) {
         var chip = el("button", "chip" + (section.id === view.section ? " on" : ""),
             section.label);
-        var count = state.content && state.content[section.id];
-        if (count && count.loaded && count.count)
-            chip.appendChild(el("span", "n", String(count.count)));
+        var held = state.content && state.content[section.id];
+        // Both of the stickers' groups, since the chip stands for the whole
+        // section the way the switcher shows it.
+        var count = held ? held.count + (held.exclusive_count || 0) : 0;
+        if (held && held.loaded && count)
+            chip.appendChild(el("span", "n", String(count)));
         chip.onclick = function () { showSection(section.id); };
         row.appendChild(chip);
     });
@@ -1692,6 +1735,7 @@ function loadContent(section, mode) {
         if (!data) return;
         data.fetched = true;
         if (!data.items) data.items = [];
+        if (!data.exclusive) data.exclusive = [];
         content[section] = data;
         armedAction = "";
     }).catch(function () {
