@@ -21,6 +21,9 @@
 - Only re-seed after a WebSocket gap longer than 15 seconds. Reconnecting now
   takes two seconds, so re-seeding on every reconnect was some thirty full REST
   passes an hour to recover a gap that rarely spans an event.
+- Re-seed friend state every 30 minutes instead of every 2 hours. It is now the
+  only re-seed in normal operation, so it also bounds how long a friend can sit
+  at a stale location after an event lost inside a reconnect gap.
 - Ignore SIGPIPE (POSIX): a front-end hanging up mid-response, or a dropped
   VRChat connection, could kill the daemon from inside an OpenSSL or libcurl
   write.

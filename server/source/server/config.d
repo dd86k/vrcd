@@ -18,8 +18,15 @@ immutable string USER_AGENT = "vrcd/" ~ VERSION;
 ///
 /// This variable dictates how often to re-fetch all friends from the VRChat API.
 ///
+/// This is the only re-seed in normal operation: a reconnect re-seeds only when
+/// the gap ran past RESEED_GAP_THRESHOLD, and the pipeline's routine two-minute
+/// drop is recovered from in a couple of seconds. So it also bounds how long a
+/// friend can sit at a stale location after an event lost inside one of those
+/// gaps -- rare, and usually corrected by that friend's next event, but nothing
+/// else catches the friend who goes quiet right after.
+///
 /// Used in config and api.
-immutable Duration DEFAULT_RESEED_INTERVAL = dur!"hours"(2);
+immutable Duration DEFAULT_RESEED_INTERVAL = dur!"minutes"(30);
 
 /// Default base delay between VRChat WebSocket reconnect attempts.
 ///
