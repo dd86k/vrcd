@@ -990,10 +990,16 @@ int main(string[] args)
     
     // Useless: [ddcurl.utils:35] data=74DF5C6EE6ED size=105
     logSetModuleLevel("ddcurl.utils", LogLevel.none);
-    // Useless: [ddcurl.websocket:86] curl_ws_recv: code=0 curl_ws_frame { age=0 flags=1 offset=0 left=0 len=2976 }
-    logSetModuleLevel("ddcurl.websocket", LogLevel.none);
-    // Redundant with server.main module logging info
-    logSetModuleLevel("server.vrchat.websocket", LogLevel.none);
+    // Noise at rest: [ddcurl.websocket:86] curl_ws_recv: code=0 curl_ws_frame
+    // { age=0 flags=1 offset=0 left=0 len=2976 }. Kept under --verbose anyway:
+    // `flags` is the only place the frame *kind* is visible, since ddcurl's
+    // WebSocketMessage carries a status and a close code but not the opcode.
+    logSetModuleLevel("ddcurl.websocket", config.verbose ? LogLevel.trace : LogLevel.none);
+    // Do NOT mute this module: server.main only logs the two transitions,
+    // never why. Close codes, handshake HTTP status, curl errors and the
+    // backoff decision are all reported from here, and a muted module is how
+    // a flapping connection reads as a clean log.
+    logSetModuleLevel("server.vrchat.websocket", config.verbose ? LogLevel.debugging : LogLevel.info);
     // Useless: [server.api:473] sendLine: len=16
     // The other two offenders (per-message dispatch and "pong received") no
     // longer fire for ping/pong at all, so only the trace level needs capping.
