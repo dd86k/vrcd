@@ -5,7 +5,7 @@
 module server.vrchat.websocket;
 
 import core.thread;
-import core.time : dur, Duration;
+import core.time : dur, Duration, MonoTime;
 
 import ddlogger;
 import ddcurl;
@@ -33,6 +33,10 @@ private enum : ushort
     CLOSE_POLICY_VIOLATION = 1008, // Token rejected: re-auth and reconnect.
     CLOSE_TRY_AGAIN_LATER  = 1013, // Explicit back-off request: go to max delay.
 }
+
+/// How long a connection has to stay up before it counts as a good one and
+/// the reconnect backoff is allowed to reset.
+private enum Duration STABLE_CONNECTION = dur!"seconds"(60);
 
 /// Human-readable description for an RFC 6455 close code.
 /// A zero code means the peer closed without sending one.
@@ -143,11 +147,12 @@ private:
     {
         while (running)
         {
+            MonoTime connectedAt; // .init until the handshake goes through
+
             try
             {
                 connect();
-                logInfo("WebSocket connected");
-                reconnectDelay = reconnectBase; // reset backoff on success
+                connectedAt = MonoTime.currTime;
                 notifyStatus(true, "");
 
                 bool reconnectNow; // Skip backoff and reconnect immediately (e.g. after re-auth).
@@ -245,8 +250,16 @@ private:
                 notifyStatus(false, e.msg);
             }
 
+            // A handshake that goes through is not a working connection. Reset
+            // the backoff only once one has stayed up, or a socket VRChat drops
+            // on sight reconnects at the base interval forever -- every attempt
+            // "succeeds" -- and the status line flaps at that rate.
+            if (connectedAt != MonoTime.init && MonoTime.currTime - connectedAt >= STABLE_CONNECTION)
+                reconnectDelay = reconnectBase;
+
             // Exponential backoff to try going around network outages
-            logInfo("Reconnecting in %s...", reconnectDelay);
+            logInfo("Reconnecting in %s (last connection lasted %s)...", reconnectDelay,
+                connectedAt != MonoTime.init ? MonoTime.currTime - connectedAt : Duration.zero);
             Thread.sleep(reconnectDelay);
             reconnectDelay = reconnectDelay * 2;
             if (reconnectDelay > reconnectMax)
