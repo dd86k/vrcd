@@ -136,8 +136,34 @@ exec "${HERE}/usr/bin/vrcd_client" "$@"
 EOF
 chmod +x "${APPDIR}/AppRun"
 
+# appimagetool fetches the type-2 runtime from a release asset at packaging
+# time and gives up on the first failure, so an upstream hiccup (a 500, a
+# rate limit) fails a build that is otherwise complete. Fetch it here instead:
+# curl retries, and the result is kept so later runs need no network at all.
+RUNTIME="${APPIMAGE_RUNTIME_FILE:-${SCRIPT_DIR}/packaging/deps/cache/runtime-x86_64}"
+if [[ ! -s "${RUNTIME}" ]]; then
+    echo "==> Fetching AppImage runtime..."
+    mkdir -p "$(dirname "${RUNTIME}")"
+    if ! curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors --connect-timeout 20 \
+        -o "${RUNTIME}.part" \
+        https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-x86_64
+    then
+        rm -f "${RUNTIME}.part"
+        echo "error: could not download the AppImage runtime" >&2
+        echo "  download it manually and pass APPIMAGE_RUNTIME_FILE=/path/to/runtime-x86_64" >&2
+        exit 1
+    fi
+    # A forge error page served as the asset would be saved just as happily.
+    if [[ "$(head -c 4 "${RUNTIME}.part")" != $'\x7fELF' ]]; then
+        rm -f "${RUNTIME}.part"
+        echo "error: downloaded AppImage runtime is not an ELF binary" >&2
+        exit 1
+    fi
+    mv "${RUNTIME}.part" "${RUNTIME}"
+fi
+
 echo "==> Packaging AppImage..."
-ARCH=x86_64 run_tool appimagetool "${APPDIR}" "${WORKDIR}/out.AppImage"
+ARCH=x86_64 run_tool appimagetool --runtime-file "${RUNTIME}" "${APPDIR}" "${WORKDIR}/out.AppImage"
 
 echo "==> Copying result to ${OUTPUT}..."
 cp "${WORKDIR}/out.AppImage" "${OUTPUT}"
