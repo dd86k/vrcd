@@ -57,6 +57,27 @@ bool isImageTag(string tag)
     return false;
 }
 
+/// Item types accepted by the GET /inventory filters.
+immutable string[] INVENTORY_TYPES = [ "bundle", "droneskin", "emoji",
+    "portalskin", "prop", "sticker", "warpeffect" ];
+
+/// Capability flags accepted by the GET /inventory filters.
+immutable string[] INVENTORY_FLAGS = [ "archivable", "cloneable", "consumable",
+    "equippable", "instantiatable", "trashable", "ugc", "unique" ];
+
+/// Filters for one inventory listing, as comma-separated lists.
+///
+/// Each one is handed to VRChat *and* applied again to what comes back: a
+/// filter the endpoint quietly ignores widens the listing instead of failing,
+/// and the caller would show the wrong set without ever hearing about it.
+struct InventoryFilter
+{
+    string types;
+    string notTypes;
+    string notFlags;
+    bool archived;
+}
+
 /// Whether this is a valid inventory equip slot name.
 bool isEquipSlot(string slot)
 {
@@ -159,27 +180,38 @@ class ContentService
         return prints;
     }
 
-    /// List own inventory items (props, bundles, drone/portal skins, ...).
-    /// Pages through the endpoint up to a sane cap. Throws on failure.
-    /// Emoji and stickers are excluded here: they have their own STUFF
-    /// sections sourced from the files endpoint, so the Items view only
-    /// shows true inventory items.
+    /// List own inventory items (props, bundles, skins, exclusive stickers).
+    /// Pages through the endpoint up to a sane cap. Throws on failure or on a
+    /// filter value VRChat does not define.
     /// Params:
-    ///   archived = Include archived items instead of active ones.
-    ///   totalCount = Receives the server-reported total.
-    JSONValue listInventory(bool archived, out long totalCount)
+    ///   filter = What to include; see `InventoryFilter`.
+    ///   totalCount = Receives the server-reported total for the filter, which
+    ///                counts what VRChat matched rather than what survives the
+    ///                second pass here.
+    JSONValue listInventory(InventoryFilter filter, out long totalCount)
     {
         enum int PAGE_SIZE = 100;
         enum int MAX_ITEMS = 500;
+
+        validateFilterList(filter.types, INVENTORY_TYPES, "type");
+        validateFilterList(filter.notTypes, INVENTORY_TYPES, "type");
+        validateFilterList(filter.notFlags, INVENTORY_FLAGS, "flag");
+
+        string query;
+        if (filter.types.length)
+            query ~= "&types=" ~ filter.types;
+        if (filter.notTypes.length)
+            query ~= "&notTypes=" ~ filter.notTypes;
+        if (filter.notFlags.length)
+            query ~= "&notFlags=" ~ filter.notFlags;
 
         JSONValue items = JSONValue.emptyArray;
         int offset;
         while (true)
         {
             string path = "/inventory?n=" ~ PAGE_SIZE.to!string ~
-                "&offset=" ~ offset.to!string ~
-                "&notTypes=emoji,sticker" ~
-                "&inventoryItemArchived=" ~ (archived ? "true" : "false");
+                "&offset=" ~ offset.to!string ~ query ~
+                "&inventoryItemArchived=" ~ (filter.archived ? "true" : "false");
             JSONValue page = getJSON(path);
 
             JSONValue[] data;
@@ -189,7 +221,8 @@ class ContentService
                 totalCount = v.integer;
 
             foreach (ref JSONValue item; data)
-                items.array ~= trimInventoryItem(item);
+                if (passesFilter(item, filter))
+                    items.array ~= trimInventoryItem(item);
 
             offset += cast(int) data.length;
             if (data.length < PAGE_SIZE || offset >= totalCount || offset >= MAX_ITEMS)
@@ -665,6 +698,64 @@ private:
     }
 }
 
+/// Whether a comma-separated list names this value.
+private bool listHas(string list, string value)
+{
+    import std.algorithm.iteration : splitter;
+
+    foreach (string entry; list.splitter(','))
+        if (entry == value)
+            return true;
+    return false;
+}
+
+/// Reject a filter value VRChat has no name for. The values land in a query
+/// string, so this doubles as an injection guard.
+private void validateFilterList(string list, immutable string[] vocabulary,
+    string what)
+{
+    import std.algorithm.iteration : splitter;
+
+    if (list.length == 0)
+        return;
+    foreach (string value; list.splitter(','))
+    {
+        bool known;
+        foreach (string candidate; vocabulary)
+            if (candidate == value)
+            {
+                known = true;
+                break;
+            }
+        if (known == false)
+            throw new Exception("Invalid inventory " ~ what ~ ": " ~ value);
+    }
+}
+
+/// Whether an item survives the filters it was fetched under. See
+/// `InventoryFilter` for why this is checked a second time.
+private bool passesFilter(ref const(JSONValue) item, ref const(InventoryFilter) filter)
+{
+    string itemType;
+    if (const(JSONValue)* v = "itemType" in item)
+        if (v.type == JSONType.string)
+            itemType = v.str;
+
+    if (filter.types.length && listHas(filter.types, itemType) == false)
+        return false;
+    if (filter.notTypes.length && listHas(filter.notTypes, itemType))
+        return false;
+    if (filter.notFlags.length)
+    {
+        if (const(JSONValue)* v = "flags" in item)
+            if (v.type == JSONType.array)
+                foreach (ref const(JSONValue) flag; v.array)
+                    if (flag.type == JSONType.string && listHas(filter.notFlags, flag.str))
+                        return false;
+    }
+    return true;
+}
+
 //
 // Trimming: pass only what the client renders, not the whole wire object.
 //
@@ -914,6 +1005,31 @@ unittest
     assert(isValidFileId("file_") == false);
     assert(isValidFileId("file_../etc/passwd") == false);
     assert(isValidFileId("file_a/b") == false);
+}
+
+unittest
+{
+    InventoryFilter exclusive = InventoryFilter("sticker", null, "ugc");
+
+    JSONValue given = parseJSON(`{"itemType":"sticker","flags":["instantiatable"]}`);
+    assert(passesFilter(given, exclusive));
+
+    JSONValue own = parseJSON(`{"itemType":"sticker","flags":["ugc"]}`);
+    assert(passesFilter(own, exclusive) == false);
+
+    JSONValue prop = parseJSON(`{"itemType":"prop","flags":[]}`);
+    assert(passesFilter(prop, exclusive) == false);
+
+    InventoryFilter items = InventoryFilter(null, "emoji,sticker");
+    assert(passesFilter(prop, items));
+    assert(passesFilter(given, items) == false);
+
+    validateFilterList("emoji,sticker", INVENTORY_TYPES, "type");
+    validateFilterList("ugc", INVENTORY_FLAGS, "flag");
+    bool threw;
+    try validateFilterList("sticker&n=1", INVENTORY_TYPES, "type");
+    catch (Exception) threw = true;
+    assert(threw);
 }
 
 unittest

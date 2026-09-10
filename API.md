@@ -41,7 +41,7 @@ Authentication uses a shared secret token. If the server's secret is empty, auth
 
 **Success:**
 ```json
-{"type": "auth_ok", "server_version": 9}
+{"type": "auth_ok", "server_version": 11}
 ```
 
 Protocol versions:
@@ -54,6 +54,8 @@ Protocol versions:
 - `7` = adds full user profiles (`get_user`) and badge art (`get_badge_image`).
 - `8` = adds profile editing (`set_profile`)
 - `9` = bounds catch-up (`catch_up` takes a `limit`, `caught_up` reports a gap)
+- `10` = server-side notification inbox (`notifications` re-broadcast on change, `get_notifications` answered from it)
+- `11` = filtered inventory listings (`get_inventory` takes `types`, `not_types` and `not_flags`; `inventory` echoes them)
 
 **Failure:**
 ```json
@@ -280,12 +282,21 @@ Request the logged-in user's prints. Server replies with `prints` (single page, 
 
 ### `get_inventory`
 
-Request the logged-in user's inventory items (props, bundles, drone/portal skins, warp effects). Emoji and stickers are excluded, since they have their own sections sourced from the files endpoint. The server pages through VRChat's inventory API (up to 500 items) and replies with `inventory`.
+Request the logged-in user's inventory items (props, bundles, drone/portal skins, warp effects). The server pages through VRChat's inventory API (up to 500 items) and replies with `inventory`.
 
-| Field      | Type   | Description                              |
-|------------|--------|------------------------------------------|
-| `type`     | string | `"get_inventory"`                        |
-| `archived` | bool   | Optional. Return archived items instead  |
+| Field       | Type   | Description                                                     |
+|-------------|--------|-----------------------------------------------------------------|
+| `type`      | string | `"get_inventory"`                                               |
+| `types`     | string | Optional. Comma-separated item types to include (v11)            |
+| `not_types` | string | Optional. Comma-separated item types to exclude (v11)            |
+| `not_flags` | string | Optional. Comma-separated capability flags to exclude (v11)      |
+| `archived`  | bool   | Optional. Return archived items instead                          |
+
+Item types are `bundle`, `droneskin`, `emoji`, `portalskin`, `prop`, `sticker` and `warpeffect`; flags are `archivable`, `cloneable`, `consumable`, `equippable`, `instantiatable`, `trashable`, `ugc` and `unique`. Anything else is refused as an error. Each filter is passed to VRChat *and* applied again to the reply, since a filter the endpoint ignores would widen the listing rather than fail.
+
+A request with none of the three filters means the Items view and defaults to `not_types=emoji,sticker`: emoji and stickers have their own sections, sourced from the files endpoint. That default is what a front-end older than these fields gets.
+
+The exclusive stickers — the ones VRChat handed out rather than ones this account uploaded — are `types=sticker` with `not_flags=ugc`, since an uploaded sticker also has an inventory entry, flagged `ugc`, alongside the file the files listing carries.
 
 ### `get_inventory_drops`
 
@@ -420,7 +431,7 @@ Authentication succeeded.
 | Field            | Type   | Description              |
 |------------------|--------|--------------------------|
 | `type`           | string | `"auth_ok"`              |
-| `server_version` | int    | Protocol version (currently 9) |
+| `server_version` | int    | Protocol version (currently 11) |
 
 ### `auth_error`
 
@@ -791,13 +802,18 @@ Each print entry:
 
 Reply to `get_inventory`.
 
-| Field         | Type   | Description                                 |
-|---------------|--------|---------------------------------------------|
-| `type`        | string | `"inventory"`                               |
-| `archived`    | bool   | Whether archived items were requested       |
-| `total_count` | long   | Total items VRChat reports for this filter  |
-| `items`       | array  | Inventory entries (empty on failure)        |
-| `error`       | string | Error description (present only on failure) |
+| Field         | Type   | Description                                          |
+|---------------|--------|------------------------------------------------------|
+| `type`        | string | `"inventory"`                                        |
+| `archived`    | bool   | Whether archived items were requested                |
+| `types`       | string | Filter asked for, echoed (v11)                       |
+| `not_types`   | string | Filter asked for, echoed (v11)                       |
+| `not_flags`   | string | Filter asked for, echoed (v11)                       |
+| `total_count` | long   | Total items VRChat reports for this filter           |
+| `items`       | array  | Inventory entries (empty on failure)                 |
+| `error`       | string | Error description (present only on failure)          |
+
+The filter is echoed because a front-end draws two sections out of this one endpoint (its items and its exclusive stickers), and nothing else in the reply says which of them it answers.
 
 Each inventory entry:
 

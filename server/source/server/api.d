@@ -43,8 +43,10 @@ import vrcd.notifications;
 /// 8 = profile editing (`set_profile`),
 /// 9 = bounded catch-up (`catch_up` takes a `limit`, `caught_up` reports a gap),
 /// 10 = server-side inbox (`notifications` re-broadcast on change,
-/// `get_notifications` answered from it).
-private enum int PROTOCOL_VERSION = 10;
+/// `get_notifications` answered from it),
+/// 11 = filtered inventory listings (`get_inventory` takes `types`,
+/// `not_types` and `not_flags`; `inventory` echoes them).
+private enum int PROTOCOL_VERSION = 11;
 
 /// Shortest gap between two re-seed passes. A pass paginates the whole
 /// friends list, so this is what keeps a reconnect storm -- or somebody
@@ -2830,18 +2832,41 @@ private class ClientHandler
 
     void handleGetInventory(JSONValue msg)
     {
-        bool archived;
+        InventoryFilter filter;
+        if (const(JSONValue)* v = "types" in msg)
+            if (v.type == JSONType.string)
+                filter.types = v.str;
+        if (const(JSONValue)* v = "not_types" in msg)
+            if (v.type == JSONType.string)
+                filter.notTypes = v.str;
+        if (const(JSONValue)* v = "not_flags" in msg)
+            if (v.type == JSONType.string)
+                filter.notFlags = v.str;
         if (const(JSONValue)* v = "archived" in msg)
-            archived = v.type == JSONType.true_;
+            filter.archived = v.type == JSONType.true_;
 
+        // An unfiltered request is the Items view, which VRChat's emoji and
+        // stickers do not belong in: those have sections of their own, sourced
+        // from the files endpoint. Still the default, so a front-end older
+        // than these fields gets the listing it has always got.
+        if (filter.types.length == 0 && filter.notTypes.length == 0
+            && filter.notFlags.length == 0)
+            filter.notTypes = "emoji,sticker";
+
+        // The filter is echoed because two of a front-end's sections are two
+        // listings of this one endpoint, and nothing else in the reply says
+        // which of them it answers.
         JSONValue resp = JSONValue([
             "type": JSONValue("inventory"),
-            "archived": JSONValue(archived),
+            "archived": JSONValue(filter.archived),
+            "types": JSONValue(filter.types),
+            "not_types": JSONValue(filter.notTypes),
+            "not_flags": JSONValue(filter.notFlags),
         ]);
         try
         {
             long totalCount;
-            resp["items"] = requireContent().listInventory(archived, totalCount);
+            resp["items"] = requireContent().listInventory(filter, totalCount);
             resp["total_count"] = JSONValue(totalCount);
         }
         catch (Exception e)
