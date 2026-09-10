@@ -2887,23 +2887,30 @@ private void drawInventoryDetailPage(mu_Context* ctx, AppState* state, int scrol
     bool asItem = state.invSection == InvSection.items
         || (state.invSection == InvSection.stickers && state.invStickerItemSelected);
 
-    // Resolve the selected entry's image reference per section.
+    // Resolve the selected entry's image reference per section, plus what to
+    // call it in a saved file.
     string fileId;
     long fileVersion;
+    string entryName;
     if (asItem)
     {
         fileId = state.selectedInvItem.imageFileId;
         fileVersion = state.selectedInvItem.imageVersion;
+        entryName = state.selectedInvItem.name;
     }
     else if (state.invSection == InvSection.prints)
     {
         fileId = state.selectedInvPrint.fileId;
         fileVersion = state.selectedInvPrint.fileVersion;
+        entryName = state.selectedInvPrint.note.length > 0
+            ? state.selectedInvPrint.note
+            : state.selectedInvPrint.worldName;
     }
     else
     {
         fileId = state.selectedInvFile.fileId;
         fileVersion = state.selectedInvFile.fileVersion;
+        entryName = state.selectedInvFile.name;
     }
 
     // Full image (size 0 = original file), letterboxed into a tall row.
@@ -2951,6 +2958,7 @@ private void drawInventoryDetailPage(mu_Context* ctx, AppState* state, int scrol
             if (clickButton(ctx, "Clear Profile Icon") && state.invActionInFlight == false)
                 state.pendingContentActions ~= ContentAction("set_icon", "");
         }
+        drawDownloadButton(ctx, state, fileId, fileVersion, entryName);
         drawDeleteButton(ctx, state, "delete_file", state.selectedInvFile.fileId);
         break;
 
@@ -2974,6 +2982,7 @@ private void drawInventoryDetailPage(mu_Context* ctx, AppState* state, int scrol
         clickableValue(ctx, state, state.selectedInvPrint.printId);
 
         spacer(ctx);
+        drawDownloadButton(ctx, state, fileId, fileVersion, entryName);
         drawDeleteButton(ctx, state, "delete_print", state.selectedInvPrint.printId);
         break;
 
@@ -3022,6 +3031,9 @@ private void drawInventoryDetailPage(mu_Context* ctx, AppState* state, int scrol
                 state.pendingContentActions ~= ContentAction("consume",
                     state.selectedInvItem.id);
         }
+        // An item has nothing to delete, so this is the end of the row rather
+        // than the step before it.
+        drawDownloadButton(ctx, state, fileId, fileVersion, entryName);
         break;
     }
 
@@ -3032,6 +3044,39 @@ private void drawInventoryDetailPage(mu_Context* ctx, AppState* state, int scrol
     }
 
     mu_end_panel(ctx);
+}
+
+/// Keeping the file itself, offered beside the section's own actions rather
+/// than under the picture: the entry's name and tags are worth reading as one
+/// block, and a button in the middle of them splits it.
+private void drawDownloadButton(mu_Context* ctx, AppState* state, string fileId,
+    long fileVersion, const(char)[] name)
+{
+    static immutable int[1] fullCol = [-1];
+
+    if (fileId.length == 0 || fileVersion <= 0)
+        return;
+
+    mu_layout_row(ctx, 1, fullCol.ptr, 60);
+    if (clickButton(ctx, "Download Image"))
+        downloadInventoryImage(state, fileId, fileVersion, name);
+}
+
+/// Write the shown image into the user's Downloads folder, saying where it
+/// went in the status bar. The bytes come from the disk cache the detail view
+/// already filled, so nothing is fetched here; a picture still on its way has
+/// nothing to save yet.
+private void downloadInventoryImage(AppState* state, string fileId, long fileVersion,
+    const(char)[] name)
+{
+    import client.directories : userDownloadsDir;
+    import client.imagecache : exportCachedImage;
+
+    string saved = exportCachedImage(imageKey(fileId, fileVersion, 0), name,
+        userDownloadsDir());
+    setStatusFlash(state, saved.length > 0
+        ? "  Saved to " ~ saved
+        : "  Image is still loading", 4000);
 }
 
 /// Two-tap delete button (non-aligned confirm; see confirmButton).

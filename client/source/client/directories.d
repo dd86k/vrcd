@@ -59,6 +59,71 @@ string vrcdAppDataPath(string filename = null)
     }
 }
 
+/// Return the folder the client writes files it saves for the user into
+/// (inventory artwork, ...). Never null: when the platform cannot answer,
+/// the conventional location under the home directory is used.
+string userDownloadsDir()
+{
+    version (Windows)
+    {
+        string known = knownFolderPath(FOLDERID_Downloads);
+        if (known)
+            return known;
+        logWarn("directories: SHGetKnownFolderPath(Downloads) failed, falling back to USERPROFILE");
+        return buildPath(environment.get("USERPROFILE", "."), "Downloads");
+    }
+    else version (linux)
+    {
+        // The folder is localised and can be moved, so XDG's own answer wins
+        // over the English default.
+        string configured = environment.get("XDG_DOWNLOAD_DIR");
+        if (configured is null)
+            configured = xdgUserDir("XDG_DOWNLOAD_DIR");
+        return configured ? configured : expandTilde("~/Downloads");
+    }
+}
+
+version (linux)
+/// Read one entry out of XDG's user-dirs.dirs, which writes paths relative to
+/// `$HOME`. Null when the file or the key is absent.
+private string xdgUserDir(string key)
+{
+    import std.algorithm.searching : startsWith;
+    import std.string : splitLines, strip;
+
+    string configHome = environment.get("XDG_CONFIG_HOME");
+    if (configHome is null)
+        configHome = expandTilde("~/.config");
+
+    string path = buildPath(configHome, "user-dirs.dirs");
+    if (exists(path) == false)
+        return null;
+
+    string content;
+    try
+        content = readText(path);
+    catch (Exception e)
+    {
+        logWarn("directories: failed to read %s: %s", path, e.msg);
+        return null;
+    }
+
+    foreach (string line; content.splitLines())
+    {
+        string entry = line.strip();
+        if (entry.startsWith(key ~ "=") == false)
+            continue;
+
+        string value = entry[key.length + 1 .. $].strip();
+        if (value.length >= 2 && value[0] == '"' && value[$ - 1] == '"')
+            value = value[1 .. $ - 1];
+        if (value.startsWith("$HOME"))
+            value = environment.get("HOME", "~") ~ value["$HOME".length .. $];
+        return value.length > 0 ? value : null;
+    }
+    return null;
+}
+
 //
 // VRChat paths
 //
@@ -229,6 +294,10 @@ pragma(lib, "advapi32");
 // FOLDERID_Pictures: {33E28130-4E1E-4676-835A-98395C3BC3BB}
 private static immutable GUID FOLDERID_Pictures =
     GUID(0x33E28130, 0x4E1E, 0x4676, [0x83, 0x5A, 0x98, 0x39, 0x5C, 0x3B, 0xC3, 0xBB]);
+
+// FOLDERID_Downloads: {374DE290-123F-4565-9164-39C4925E467B}
+private static immutable GUID FOLDERID_Downloads =
+    GUID(0x374DE290, 0x123F, 0x4565, [0x91, 0x64, 0x39, 0xC4, 0x92, 0x5E, 0x46, 0x7B]);
 
 private extern (Windows) @nogc nothrow
 {
