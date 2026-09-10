@@ -5,7 +5,7 @@
 module server.main;
 
 import core.sync.mutex : Mutex;
-import core.time : MonoTime;
+import core.time : MonoTime, Duration, dur;
 
 import std.getopt;
 import std.json;
@@ -234,6 +234,19 @@ void cmdRun(ref Config config)
     // re-seed via APIServer.requestReseed().
     shared bool wsSeenFirstConnect = false;
 
+    // When the socket last dropped, so a reconnect can tell a real outage from
+    // the pipeline's routine two-minute cycle. Not shared: the WS layer runs
+    // its status callback from the one receive thread.
+    MonoTime wsDisconnectedAt;
+
+    // A reconnect this quick lost no meaningful friend movement, so the
+    // re-seed it would trigger is a full REST pass bought for nothing. The
+    // pipeline drops the socket every two minutes no matter what is sent on
+    // it, and reconnecting takes a couple of seconds, so re-seeding on every
+    // connect means some thirty passes an hour to recover a gap that rarely
+    // spans an event. A real outage is longer than this by orders of magnitude.
+    enum Duration RESEED_GAP_THRESHOLD = dur!"seconds"(15);
+
     // WebSocket event listener and callback.
     //
     // Orchestrates: enrich -> tracker -> (maybe suppress raw) -> store/broadcast
@@ -379,19 +392,33 @@ void cmdRun(ref Config config)
         apiServer.setVRChatStatus(connected, lastError);
         store.logConnection(connected ? "connected" : "disconnected");
 
-        if (connected)
+        if (connected == false)
         {
-            // Skip the very first connect; it's the initial startup
-            // handshake right after we already seeded inline above.
-            if (wsSeenFirstConnect == false)
-            {
-                wsSeenFirstConnect = true;
-                return;
-            }
-            // Reconnect after a disconnect window: refresh friend state
-            // since events fired during the gap are lost.
-            apiServer.requestReseed();
+            wsDisconnectedAt = MonoTime.currTime;
+            return;
         }
+
+        // Skip the very first connect; it's the initial startup
+        // handshake right after we already seeded inline above.
+        if (wsSeenFirstConnect == false)
+        {
+            wsSeenFirstConnect = true;
+            return;
+        }
+
+        // Reconnect after a disconnect window: refresh friend state
+        // since events fired during the gap are lost. A gap short enough
+        // to have lost nothing is not worth a REST pass.
+        Duration gap = wsDisconnectedAt != MonoTime.init
+            ? MonoTime.currTime - wsDisconnectedAt : Duration.max;
+        if (gap < RESEED_GAP_THRESHOLD)
+        {
+            logDebugging("WS gap was %s, skipping re-seed", gap);
+            return;
+        }
+
+        logInfo("WS gap was %s, re-seeding", gap);
+        apiServer.requestReseed();
     });
     // Shared re-auth. authenticate() runs unguarded (as before) so a headless
     // 2FA prompt can't stall other API work; only the cookie flush is taken

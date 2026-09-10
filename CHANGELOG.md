@@ -18,9 +18,9 @@
 
 - Reconnect to the VRChat WebSocket after 2 seconds instead of 30.
   The pipeline drops a connection after about two minutes no matter what is sent on it.
-- Ping the WebSocket after a minute of silence. This does not stop the two-minute
-  drop, nothing does. It keeps the read loop from sitting on a half-open
-  socket, which reads as connected forever otherwise.
+- Only re-seed after a WebSocket gap longer than 15 seconds. Reconnecting now
+  takes two seconds, so re-seeding on every reconnect was some thirty full REST
+  passes an hour to recover a gap that rarely spans an event.
 - Ignore SIGPIPE (POSIX): a front-end hanging up mid-response, or a dropped
   VRChat connection, could kill the daemon from inside an OpenSSL or libcurl
   write.
