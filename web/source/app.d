@@ -159,8 +159,17 @@ int main(string[] args)
     /// it does not, so handlers can simply return after a false.
     bool authorized(ref HTTPRequest req, bool isApi)
     {
-        if (sessions.validSession(sessionFromCookies(req.header("Cookie"))))
+        string token = sessionFromCookies(req.header("Cookie"));
+        if (sessions.validSession(token))
+        {
+            // The session slides with use, and the cookie has to slide with
+            // it. Otherwise a page open past the original term keeps its
+            // WebSocket -- authorized once at the upgrade -- while every
+            // request beside it starts arriving cookie-less and 401s.
+            if (sessions.renew(token))
+                req.addHeader("Set-Cookie", toStringz(sessionCookie(token)));
             return true;
+        }
 
         if (isApi)
             req.replyJSON(401, `{"error":"not signed in"}`);
@@ -245,11 +254,7 @@ int main(string[] args)
                 return REQUEST_OK;
             }
 
-            // HttpOnly keeps the token out of reach of page scripts; SameSite
-            // strict means another site cannot ride the session.
-            req.addHeader("Set-Cookie", toStringz(
-                COOKIE_NAME ~ "=" ~ token ~
-                "; Path=/; HttpOnly; SameSite=Strict; Max-Age=43200"));
+            req.addHeader("Set-Cookie", toStringz(sessionCookie(token)));
             req.redirect(303, "/");
             return REQUEST_OK;
         })

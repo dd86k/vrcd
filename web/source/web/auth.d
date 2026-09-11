@@ -19,7 +19,9 @@ import core.sync.mutex : Mutex;
 import std.datetime : Clock;
 import std.string : indexOf, strip;
 
-/// How long a login lasts.
+/// How long a login lasts without being used. Sliding: every authorized
+/// request pushes it back, so a page left open for days keeps working while an
+/// abandoned one still lapses.
 private enum long SESSION_TTL = 12 * 60 * 60;
 /// How long a WebSocket ticket stays redeemable. Only has to cover the round
 /// trip from fetching it to opening the socket.
@@ -79,6 +81,33 @@ class SessionStore
         }
     }
 
+    /// Push a live session's expiry back, and say whether the browser should be
+    /// handed a fresh cookie with it. Only past the halfway mark: a single
+    /// screen is dozens of image requests, and a Set-Cookie on every one of
+    /// them buys nothing the first one did not.
+    bool renew(string token)
+    {
+        if (disabled || token.length == 0)
+            return false;
+
+        synchronized (mutex)
+        {
+            long *expiry = token in sessions;
+            if (expiry is null)
+                return false;
+
+            long remaining = *expiry - now();
+            if (remaining <= 0)
+            {
+                sessions.remove(token);
+                return false;
+            }
+
+            *expiry = now() + SESSION_TTL;
+            return remaining < SESSION_TTL / 2;
+        }
+    }
+
     /// Issue a single-use WebSocket ticket. Caller must already hold a session.
     string issueTicket()
     {
@@ -133,6 +162,19 @@ private:
             if (tickets[key] < cutoff)
                 tickets.remove(key);
     }
+}
+
+/// Build the Set-Cookie line for a session token. The browser's copy has to
+/// expire no sooner than the server's, or a live session goes unsent and every
+/// request starts coming back 401 on a page that is otherwise still working.
+///
+/// HttpOnly keeps the token out of reach of page scripts; SameSite strict
+/// means another site cannot ride the session.
+string sessionCookie(string token)
+{
+    import std.conv : text;
+
+    return text(COOKIE_NAME, "=", token, "; Path=/; HttpOnly; SameSite=Strict; Max-Age=", SESSION_TTL);
 }
 
 /// Pull the session cookie out of a Cookie header.
@@ -272,6 +314,25 @@ unittest
     assert(token.length == 32);
     assert(store.validSession(token));
     assert(store.validSession("nope") == false);
+
+    // Fresh session: still valid, but nowhere near halfway, so no new cookie.
+    assert(store.renew(token) == false);
+    assert(store.validSession(token));
+    assert(store.renew("nope") == false);
+
+    // Past halfway the cookie has to be re-sent, and doing so puts the session
+    // back to a full term, so the one after it does not.
+    store.sessions[token] = Clock.currTime.toUnixTime!long() + 60;
+    assert(store.renew(token));
+    assert(store.renew(token) == false);
+
+    // An expired session is not renewable, it is a sign-in.
+    store.sessions[token] = Clock.currTime.toUnixTime!long() - 1;
+    assert(store.renew(token) == false);
+    assert(store.validSession(token) == false);
+
+    assert(sessionCookie("abc") ==
+        "vrcd_session=abc; Path=/; HttpOnly; SameSite=Strict; Max-Age=43200");
 
     string ticket = store.issueTicket();
     assert(store.redeemTicket(ticket));

@@ -1163,6 +1163,7 @@ function badgeInto(img, url) {
 
 function fetchBadge(key, url, tries) {
     fetch("/api/badge?url=" + encodeURIComponent(url)).then(function (r) {
+        if (r.status === 401) { location.href = "/login"; return null; }
         if (r.status === 202) {
             if (tries > 0)
                 setTimeout(function () { fetchBadge(key, url, tries - 1); },
@@ -1183,6 +1184,10 @@ function fetchBadge(key, url, tries) {
 function fetchImage(key, fileId, version, size, tries) {
     fetch("/api/image/" + encodeURIComponent(fileId) +
           "?v=" + version + "&size=" + size).then(function (r) {
+        // A picture is the one thing the page asks for constantly, so this is
+        // where a lapsed session shows up first. Nothing is drawn from it, so
+        // go and sign in rather than blocklist the key and look broken.
+        if (r.status === 401) { location.href = "/login"; return null; }
         if (r.status === 202) {
             if (tries > 0) {
                 setTimeout(function () {
@@ -3173,6 +3178,7 @@ function profileError(userId) {
 
 function fetchProfile(userId, tries) {
     fetch("/api/user/" + encodeURIComponent(userId)).then(function (r) {
+        if (r.status === 401) { location.href = "/login"; return null; }
         if (r.status === 202) {
             if (tries > 0) {
                 setTimeout(function () { fetchProfile(userId, tries - 1); },

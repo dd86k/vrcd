@@ -35,6 +35,11 @@
   front-end down on a platform whose sends lack MSG_NOSIGNAL.
 - DOWNLOAD button on every STUFF entry with artwork, saving the original file
   without going through the viewer first.
+- Sessions now slide: a page left open past the 12-hour term kept its
+  WebSocket, so state stayed live while every picture on it came back 401. Each
+  authorized request pushes the term back and re-sends the cookie past halfway,
+  and a 401 on an image or a profile goes to the sign-in page instead of
+  drawing a blank.
 
 ### API
 
