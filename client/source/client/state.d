@@ -116,6 +116,10 @@ struct FeedEntry
 /// two rosters bucket and sort identically.
 public import vrcd.friends : FriendInfo, InstanceGroup;
 
+/// Profiles are held by the state and read by the UI while it draws.
+public import client.profiles : BadgeInfo, ProfileCache, ProfileLookup,
+    ProfileState, ProfileView, UserProfile;
+
 /// A muted or blocked user from the server `moderations` snapshot.
 /// Player moderations are not limited to friends, so entries carry their
 /// own display names instead of referencing FriendInfo.
@@ -143,6 +147,10 @@ struct ArmedConfirm
 
 /// Sub-pages of the TOOLS tab.
 enum ToolsPage { main, stripMetadata, friendList, muteList, blockList }
+
+/// Top-level tabs. The active one lives in the UI, but which tab a profile
+/// came from is part of where the app stands, like ToolsPage is.
+enum Tab { feed, online, notifications, inventory, tools, profile, settings }
 
 /// A pending notification action to send to the server.
 struct NotificationAction
@@ -346,7 +354,17 @@ struct AppState
     FriendInfo[] activeElsewhereFriends; // online but not in a visible/joinable world
     FriendInfo[] offlineFriends;
     FriendInfo[] allFriends;    // flat roster sorted by name, for the TOOLS friend list
-    FriendInfo* selectedFriend; // null = list view, non-null = profile view
+
+    // Profile page. The subject is a user ID rather than a pointer into the
+    // roster: those arrays are replaced wholesale on every friend movement,
+    // and a profile opened from the inbox has no roster entry to point at.
+    // Empty means your own profile, which is the page's root view.
+    string profileUserId;
+    // Which tab the open profile was opened from, so Back goes home.
+    Tab profileReturnTab;
+    ProfileCache profiles;
+    // User IDs to ask the server about, drained by gui.d.
+    string[] pendingProfileRequests;
 
     // Moderations (mutes/blocks) from the server `moderations` snapshot.
     ModerationEntry[] mutedUsers;
@@ -386,6 +404,13 @@ struct AppState
     string selfDisplayName;
     string selfStatus;            // "active", "join me", "ask me", "busy"
     string selfStatusDescription;
+    // The rest of what `self` carries, which is the same record a friend gets:
+    // the profile page draws you through the path it draws everyone else.
+    string selfBio;
+    string selfPronouns;
+    string[] selfBioLinks;
+    string selfImageFileId;
+    long selfImageVersion;
     // UI textbox buffer for the custom status message. Synced from
     // selfStatusDescription whenever the server pushes a new snapshot
     // and the user isn't actively editing.
@@ -606,6 +631,77 @@ struct AppState
                 return true;
         }
         return false;
+    }
+
+    /// Your own `self` snapshot in the shape a friend arrives in, so the
+    /// profile page draws you through one path rather than two.
+    FriendInfo selfAsFriend()
+    {
+        FriendInfo me;
+        me.userId            = selfUserId;
+        me.displayName       = selfDisplayName;
+        me.status            = selfStatus;
+        me.statusDescription = selfStatusDescription;
+        me.bio               = selfBio;
+        me.pronouns          = selfPronouns;
+        me.bioLinks          = selfBioLinks;
+        me.imageFileId       = selfImageFileId;
+        me.imageVersion      = selfImageVersion;
+        // `self` says nothing about platform or location: the roster tracks
+        // where friends are standing, and where you are standing is the local
+        // log watcher's answer, not the server's.
+        return me;
+    }
+
+    /// The roster entry for a user, or null when they are not a friend.
+    /// `allFriends` holds every bucket, so one pass over it answers for all.
+    FriendInfo* findFriend(string userId)
+    {
+        if (userId.length == 0)
+            return null;
+        foreach (ref FriendInfo f; allFriends)
+        {
+            if (f.userId == userId)
+                return &f;
+        }
+        return null;
+    }
+
+    /// Resolve the profile page's subject: the snapshot half, the fetched
+    /// half, and where that fetch stands. Queues the fetch when nothing
+    /// usable is held; gui.d drains that queue.
+    ///
+    /// Called once per frame from the draw, which is also how the image cells
+    /// ask for their thumbnails: the cache's own pending mark is what keeps a
+    /// redraw from asking twice.
+    ProfileView profileSubject()
+    {
+        ProfileView view;
+        view.userId = profileUserId.length > 0 ? profileUserId : selfUserId;
+        view.self = view.userId == selfUserId && selfUserId.length > 0;
+
+        if (view.self)
+        {
+            view.hasSnapshot = true;
+            view.snapshot = selfAsFriend();
+        }
+        else if (FriendInfo* f = findFriend(view.userId))
+        {
+            view.hasSnapshot = true;
+            view.snapshot = *f;
+        }
+
+        if (view.userId.length == 0)
+            return view;
+
+        bool startFetch;
+        ProfileLookup found = profiles.lookup(view.userId, startFetch);
+        view.state = found.state;
+        view.profile = found.profile;
+        view.error = found.error;
+        if (startFetch)
+            pendingProfileRequests ~= view.userId;
+        return view;
     }
 
     /// Remove a notification by its VRChat ID.

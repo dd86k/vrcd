@@ -20,14 +20,14 @@ import client.notifications : notifyEventLabels, feedEventLabels, feedFilterSect
     feedEventIndex, prettyEventType;
 import client.imagecache : imageKey, getIconId;
 import client.renderer : window_width, window_height;
-import client.connection : PROTOCOL_MODERATION;
+import client.connection : PROTOCOL_MODERATION, PROTOCOL_PROFILES;
 import client.gui : wasClick, requestRepaint;
 import client.state;
 import client.stream : tlsAvailable;
 import client.utils : openFolder, openBrowser;
 
-/// Active tab selection.
-enum Tab { feed, online, notifications, inventory, tools, settings }
+/// Active tab selection. The tab set itself lives in client.state, with the
+/// other page enums.
 private Tab activeTab = Tab.feed;
 
 // Feed filter state
@@ -55,9 +55,11 @@ private bool tabInSubpage(AppState* state, Tab tab)
     final switch (tab) with (Tab)
     {
         case feed:          return state.feedDetailOpen;
-        case online:        return state.selectedFriend !is null;
         case inventory:     return state.invDetailOpen;
         case tools:         return state.toolsPage != ToolsPage.main;
+        // Somebody else's profile is the subpage; your own is the root.
+        case profile:       return state.profileUserId.length > 0;
+        case online:
         case notifications:
         case settings:      return false;
     }
@@ -70,13 +72,54 @@ private void resetTabSubpage(AppState* state, Tab tab)
     final switch (tab) with (Tab)
     {
         case feed:          state.feedDetailOpen = false;    break;
-        case online:        state.selectedFriend = null;     break;
         case inventory:     state.invDetailOpen = false;     break;
         case tools:         state.toolsPage = ToolsPage.main; break;
+        case profile:       state.profileUserId = null;      break;
+        case online:
         case notifications:
         case settings:      break;
     }
     state.armedConfirm = ArmedConfirm.init;
+    requestRepaint();
+}
+
+/// Follow the Back arrow: pop the active tab's subpage, except that a profile
+/// opened from another tab hands navigation back to that tab. Anywhere a
+/// profile can be opened from is somewhere you were looking at a list, and
+/// landing on your own profile instead of that list is a detour.
+///
+/// The tab bar deliberately does not come through here: tapping PROFILE means
+/// your own profile, whoever else's is open.
+private void goBack(AppState* state)
+{
+    if (activeTab == Tab.profile && state.profileUserId.length > 0)
+    {
+        Tab home = state.profileReturnTab;
+        state.profileUserId = null;
+        state.armedConfirm = ArmedConfirm.init;
+        // A name pressed from inside a profile leaves this tab as its own
+        // origin, and then clearing the target is the whole way back.
+        if (home != Tab.profile)
+            activeTab = home;
+        requestRepaint();
+        return;
+    }
+    resetTabSubpage(state, activeTab);
+}
+
+/// Open somebody's profile, remembering where to come back to. Your own ID
+/// resolves to the page's root view, so one call serves every caller.
+private void openProfile(AppState* state, string userId)
+{
+    if (userId.length == 0)
+        return;
+    state.profileUserId = userId == state.selfUserId ? null : userId;
+    state.profileReturnTab = activeTab;
+    state.armedConfirm = ArmedConfirm.init;
+    activeTab = Tab.profile;
+    // The click is answered: nothing on the page we are leaving, and nothing
+    // on the one we are arriving at, gets to act on it too.
+    wasClick = false;
     requestRepaint();
 }
 
@@ -91,7 +134,7 @@ bool navigateBack(AppState* state)
         return false;
     if (tabInSubpage(state, activeTab) == false)
         return false;
-    resetTabSubpage(state, activeTab);
+    goBack(state);
     return true;
 }
 
@@ -108,6 +151,7 @@ private void scrollTabToTop(mu_Context* ctx, Tab tab)
         case notifications: name = "NotificationsPanel"; break;
         case inventory:     name = "InventoryPanel";     break;
         case tools:         name = "ToolsPanel";         break;
+        case profile:       name = "ProfilePanel";       break;
         case settings:      name = "SettingsPanel";      break;
     }
     mu_Container* cnt = mu_get_container(ctx, name.ptr, cast(int) name.length);
@@ -141,7 +185,7 @@ void drawFullWindow(mu_Context* ctx, AppState* state, int scrollDelta)
         {
             mu_layout_row(ctx, 1, fullCol.ptr, 40);
             if (clickButton(ctx, "< Back"))
-                resetTabSubpage(state, activeTab);
+                goBack(state);
         }
 
         if (activeTab == Tab.feed && state.feedDetailOpen)
@@ -177,6 +221,7 @@ void drawFullWindow(mu_Context* ctx, AppState* state, int scrollDelta)
                 case Tab.notifications: drawNotificationsTab(ctx, state, tabScroll); break;
                 case Tab.inventory:     drawInventoryTab(ctx, state, tabScroll);     break;
                 case Tab.tools:         drawToolsTab(ctx, state, tabScroll);         break;
+                case Tab.profile:       drawProfileTab(ctx, state, tabScroll);       break;
                 case Tab.settings:      drawSettingsTab(ctx, state, tabScroll);      break;
             }
         }
@@ -202,11 +247,12 @@ void drawFullWindow(mu_Context* ctx, AppState* state, int scrollDelta)
 private void drawTabBar(mu_Context* ctx, AppState* state)
 {
     // NOTE: Take padding into the calculation to make settings button slightly more equal
-    //       With my testing, this makes 187px for first four and 186px wide for SETTINGS
-    enum BUTTONS = 6;
+    //       With my testing, this makes 178px for the first six and 180px for
+    //       SETTINGS, which takes whatever the division left over
+    enum BUTTONS = 7;
     enum PADDING = 4; // default style has margin=4
     int tabWidth = (window_width - (PADDING * (BUTTONS+1))) / BUTTONS;
-    int[BUTTONS] tabCols = [tabWidth, tabWidth, tabWidth, tabWidth, tabWidth, -1];
+    int[BUTTONS] tabCols = [tabWidth, tabWidth, tabWidth, tabWidth, tabWidth, tabWidth, -1];
     mu_layout_row(ctx, BUTTONS, tabCols.ptr, 60);
 
     // Highlight active tab by drawing a colored background.
@@ -215,6 +261,7 @@ private void drawTabBar(mu_Context* ctx, AppState* state)
     drawTabButton(ctx, state, "INBOX",         Tab.notifications);
     drawTabButton(ctx, state, "STUFF",         Tab.inventory);
     drawTabButton(ctx, state, "TOOLS",         Tab.tools);
+    drawTabButton(ctx, state, "PROFILE",       Tab.profile);
     drawTabButton(ctx, state, "SETTINGS",      Tab.settings);
 }
 
@@ -1303,15 +1350,10 @@ private int bigHeader(mu_Context* ctx, string label, int opt)
     return res;
 }
 
-/// Online tab: friends grouped by instance, or profile view.
+/// Online tab: friends grouped by instance. Pressing a card opens its profile
+/// on the PROFILE tab, which is also where a stranger's profile is drawn.
 private void drawOnlineTab(mu_Context* ctx, AppState* state, int scrollDelta)
 {
-    if (state.selectedFriend)
-    {
-        drawFriendProfile(ctx, state, scrollDelta);
-        return;
-    }
-
     static immutable int[1] fullCol = [-1];
     mu_begin_panel(ctx, "FriendsPanel");
 
@@ -1780,10 +1822,7 @@ private void drawFriendCard(mu_Context* ctx, AppState* state, ref FriendInfo f)
         mu_draw_control_text(ctx, sub, mu_Rect(innerX, r.y + 30, innerW, 20), MU_COLOR_TEXT, 0);
 
     if (wasClick && mouseOver)
-    {
-        state.selectedFriend = &f;
-        state.armedConfirm = ArmedConfirm.init;
-    }
+        openProfile(state, f.userId);
 }
 
 /// Map feed event source to an accent colour for the row strip.
@@ -1812,146 +1851,438 @@ private mu_Color statusColor(string status)
     }
 }
 
-/// Friend profile detail view.
-private void drawFriendProfile(mu_Context* ctx, AppState* state, int scrollDelta)
+/// PROFILE tab: your own profile, or somebody else's.
+///
+/// Two subjects, one page. The roster says where somebody is standing and
+/// little else, so the rest -- trust rank, the languages they listed, badges,
+/// the day they joined, your note on them -- is fetched per person and merged
+/// over it (see `ProfileView`). Your own record arrives in the `self`
+/// snapshot, which is the same shape a friend's is, so it takes the same path.
+///
+/// It is also the page for somebody who is not a friend at all, which is the
+/// case the fetch exists for: a friend request is a name and an ID until the
+/// profile behind it lands.
+///
+///   +---------------------------------------+
+///   | +------+ DisplayName                  |
+///   | | face | Known User . they/them       |
+///   | |      | Active - Windows             |
+///   | +------+ "status message"             |
+///   +---------------------------------------+
+///   | Bio, wrapped                          |
+///   | Links, badges, details                |
+///   | [ Mute ] [ Block ] [ Unfriend ]       |
+///   +---------------------------------------+
+///
+/// The header draws from whatever is already in hand, so the page is never
+/// blank while the fetch runs: for a friend that is the whole roster record,
+/// for a stranger it is their ID. What the fetch adds appears underneath.
+private void drawProfileTab(mu_Context* ctx, AppState* state, int scrollDelta)
 {
     static immutable int[1] fullCol = [-1];
     static immutable int[2] labelValCols = [120, -1];
     enum lineColor = mu_Color(50, 50, 60, 255);
 
-    FriendInfo* f = state.selectedFriend;
+    ProfileView view = state.profileSubject();
 
-    mu_begin_panel(ctx, "FriendProfilePanel");
+    mu_begin_panel(ctx, "ProfilePanel");
 
     applyScroll(ctx, scrollDelta);
 
-    // Navigation back to the list is the sticky header Back button.
+    // Nobody to draw. The server sends `self` right after auth, so this is
+    // the first seconds of a connection rather than a state to design for.
+    if (view.userId.length == 0)
+    {
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        mu_label(ctx, state.connected
+            ? "Waiting for your profile..." : "Not connected.");
+        mu_end_panel(ctx);
+        return;
+    }
 
-    // Name as header.
-    mu_layout_row(ctx, 1, fullCol.ptr, 0);
-    mu_label(ctx, f.displayName);
+    drawProfileHeader(ctx, state, view);
 
-    // Separator.
     mu_layout_row(ctx, 1, fullCol.ptr, 1);
     mu_draw_rect(ctx, mu_layout_next(ctx), lineColor);
 
-    // Profile fields.
-    if (f.status)
+    // Why the page is thinner than it will be, when it is.
+    final switch (view.state) with (ProfileState)
     {
-        mu_layout_row(ctx, 2, labelValCols.ptr, 0);
-        mu_label(ctx, "Status");
-        clickableValue(ctx, state, prettyStatus(f.status));
+    case pending:
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        mu_label(ctx, "Loading profile...");
+        break;
+
+    case failed:
+        char[192] errBuf = void;
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        mu_label(ctx, cast(string) sformat(errBuf,
+            "Profile unavailable: %s", view.error));
+        // Forgetting the failure is the retry: the next frame finds nothing
+        // held for this person and asks again.
+        mu_layout_row(ctx, 1, fullCol.ptr, 60);
+        if (clickButton(ctx, "Retry"))
+        {
+            state.profiles.forget(view.userId);
+            requestRepaint();
+        }
+        break;
+
+    case ready:
+        break;
     }
 
-    if (f.statusDescription)
-    {
-        mu_layout_row(ctx, 2, labelValCols.ptr, 0);
-        mu_label(ctx, "Status Note");
-        clickableValue(ctx, state, f.statusDescription);
-    }
-
-    if (f.pronouns)
-    {
-        mu_layout_row(ctx, 2, labelValCols.ptr, 0);
-        mu_label(ctx, "Pronouns");
-        clickableValue(ctx, state, f.pronouns);
-    }
-
-    if (f.bio)
-    {
-        mu_layout_row(ctx, 2, labelValCols.ptr, 0);
-        mu_label(ctx, "Bio");
-        clickableValue(ctx, state, f.bio);
-    }
-
-    foreach (link; f.bioLinks)
-    {
-        if (link.length == 0)
-            continue;
-        mu_layout_row(ctx, 2, labelValCols.ptr, 0);
-        mu_label(ctx, "Link");
-        clickableValue(ctx, state, link);
-    }
-
-    if (f.platform)
-    {
-        mu_layout_row(ctx, 2, labelValCols.ptr, 0);
-        mu_label(ctx, "Platform");
-        clickableValue(ctx, state, prettyPlatform(f.platform));
-    }
-
-    if (f.location.length > 0)
-    {
-        mu_layout_row(ctx, 2, labelValCols.ptr, 0);
-        mu_label(ctx, "Location");
-        clickableValue(ctx, state, f.location == "offline" ? "Offline" : f.location);
-    }
-
-    if (f.userId.length > 0)
-    {
-        mu_layout_row(ctx, 2, labelValCols.ptr, 0);
-        mu_label(ctx, "User ID");
-        clickableValue(ctx, state, f.userId);
-    }
-
-    // Management actions. Requires the server-side moderation API.
-    if (f.userId.length > 0 && state.serverProtocol >= PROTOCOL_MODERATION)
+    if (view.bio.length > 0)
     {
         spacer(ctx);
-        sectionHeader(ctx, "Manage");
+        sectionHeader(ctx, "Bio");
+        // Wrapped rather than a value row: a bio is paragraphs, and VRChat
+        // lets it carry newlines.
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        mu_text(ctx, view.bio);
+    }
 
-        bool muted = state.isMuted(f.userId);
-        bool blocked = state.isBlocked(f.userId);
-
-        mu_layout_row(ctx, 1, fullCol.ptr, 60);
-        if (clickButton(ctx, muted ? "Unmute" : "Mute"))
+    string[] links = view.bioLinks;
+    if (links.length > 0)
+    {
+        spacer(ctx);
+        sectionHeader(ctx, "Links");
+        foreach (string link; links)
         {
-            if (state.moderationActionInFlight == false)
+            if (link.length == 0)
+                continue;
+
+            if (isWebLink(link))
             {
-                state.pendingModerationActions ~= ModerationAction(f.userId, f.displayName,
-                    muted ? "unmute" : "mute");
-                setStatusFlash(state, muted ? "  Unmuting..." : "  Muting...");
+                mu_layout_row(ctx, 1, fullCol.ptr, 40);
+                if (clickButton(ctx, link))
+                    openBrowser(link);
             }
-        }
-
-        if (blocked)
-        {
-            mu_layout_row(ctx, 1, fullCol.ptr, 60);
-            if (clickButton(ctx, "Unblock"))
+            else
             {
-                if (state.moderationActionInFlight == false)
-                {
-                    state.pendingModerationActions ~= ModerationAction(f.userId, f.displayName, "unblock");
-                    setStatusFlash(state, "  Unblocking...");
-                }
+                // Not something to open. VRChat stores whatever it was handed
+                // and a bio is a field any account can write, so a link that
+                // is not http(s) is shown as text to read rather than as a
+                // button that hands it to the system.
+                mu_layout_row(ctx, 2, labelValCols.ptr, 0);
+                mu_label(ctx, "Link");
+                clickableValue(ctx, state, link);
             }
-        }
-        else if (confirmButton(ctx, state, "block", f.userId, "Block", "Confirm Block"))
-        {
-            if (state.moderationActionInFlight == false)
-            {
-                state.pendingModerationActions ~= ModerationAction(f.userId, f.displayName, "block");
-                setStatusFlash(state, "  Blocking...");
-            }
-        }
-
-        if (confirmButton(ctx, state, "unfriend", f.userId, "Unfriend", "Confirm Unfriend"))
-        {
-            if (state.moderationActionInFlight == false)
-            {
-                state.pendingModerationActions ~= ModerationAction(f.userId, f.displayName, "unfriend");
-                setStatusFlash(state, "  Unfriending...");
-            }
-        }
-
-        if (state.moderationActionInFlight)
-        {
-            mu_layout_row(ctx, 1, fullCol.ptr, 0);
-            mu_label(ctx, "Working...");
         }
     }
 
+    // Names for now. The art lives on a public CDN rather than behind the
+    // files API, so it comes down a request of its own (`get_badge_image`)
+    // that this build does not make yet.
+    if (view.profile.badges.length > 0)
+    {
+        spacer(ctx);
+        sectionHeader(ctx, "Badges");
+        foreach (ref BadgeInfo badge; view.profile.badges)
+        {
+            if (badge.name.length == 0)
+                continue;
+            mu_layout_row(ctx, 2, labelValCols.ptr, 0);
+            mu_label(ctx, badge.showcased ? "Showcased" : "");
+            clickableValue(ctx, state, badge.name);
+        }
+    }
+
+    spacer(ctx);
+    sectionHeader(ctx, "Details");
+
+    // Which half answers each of these is ProfileView's business: the rows
+    // do not know whether this is a friend, a stranger, or you.
+    void detail(string label, string value)
+    {
+        if (value.length == 0)
+            return;
+        mu_layout_row(ctx, 2, labelValCols.ptr, 0);
+        mu_label(ctx, label);
+        clickableValue(ctx, state, value);
+    }
+
+    if (view.location.length > 0)
+        detail("Location", view.location == "offline" ? "Offline" : view.location);
+    if (view.profile.languages.length > 0)
+    {
+        char[128] langBuf = void;
+        detail("Languages",
+            cast(string) joinPieces(langBuf, view.profile.languages, ", "));
+    }
+    detail("Joined", view.profile.dateJoined);
+    // Your own note on somebody, which VRChat shows nobody else.
+    detail("Note", view.profile.note);
+    detail("User ID", view.userId);
+
+    if (view.self == false)
+        drawProfileActions(ctx, state, view);
+
     mu_end_panel(ctx);
+}
+
+/// The header block: face on the left, up to four lines of who this is on
+/// the right.
+///
+/// The lines are drawn into one layout cell instead of as four rows, so the
+/// face keeps its full height beside them. An empty line is skipped rather
+/// than drawn blank -- most people set no pronouns, a stranger has no status
+/// until their profile lands -- so the block closes up instead of holding a
+/// hole open.
+private void drawProfileHeader(mu_Context* ctx, AppState* state, ref ProfileView view)
+{
+    enum int faceSize = 128;
+    enum int lineStep = 26;
+    enum mu_Color dimColor = mu_Color(150, 155, 165, 255);
+
+    int[2] cols = [faceSize + ctx.style.spacing, -1];
+    mu_layout_row(ctx, 2, cols.ptr, faceSize);
+
+    mu_Rect faceCell = mu_layout_next(ctx);
+    drawProfileFace(ctx, state, view,
+        mu_Rect(faceCell.x, faceCell.y, faceSize, faceSize));
+
+    mu_Rect textCell = mu_layout_next(ctx);
+    int y = textCell.y + 4;
+
+    void line(const(char)[] text, mu_Color color)
+    {
+        if (text.length == 0)
+            return;
+        // Safe cast: mu_draw_text copies the text into the command queue.
+        mu_draw_text(ctx, ctx.style.font, cast(string) text,
+            mu_Vec2(textCell.x, y), color);
+        y += lineStep;
+    }
+
+    // A stranger whose fetch has not landed has nothing but an ID, and an ID
+    // is still who this page is about.
+    string name = view.displayName;
+    line(name.length > 0 ? name : view.userId, ctx.style.colors[MU_COLOR_TEXT]);
+
+    // Trust rank and the marks that sit beside it. `troll` is here rather
+    // than buried in the details because it is the one field on this page
+    // that answers "should I accept this?" before the bio does.
+    char[160] whoBuf = void;
+    string[4] who;
+    size_t nWho;
+    if (view.profile.trustRank.length > 0)
+        who[nWho++] = view.profile.trustRank;
+    if (view.pronouns.length > 0)
+        who[nWho++] = view.pronouns;
+    if (view.profile.moderator)
+        who[nWho++] = "VRChat Staff";
+    if (view.profile.troll)
+        who[nWho++] = "Flagged";
+    line(joinPieces(whoBuf, who[0 .. nWho], " . "), dimColor);
+
+    char[128] whereBuf = void;
+    string[2] where;
+    size_t nWhere;
+    if (view.status.length > 0)
+        where[nWhere++] = prettyStatus(view.status);
+    if (view.platform.length > 0)
+        where[nWhere++] = prettyPlatform(view.platform);
+    line(joinPieces(whereBuf, where[0 .. nWhere], " . "), dimColor);
+
+    line(view.statusDescription, ctx.style.colors[MU_COLOR_TEXT]);
+}
+
+/// Somebody's profile picture, or their initial on a tile while there is none
+/// to draw.
+///
+/// Asked for unconditionally, unlike the thumbnails in a STUFF grid: this is
+/// one image, on a page somebody opened on purpose.
+private void drawProfileFace(mu_Context* ctx, AppState* state, ref ProfileView view,
+    mu_Rect r)
+{
+    // The size the server is asked for. Twice the drawn size, since the same
+    // thumbnail feeds the roster rows and a face scaled up looks worse than
+    // one scaled down.
+    enum int faceThumbnailSize = 256;
+
+    string fileId = view.imageFileId;
+    long fileVersion = view.imageVersion;
+    if (fileId.length > 0 && fileVersion > 0)
+    {
+        string key = imageKey(fileId, fileVersion, faceThumbnailSize);
+        int iconId = getIconId(key);
+        if (iconId > 0)
+        {
+            mu_draw_icon(ctx, iconId, r, mu_Color(255, 255, 255, 255));
+            return;
+        }
+        if ((key in state.failedImages) is null)
+            state.pendingImageRequests ~=
+                ImageRequest(fileId, fileVersion, faceThumbnailSize);
+    }
+
+    // The initial stays under the picture in both senses: somebody with no
+    // picture and somebody whose picture is still coming down the link look
+    // the same for a moment, and the page does not move when it lands.
+    mu_draw_rect(ctx, r, mu_Color(52, 58, 72, 255));
+
+    string name = view.displayName;
+    if (name.length == 0)
+        return;
+
+    size_t n = 1;
+    try
+        n = stride(name, 0);
+    catch (UTFException)
+        n = 1;
+    if (n > name.length)
+        n = name.length;
+    mu_draw_control_text(ctx, name[0 .. n], r, MU_COLOR_TEXT, MU_OPT_ALIGNCENTER);
+}
+
+/// Mute, block and unfriend, plus the one way to reach somebody in-game.
+///
+/// The same buttons the TOOLS friend list carries, and armed the same way:
+/// mute is one tap either way, block and unfriend arm first with Cancel where
+/// the first tap landed. Never drawn on your own profile.
+private void drawProfileActions(mu_Context* ctx, AppState* state, ref ProfileView view)
+{
+    import std.string : startsWith;
+
+    static immutable int[1] fullCol = [-1];
+
+    string userId = view.userId;
+    string displayName = view.displayName.length > 0 ? view.displayName : userId;
+
+    // An invite to where they are standing, which is the one action here that
+    // is not moderation. Only a real instance can be joined: "private",
+    // "traveling" and "offline" all live in the same field.
+    if (startsWith(view.location, "wrld_"))
+    {
+        spacer(ctx);
+        sectionHeader(ctx, "Instance");
+        mu_layout_row(ctx, 1, fullCol.ptr, 60);
+        if (clickButton(ctx, "Self-Invite"))
+        {
+            state.pendingJoins ~= view.location;
+            setStatusFlash(state, "  Sending invite...");
+        }
+    }
+
+    if (state.serverProtocol < PROTOCOL_MODERATION)
+        return;
+
+    spacer(ctx);
+    sectionHeader(ctx, "Manage");
+
+    bool muted = state.isMuted(userId);
+    bool blocked = state.isBlocked(userId);
+
+    mu_layout_row(ctx, 1, fullCol.ptr, 60);
+    if (clickButton(ctx, muted ? "Unmute" : "Mute"))
+    {
+        if (state.moderationActionInFlight == false)
+        {
+            state.pendingModerationActions ~= ModerationAction(userId, displayName,
+                muted ? "unmute" : "mute");
+            setStatusFlash(state, muted ? "  Unmuting..." : "  Muting...");
+        }
+    }
+
+    if (blocked)
+    {
+        mu_layout_row(ctx, 1, fullCol.ptr, 60);
+        if (clickButton(ctx, "Unblock"))
+        {
+            if (state.moderationActionInFlight == false)
+            {
+                state.pendingModerationActions ~=
+                    ModerationAction(userId, displayName, "unblock");
+                setStatusFlash(state, "  Unblocking...");
+            }
+        }
+    }
+    else if (confirmButton(ctx, state, "block", userId, "Block", "Confirm Block"))
+    {
+        if (state.moderationActionInFlight == false)
+        {
+            state.pendingModerationActions ~=
+                ModerationAction(userId, displayName, "block");
+            setStatusFlash(state, "  Blocking...");
+        }
+    }
+
+    // Unfriending somebody who is not a friend is not an action, and the
+    // roster is what says which they are: a stranger's profile reaches this
+    // page from the inbox and the moderation lists.
+    if (view.hasSnapshot &&
+        confirmButton(ctx, state, "unfriend", userId, "Unfriend", "Confirm Unfriend"))
+    {
+        if (state.moderationActionInFlight == false)
+        {
+            state.pendingModerationActions ~=
+                ModerationAction(userId, displayName, "unfriend");
+            setStatusFlash(state, "  Unfriending...");
+        }
+    }
+
+    if (state.moderationActionInFlight)
+    {
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        mu_label(ctx, "Working...");
+    }
+}
+
+/// Whether a bio link is somewhere to go. VRChat stores whatever it was
+/// handed, so this is not a formatting question: `javascript:` in a link is a
+/// script, and the web front-end refuses the same ones for the same reason.
+private bool isWebLink(string link)
+{
+    import std.string : startsWith;
+    return startsWith(link, "http://") || startsWith(link, "https://");
+}
+
+/// Join the non-empty pieces into `buf`. Header lines are built from fields
+/// that are usually but not always there, and a separator left hanging off a
+/// field nobody filled in is the thing this exists to avoid.
+private const(char)[] joinPieces(char[] buf, const(string)[] pieces, string sep)
+{
+    size_t len;
+    foreach (string piece; pieces)
+    {
+        if (piece.length == 0)
+            continue;
+        if (len > 0)
+            len += copyInto(buf[len .. $], sep);
+        len += copyInto(buf[len .. $], piece);
+    }
+    return buf[0 .. len];
+}
+
+/// Copy as much of `src` as fits, returning how much that was. Truncation is
+/// the right answer here: these are header lines, and a name long enough to
+/// fill the buffer has already run past the window.
+private size_t copyInto(char[] dest, const(char)[] src)
+{
+    size_t n = src.length < dest.length ? src.length : dest.length;
+    dest[0 .. n] = src[0 .. n];
+    return n;
+}
+
+unittest
+{
+    char[64] buf = void;
+    assert(joinPieces(buf, ["Known User", "they/them"], " . ") == "Known User . they/them");
+    assert(joinPieces(buf, ["Known User", "", "Flagged"], " . ") == "Known User . Flagged");
+    assert(joinPieces(buf, [], " . ").length == 0);
+    assert(joinPieces(buf, ["", ""], " . ").length == 0);
+    assert(joinPieces(buf, ["eng", "fra"], ", ") == "eng, fra");
+
+    // Truncated rather than overrun: the line is cut, the buffer is not.
+    char[8] tiny = void;
+    assert(joinPieces(tiny, ["abcdefghijkl"], " . ") == "abcdefgh");
+    assert(joinPieces(tiny, ["abcdef", "gh"], " . ") == "abcdef .");
+
+    assert(isWebLink("https://example.com"));
+    assert(isWebLink("http://example.com"));
+    assert(isWebLink("javascript:alert(1)") == false);
+    assert(isWebLink("example.com") == false);
 }
 
 /// Notifications tab: friend requests, invites, group notifications, and
@@ -3472,6 +3803,23 @@ private mu_Rect manageRowBand(mu_Context* ctx, size_t index, mu_Color armed = mu
     return cell;
 }
 
+/// Draw a management row's name as the way into that person's profile. The
+/// name has a layout cell of its own, clear of the action buttons beside it,
+/// so a press here is never a mis-tap on one of those.
+private void manageNameCell(mu_Context* ctx, AppState* state, ref FriendInfo f,
+    mu_Rect cell, int padX)
+{
+    bool mouseOver = mu_mouse_over(ctx, cell) != 0;
+    if (mouseOver && ctx.mouse_down == 0)
+        mu_draw_rect(ctx, cell, mu_Color(50, 60, 80, 255));
+
+    mu_draw_control_text(ctx, f.displayName,
+        mu_Rect(cell.x + padX, cell.y, cell.w - padX, cell.h), MU_COLOR_TEXT, 0);
+
+    if (wasClick && mouseOver)
+        openProfile(state, f.userId);
+}
+
 /// One friend row for the management list: name plus Mute/Block/Unfriend.
 /// When Block or Unfriend is armed for this row, Cancel takes over the
 /// button column (where the finger just was) and Confirm appears on the
@@ -3485,9 +3833,7 @@ private void drawFriendManageRow(mu_Context* ctx, AppState* state, ref FriendInf
     {
         static immutable int[1] fullCol = [-1];
         mu_layout_row(ctx, 1, fullCol.ptr, 40);
-        mu_Rect cell = manageRowBand(ctx, index);
-        mu_draw_control_text(ctx, f.displayName,
-            mu_Rect(cell.x + padX, cell.y, cell.w - padX, cell.h), MU_COLOR_TEXT, 0);
+        manageNameCell(ctx, state, f, manageRowBand(ctx, index), padX);
         return;
     }
 
@@ -3530,10 +3876,7 @@ private void drawFriendManageRow(mu_Context* ctx, AppState* state, ref FriendInf
 
     static immutable int[4] cols = [-360, 110, 110, -1];
     mu_layout_row(ctx, 4, cols.ptr, 56);
-    mu_Rect nameCell = manageRowBand(ctx, index);
-    mu_draw_control_text(ctx, f.displayName,
-        mu_Rect(nameCell.x + padX, nameCell.y, nameCell.w - padX, nameCell.h),
-        MU_COLOR_TEXT, 0);
+    manageNameCell(ctx, state, f, manageRowBand(ctx, index), padX);
     if (clickButton(ctx, muted ? "Unmute" : "Mute"))
     {
         if (state.moderationActionInFlight == false)

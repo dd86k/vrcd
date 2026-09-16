@@ -30,6 +30,7 @@ import client.stream : loadTLS;
 import client.imagecache;
 import client.logwatcher;
 import client.notifications;
+import client.profiles : parseUserProfile;
 import client.renderer;
 import client.settings;
 import client.state;
@@ -669,6 +670,10 @@ private void eventLoop(mu_Context* uictx)
                         appState.connected = true;
                         appState.serverStatus = "Connected";
                         appState.serverProtocol = conn ? conn.serverVersion : 0;
+                        // A profile that failed while the link was down
+                        // failed for a reason that no longer holds. Dropping
+                        // those makes an open page fetch again on its own.
+                        appState.profiles.dropUnresolved();
                         // Don't reset dapPairState here. The server sends its
                         // dap_status snapshot right after auth_ok, so by the
                         // time we observe this `connected` transition the
@@ -707,6 +712,9 @@ private void eventLoop(mu_Context* uictx)
                         appState.moderationsLoading = false;
                         appState.moderationActionInFlight = false;
                         appState.serverProtocol = 0;
+                        // Profiles already fetched stay readable; a request
+                        // whose reply died with the socket does not.
+                        appState.profiles.dropUnresolved();
                     }
                     break;
             }
@@ -1052,6 +1060,32 @@ private void eventLoop(mu_Context* uictx)
                 }
             }
             appState.pendingImageRequests.length = 0;
+        }
+
+        // Dispatch queued profile requests. The cache marked each of these
+        // pending when the page asked for it, so one that cannot be sent has
+        // to be answered here rather than left marked: the page would
+        // otherwise wait out the request timeout for a reply nobody is
+        // bringing, and ask again the frame after that, forever.
+        //
+        // A reason is cached like an answer, and the reconnect drops it (see
+        // the `connected` transition), so a page open across one repairs
+        // itself without the user pressing Retry.
+        if (appState.pendingProfileRequests.length > 0)
+        {
+            bool canFetch = conn && appState.connected
+                && conn.serverVersion >= PROTOCOL_PROFILES;
+            foreach (string userId; appState.pendingProfileRequests)
+            {
+                if (canFetch)
+                    conn.requestUser(userId);
+                else if (appState.connected == false)
+                    appState.profiles.storeFailure(userId, "Not connected");
+                else
+                    appState.profiles.storeFailure(userId,
+                        "Server too old for profiles (needs protocol 7)");
+            }
+            appState.pendingProfileRequests.length = 0;
         }
 
         // Drain queued content management actions.
@@ -1438,6 +1472,28 @@ private void drainNetworkMessages()
                         appState.statusDescriptionInput[0 .. n] = v.str[0 .. n];
                     }
                 }
+                // The rest of the record, which the profile page draws.
+                if (const(JSONValue)* v = "bio" in msg)
+                    if (v.type == JSONType.string)
+                        appState.selfBio = v.str;
+                if (const(JSONValue)* v = "pronouns" in msg)
+                    if (v.type == JSONType.string)
+                        appState.selfPronouns = v.str;
+                if (const(JSONValue)* v = "bioLinks" in msg)
+                    if (v.type == JSONType.array)
+                    {
+                        string[] links;
+                        foreach (ref const(JSONValue) link; v.array)
+                            if (link.type == JSONType.string && link.str.length > 0)
+                                links ~= link.str;
+                        appState.selfBioLinks = links;
+                    }
+                if (const(JSONValue)* v = "imageFileId" in msg)
+                    if (v.type == JSONType.string)
+                        appState.selfImageFileId = v.str;
+                if (const(JSONValue)* v = "imageVersion" in msg)
+                    if (v.type == JSONType.integer || v.type == JSONType.uinteger)
+                        appState.selfImageVersion = v.integer;
                 break;
 
             case "set_status_result":
@@ -1737,6 +1793,10 @@ private void drainNetworkMessages()
 
             case "image":
                 applyImageReply(msg);
+                break;
+
+            case "user":
+                applyUserReply(msg);
                 break;
 
             case "delete_file_result", "delete_print_result",
@@ -2049,6 +2109,44 @@ private void applyImageReply(JSONValue msg)
         appState.failedImages[key] = true;
 }
 
+/// Apply a `user` reply: one person's full profile, or why there isn't one.
+///
+/// A failure is cached like an answer. Without that, a profile VRChat refuses
+/// -- a deleted account, an ID that was never a user -- would be asked for
+/// again on the next frame, which is sixty times a second.
+private void applyUserReply(JSONValue msg)
+{
+    string userId;
+    if (const(JSONValue)* v = "user_id" in msg)
+        if (v.type == JSONType.string)
+            userId = v.str;
+    if (userId.length == 0)
+        return;
+
+    const(JSONValue)* jok = "success" in msg;
+    if (jok is null || jok.type != JSONType.true_)
+    {
+        string errMsg;
+        if (const(JSONValue)* v = "error" in msg)
+            if (v.type == JSONType.string)
+                errMsg = v.str;
+        logWarn("user %s failed: %s", userId, errMsg);
+        appState.profiles.storeFailure(userId,
+            errMsg.length > 0 ? errMsg : "Profile unavailable");
+        requestRepaint();
+        return;
+    }
+
+    if (const(JSONValue)* juser = "user" in msg)
+    {
+        JSONValue user = *juser;
+        appState.profiles.store(userId, parseUserProfile(user));
+    }
+    else
+        appState.profiles.storeFailure(userId, "Empty profile");
+    requestRepaint();
+}
+
 /// Apply a content management action result (delete/set icon/equip/...).
 private void applyContentActionResult(string msgType, JSONValue msg)
 {
@@ -2145,7 +2243,10 @@ private void applyFriendsSnapshot(JSONValue msg)
     appState.offlineFriends = roster.offline;
     // Flat roster for the TOOLS friend list, sorted by name only.
     appState.allFriends = roster.all;
-    appState.selectedFriend = null; // Reset selection on refresh.
+    // The open profile is keyed by user ID, so it survives this: the roster
+    // arrays it draws from are replaced on every friend movement, and closing
+    // the page each time meant a friend changing world across the world took
+    // the profile you were reading with it.
     // Rows may have moved under an armed confirmation; disarm.
     appState.armedConfirm = ArmedConfirm.init;
     // Only a re-seed's snapshot answers a forced refresh. Snapshots also

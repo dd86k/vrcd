@@ -32,6 +32,11 @@ enum long PROTOCOL_NOTIFICATIONS = 4;
 /// the server already has.
 enum long PROTOCOL_REFRESH = 6;
 
+/// Minimum server protocol version for full user profiles (`get_user`), which
+/// is everything a profile page shows that the roster does not carry -- and
+/// the only way to see somebody who is not a friend at all.
+enum long PROTOCOL_PROFILES = 7;
+
 /// Minimum server protocol version for filtered inventory listings
 /// (`get_inventory` with `types`/`not_flags`), which is how the exclusive
 /// stickers and emoji are told apart from the props in the Items section.
@@ -234,6 +239,19 @@ class ServerConnection
         logDebugging("refreshFriends");
         sendMessage(JSONValue([
             "type": JSONValue("refresh_friends"),
+        ]));
+    }
+
+    /// Request one person's full profile. Server replies with `user`,
+    /// reporting a failure inside that message rather than as an `error` so
+    /// the page's loading state resolves either way. Requires
+    /// PROTOCOL_PROFILES.
+    void requestUser(string userId)
+    {
+        logDebugging("requestUser: %s", userId);
+        sendMessage(JSONValue([
+            "type": JSONValue("get_user"),
+            "user_id": JSONValue(userId),
         ]));
     }
 
