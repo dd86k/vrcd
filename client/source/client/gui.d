@@ -376,13 +376,7 @@ int runGui(string host, ushort port, string secret, long sinceId,
         return 2;
     }
     
-    // Load icon
-    SDL_Surface *icon = IMG_Load("res/vrcd-logo.png");
-    if (icon)
-    {
-        SDL_SetWindowIcon(window, icon);
-        SDL_DestroySurface(icon); // SDL keeps its own copy
-    }
+    setWindowIcon(window);
 
     // Init UI context (heap-allocated since mu_Context is ~4 MB, far too
     // large for the stack and triggers __chkstk failures on Windows).
@@ -2434,6 +2428,61 @@ private void checkPlayerJoining(JSONValue msg, string user)
     {
         logError("Failed to check player joining: %s", e.msg);
     }
+}
+
+/// Set the window icon from the first artwork found on disk.
+///
+/// The path used to be relative to the working directory, which is the
+/// repository root when the client is started from a shell and the home
+/// directory when it is started from a launcher, so an installed copy never
+/// found it. The binary's own directory is looked at first, then the
+/// installed icon theme beside it (how the .deb lays it out), and the working
+/// directory last.
+///
+/// Wayland has its own answer to this: most compositors take the icon from
+/// the .desktop file matching the window's app_id (set above) and ignore what
+/// the window asks for, so on that session this only matters for compositors
+/// implementing xdg-toplevel-icon.
+private void setWindowIcon(SDL_Window *window)
+{
+    import std.file : exists, getcwd, thisExePath;
+    import std.path : buildNormalizedPath, dirName;
+    import std.string : toStringz;
+
+    string exeDir = dirName(thisExePath());
+    string cwd = getcwd();
+    string[] candidates = [
+        buildNormalizedPath(exeDir, "res", "vrcd-logo.png"),
+        buildNormalizedPath(exeDir, "..", "res", "vrcd-logo.png"),
+        buildNormalizedPath(exeDir, "..", "share", "icons", "hicolor",
+            "512x512", "apps", "vrcd-client.png"),
+        buildNormalizedPath(exeDir, "..", "share", "icons", "hicolor",
+            "256x256", "apps", "vrcd-client.png"),
+        buildNormalizedPath(cwd, "res", "vrcd-logo.png"),
+    ];
+
+    foreach (string candidate; candidates)
+    {
+        if (exists(candidate) == false)
+            continue;
+
+        SDL_Surface *icon = IMG_Load( toStringz(candidate) );
+        if (icon is null)
+        {
+            logWarn("Window icon %s failed to load: %s", candidate,
+                fromStringz( SDL_GetError() ));
+            continue;
+        }
+
+        SDL_SetWindowIcon(window, icon);
+        SDL_DestroySurface(icon); // SDL keeps its own copy
+        logInfo("Window icon: %s", candidate);
+        return;
+    }
+
+    logWarn("No window icon found, looked in:");
+    foreach (string candidate; candidates)
+        logWarn("  %s", candidate);
 }
 
 /// Log platform, video driver, and library versions at startup.

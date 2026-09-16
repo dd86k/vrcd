@@ -86,7 +86,7 @@ build_deb() {
 
     if [[ "${component}" == "client" ]]; then
         install -Dm644 "${ICON}" \
-            "${stage}/usr/share/icons/hicolor/256x256/apps/vrcd-client.png"
+            "${stage}/usr/share/icons/hicolor/512x512/apps/vrcd-client.png"
         mkdir -p "${stage}/usr/share/applications"
         cat > "${stage}/usr/share/applications/vrcd-client.desktop" <<EOF
 [Desktop Entry]

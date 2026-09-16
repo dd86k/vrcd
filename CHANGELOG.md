@@ -10,6 +10,9 @@
   delete).
 - STUFF detail pages have a "Download Image" button: the original file (not the
   thumbnail) is written to your Downloads folder, named after the entry.
+- Look for the window icon beside the binary (and in the installed icon theme)
+  instead of only under the working directory, so a launcher-started or
+  installed copy gets one too.
 - Fix the client dying on SIGPIPE (POSIX) when the server connection drops:
   OpenSSL writes from inside SSL_read, so a disconnect killed the process from
   the network thread instead of reconnecting.
