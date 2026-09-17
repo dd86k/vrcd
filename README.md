@@ -32,7 +32,7 @@ Feel free to join the official [VRChat group](https://vrc.group/VRCD.7796) (`VRC
 Related projects:
 - [vrcd-server-container](https://github.com/ArcaneDisgea/vrcd-server-container) by ArcaneDisgea.
 
-## Screenshots
+## Client Screenshots
 
 ### Feed Page
 
@@ -57,6 +57,10 @@ Related projects:
 ### Profile
 
 ![My profile with bio, links, langs](packaging/flatpak/screenshots/6-profile.png)
+
+## Web Screenshots
+
+![Online list](packaging/flatpak/screenshots/10-web-online.png)
 
 ## Installing
 
