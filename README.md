@@ -36,11 +36,27 @@ Related projects:
 
 ### Feed Page
 
-![Feed with event's date, type, user, and detail columns](packaging/flatpak/screenshots/main.png)
+![Feed with event's date, type, user, and detail columns](packaging/flatpak/screenshots/1-main.png)
 
 ### Online Page
 
-![List of instances (current and capacity) and friends in each of them with color indicators](packaging/flatpak/screenshots/second.png)
+![List of instances (current and capacity) and friends in each of them with color indicators](packaging/flatpak/screenshots/2-online.png)
+
+### Inbox
+
+![Notification inbox](packaging/flatpak/screenshots/3-inbox.png)
+
+### Inventory
+
+![Inventory showing gallery](packaging/flatpak/screenshots/4-stuff.png)
+
+### Tools
+
+![Tools: screenshot folder, etc.](packaging/flatpak/screenshots/5-tools.png)
+
+### Profile
+
+![My profile with bio, links, langs](packaging/flatpak/screenshots/6-profile.png)
 
 ## Installing
 
