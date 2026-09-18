@@ -46,12 +46,12 @@ $ProgressPreference = 'SilentlyContinue'
 # hash off sqlite.org into this, it will never match). SDL publishes neither, so
 # theirs were recorded when the version was pinned, which still catches an asset
 # that changed under a tag that did not.
-$SDL3Version      = '3.4.14'
-$SDL3Sha256       = '69a4e55645651af85e6ccfe40981b5a0bc2c594d0004fe7844db680e23cfbdaf'
+$SDL3Version      = '3.4.16'
+$SDL3Sha256       = '4217944b4e51457af4a59c82d883f8443b3e65964b2acd8943484c492756c4b6'
 $SDL3TtfVersion   = '3.2.2'
 $SDL3TtfSha256    = '13455007029cf487c5aacaa6ff84406be78ffdbed08f933aba3668680ff245f8'
-$SDL3ImageVersion = '3.4.4'
-$SDL3ImageSha256  = '15c88c3f4e20c0bd0640d7e6ebd40c8112cde308fc2bb5d0c92fa921f5745613'
+$SDL3ImageVersion = '3.4.6'
+$SDL3ImageSha256  = 'b851a5203b3ecf928541eef6b563f7db39ec1b1732f130d9afc11050ac76c7a6'
 # curl.se's own builds. 8.11 is the floor: WebSocket support stopped being
 # experimental there, and the server's event stream is a WebSocket.
 $CurlBuild        = '8.21.0_7'
