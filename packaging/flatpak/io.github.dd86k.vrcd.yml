@@ -94,13 +94,8 @@ modules:
       # separately and there is no flag to suppress that. Rewrite them as path
       # deps pointing at the pre-extracted archives, then drop the git entries
       # from selections.json so there is no version conflict.
-      - sed -i 's|dependency "ddlogger" repository=.*|dependency "ddlogger" path="../.dub/packages/ddlogger/4ec9bc06bb90c4a7844f62fcfc1429bc7cdb1378/ddlogger"|' client/dub.sdl
-      - sed -i 's|dependency "ddcurl" repository=.*|dependency "ddcurl" path="../.dub/packages/ddcurl/0bc787a2d9aae09a382d7e1ad67aecfbbd02f399/ddcurl"|' client/dub.sdl
-      - sed -i 's|dependency "ddui" repository=.*|dependency "ddui" path="../.dub/packages/ddui/f33c4d246b40a26d560dad492a36ca532f331b94/ddui"|' client/dub.sdl
-      # ddcurl pulls ddlogger + ddloader transitively; rewrite those too so its
-      # resolver doesn't reach for git.
-      - sed -i 's|dependency "ddlogger" repository=.*|dependency "ddlogger" path="../../../ddlogger/4ec9bc06bb90c4a7844f62fcfc1429bc7cdb1378/ddlogger"|' .dub/packages/ddcurl/0bc787a2d9aae09a382d7e1ad67aecfbbd02f399/ddcurl/dub.sdl
-      - sed -i 's|dependency "ddloader" repository=.*|dependency "ddloader" path="../../../ddloader/c3eb54d31a17e63a7722f8449033ce13764b7636/ddloader"|' .dub/packages/ddcurl/0bc787a2d9aae09a382d7e1ad67aecfbbd02f399/ddcurl/dub.sdl
+      - sed -i 's|dependency "ddlogger" repository=.*|dependency "ddlogger" path="../.dub/packages/ddlogger/4397d8e57a88bd6b3a3e5e4c846ba97ac3bfd364/ddlogger"|' client/dub.sdl
+      - sed -i 's|dependency "ddui" repository=.*|dependency "ddui" path="../.dub/packages/ddui/a70e43e45ceec730a34c5f49f6d3cdb43094b7ab/ddui"|' client/dub.sdl
       - |
         python3 <<'PYEOF'
         import json
@@ -124,9 +119,10 @@ modules:
     sources:
       ## Project source
       # Swap to `type: dir` with `path: ../..` otherwise
+      # Building a tag is more predictable than a commit
       - type: git
         url: https://github.com/dd86k/vrcd.git
-        commit: bfd4bd3879a64e1d6d83063eedffb932b2e8a6ee
+        tag: v0.3.0
 
       ## dub registry packages
       # Each archive is extracted (strip-components:1 drops the top-level
@@ -156,25 +152,13 @@ modules:
       ## dub git packages
       # Pinned to the exact commits in client/dub.selections.json.
       - type: archive
-        url: https://github.com/dd86k/ddlogger/archive/4ec9bc06bb90c4a7844f62fcfc1429bc7cdb1378.tar.gz
-        sha256: 7800c748bd7737b4c009c30a9c3f380b7734bbb17e1e5ec23c6d9aa24588971c
-        dest: .dub/packages/ddlogger/4ec9bc06bb90c4a7844f62fcfc1429bc7cdb1378/ddlogger
+        url: https://github.com/dd86k/ddlogger/archive/4397d8e57a88bd6b3a3e5e4c846ba97ac3bfd364.tar.gz
+        sha256: a0e6cb463102d30080b789fecc851584ef4485a803237e8da72458615c6212df
+        dest: .dub/packages/ddlogger/4397d8e57a88bd6b3a3e5e4c846ba97ac3bfd364/ddlogger
         strip-components: 1
 
       - type: archive
-        url: https://github.com/dd86k/ddui/archive/f33c4d246b40a26d560dad492a36ca532f331b94.tar.gz
-        sha256: 22565c20dc472b6064e33ea35a0e0d3433bf2ec4c5db489338bba1e1b1c8c368
-        dest: .dub/packages/ddui/f33c4d246b40a26d560dad492a36ca532f331b94/ddui
-        strip-components: 1
-
-      - type: archive
-        url: https://github.com/dd86k/ddcurl/archive/0bc787a2d9aae09a382d7e1ad67aecfbbd02f399.tar.gz
-        sha256: c30f63ecfdff887df6c75df1e5fe52f8741952b131b8e1ea658c0244afa538c8
-        dest: .dub/packages/ddcurl/0bc787a2d9aae09a382d7e1ad67aecfbbd02f399/ddcurl
-        strip-components: 1
-
-      - type: archive
-        url: https://github.com/dd86k/ddloader/archive/c3eb54d31a17e63a7722f8449033ce13764b7636.tar.gz
-        sha256: b0e76aa4553d1b4f20cba90bb4bfe7fbe105428d51698347b2e911d93f9cb171
-        dest: .dub/packages/ddloader/c3eb54d31a17e63a7722f8449033ce13764b7636/ddloader
+        url: https://github.com/dd86k/ddui/archive/a70e43e45ceec730a34c5f49f6d3cdb43094b7ab.tar.gz
+        sha256: 07f2d4a7cbfa09efb040cd82316d3433d70786b59a70af5c6d999550bac624a8
+        dest: .dub/packages/ddui/a70e43e45ceec730a34c5f49f6d3cdb43094b7ab/ddui
         strip-components: 1
