@@ -59,36 +59,18 @@ modules:
       # Expose the LDC2 toolchain installed above
       prepend-path: /app/ldc2/bin
     build-commands:
-      # GitHub archives don't carry the registry-set version field; patch each
-      # package descriptor (dub.json or dub.sdl) so dub's path/version check passes.
-      # Also, DUB supports relaxed JSON (allows trailing commas), which trips up Python's
-      # json module... Read file manually
+      # Archives don't carry the registry-set version field; patch each package
+      # descriptor (dub.json or dub.sdl) so dub's path/version check passes.
+      # Textual rather than parsed: dub accepts relaxed JSON (trailing commas),
+      # which a strict parser rejects. Replace the field where there is one,
+      # otherwise insert it.
       - |
-        python3 <<'PYEOF'
-        import re
-        patches = [
-            ('.dub/packages/bindbc-sdl/2.4.2/bindbc-sdl/dub.json',        '2.4.2', 'json'),
-            ('.dub/packages/bindbc-common/1.0.5/bindbc-common/dub.json',   '1.0.5', 'json'),
-            ('.dub/packages/bindbc-loader/1.1.5/bindbc-loader/dub.sdl',    '1.1.5', 'sdl'),
-        ]
-        for path, ver, fmt in patches:
-            t = open(path).read()
-            if fmt == 'json':
-                pat = r'"version"\s*:\s*"[^"]*"'
-                rep = '"version": "%s"' % ver
-                if re.search(pat, t):
-                    t = re.sub(pat, rep, t)
-                else:
-                    t = re.sub(r'\{', '{\n  "version": "%s",' % ver, t, count=1)
-            else:
-                pat = r'^version\s+"[^"]*"'
-                rep = 'version "%s"' % ver
-                if re.search(r'^version\s+', t, re.M):
-                    t = re.sub(pat, rep, t, flags=re.M)
-                else:
-                    t = rep + '\n' + t
-            open(path, 'w').write(t)
-        PYEOF
+        set -e
+        patch_json() { VER="$2" perl -0777 -i -pe 's/"version"\s*:\s*"[^"]*"/"version": "$ENV{VER}"/ or s/\{/{\n  "version": "$ENV{VER}",/' "$1"; }
+        patch_sdl()  { VER="$2" perl -0777 -i -pe 's/^version\s+"[^"]*"/version "$ENV{VER}"/m or $_ = qq{version "$ENV{VER}"\n} . $_' "$1"; }
+        patch_json .dub/packages/bindbc-sdl/2.4.2/bindbc-sdl/dub.json       2.4.2
+        patch_json .dub/packages/bindbc-common/1.0.5/bindbc-common/dub.json 1.0.5
+        patch_sdl  .dub/packages/bindbc-loader/1.1.5/bindbc-loader/dub.sdl  1.1.5
 
       # --skip-registry=all only blocks the dub registry; git deps are fetched
       # separately and there is no flag to suppress that. Rewrite them as path
@@ -97,15 +79,16 @@ modules:
       - sed -i 's|dependency "ddlogger" repository=.*|dependency "ddlogger" path="../.dub/packages/ddlogger/4397d8e57a88bd6b3a3e5e4c846ba97ac3bfd364/ddlogger"|' client/dub.sdl
       - sed -i 's|dependency "ddui" repository=.*|dependency "ddui" path="../.dub/packages/ddui/a70e43e45ceec730a34c5f49f6d3cdb43094b7ab/ddui"|' client/dub.sdl
       - |
-        python3 <<'PYEOF'
-        import json
-        with open('client/dub.selections.json', 'w') as f:
-            json.dump({"fileVersion": 1, "versions": {
-                "bindbc-common": "1.0.5",
-                "bindbc-loader": "1.1.5",
-                "bindbc-sdl":    "2.4.2",
-            }}, f, indent=2)
-        PYEOF
+        cat > client/dub.selections.json <<'EOF'
+        {
+          "fileVersion": 1,
+          "versions": {
+            "bindbc-common": "1.0.5",
+            "bindbc-loader": "1.1.5",
+            "bindbc-sdl": "2.4.2"
+          }
+        }
+        EOF
 
       # Offline dub build: registry packages are in .dub/packages/ (--cache=local);
       # git deps have been rewritten to path deps above.
