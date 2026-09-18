@@ -1,17 +1,21 @@
 app-id: io.github.dd86k.vrcd
 runtime: org.freedesktop.Platform
-runtime-version: '25.08'
+runtime-version: '26.08'
 sdk: org.freedesktop.Sdk
 command: vrcd_client
 
-# Getting Started:
+# Install flatpak and flatpak-builder:
 # - sudo apt install flatpak flatpak-builder
+# Add Flathub repo if it doesn't exist:
 # - flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-# - flatpak install --system flathub org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08
-# - flatpak-builder --state-dir=/tmp/flatpak-state --force-clean /tmp/flatpak-build/flatpak/io.github.dd86k.vrcd.yml
+# Install Freedesktop runtime:
+# - flatpak install --system flathub org.freedesktop.Platform//26.08 org.freedesktop.Sdk//26.08
+# Build package: takes a build directory and the manifest, in that order
+# - flatpak-builder --state-dir=/tmp/flatpak-state --force-clean /tmp/flatpak-build packaging/flatpak/io.github.dd86k.vrcd.yml
 #   - can add "--user --install" to install
-#   - can also just use "--run"
-# - flatpak-builder --run build-dir packaging/flatpak/io.github.dd86k.vrcd.yml vrcd_client
+# Run package: "--run" needs a directory already built, it does not build one
+# - flatpak-builder --run /tmp/flatpak-build packaging/flatpak/io.github.dd86k.vrcd.yml vrcd_client
+#   - once installed, "flatpak run io.github.dd86k.vrcd" instead
 
 finish-args:
   # Display and rendering
@@ -46,11 +50,11 @@ modules:
         sha256: a7bc9c956138f558cadf9c962352f59d41c80df6eb3ae3f8039f25be14a69303
         strip-components: 1
 
-  # No SDL modules. The 25.08 runtime carries sdl3, sdl3-ttf and sdl3-image
-  # itself, which is what let the hand-built SDL2_ttf and SDL2_image modules go
-  # away with the SDL3 port. The Platform ships the sonames without the bare
-  # `.so` development symlinks, so the client's loader falls back to
-  # libSDL3*.so.0 -- see loadSDLLibraries in client/source/client/gui.d.
+  # No SDL modules. The runtime carries sdl3, sdl3-ttf and sdl3-image itself,
+  # which is what let the hand-built SDL2_ttf and SDL2_image modules go away
+  # with the SDL3 port. The Platform ships the sonames without the bare `.so`
+  # development symlinks, so the client's loader falls back to libSDL3*.so.0 --
+  # see loadSDLLibraries in client/source/client/gui.d.
 
   ## vrcd client
   - name: vrcd-client
@@ -109,8 +113,7 @@ modules:
 
       ## dub registry packages
       # Each archive is extracted (strip-components:1 drops the top-level
-      # directory) directly into the path dub expects for --cache=local:
-      #   .dub/packages/<name>/<version>/<name>/
+      # directory) directly into the path dub expects for --cache=local: .dub/packages/<name>/<version>/<name>/
       - type: archive
         url: https://codeload.github.com/BindBC/bindbc-sdl/tar.gz/refs/tags/v2.4.2
         sha256: fcab293861551eb8b51551b9dff394a821ebce4d52611595dc7668e0106279f9
