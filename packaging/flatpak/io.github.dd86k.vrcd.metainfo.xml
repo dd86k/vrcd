@@ -31,11 +31,11 @@
   <screenshots>
     <screenshot type="default">
       <caption>Event feed with friend activity history</caption>
-      <image>https://raw.githubusercontent.com/dd86k/vrcd/meow/packaging/flatpak/screenshots/main.png</image>
+      <image>https://raw.githubusercontent.com/dd86k/vrcd/meow/packaging/flatpak/screenshots/1-main.png</image>
     </screenshot>
     <screenshot>
       <caption>Online friends grouped by instance</caption>
-      <image>https://raw.githubusercontent.com/dd86k/vrcd/meow/packaging/flatpak/screenshots/second.png</image>
+      <image>https://raw.githubusercontent.com/dd86k/vrcd/meow/packaging/flatpak/screenshots/2-online.png</image>
     </screenshot>
   </screenshots>
 
@@ -47,6 +47,29 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.3.0" date="2026-09-18">
+      <description>
+        <p>The client moves from SDL2 to SDL3.</p>
+        <ul>
+          <li>Stickers and emoji are split into the ones you uploaded and the exclusive ones VRChat handed out.</li>
+          <li>Any piece of content with artwork can be downloaded at its original size.</li>
+          <li>The window icon is found beside the binary and in the installed icon theme, so a launcher-started copy gets one too.</li>
+          <li>The client no longer dies when the server connection drops.</li>
+          <li>Reconnecting to VRChat now takes two seconds instead of thirty, and friend state is refreshed every 30 minutes.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.2.0" date="2026-08-18">
+      <description>
+        <p>A web front-end, usable from a phone, and inventory support.</p>
+        <ul>
+          <li>Web front-end: friend list, notification inbox, profile viewing and editing, mute and block management.</li>
+          <li>Inventory, items and stickers in both the client and the web front-end.</li>
+          <li>Joining an instance works on Windows and Linux.</li>
+          <li>World metadata is cached across restarts.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-06-09">
       <description>
         <p>Initial Flathub release.</p>
