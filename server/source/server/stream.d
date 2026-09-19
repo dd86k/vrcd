@@ -172,6 +172,13 @@ class PipeStream : Stream
         }
     }
 
+    /// Release the write end and stop reading.
+    ///
+    /// The read end is descriptor 0, which the C runtime's `stdin` also
+    /// refers to and closes at exit; freeing the number here would let an
+    /// unrelated open claim it first and be closed on somebody else's
+    /// behalf. Marking the stream closed is enough, since an embedded
+    /// server whose pipe has gone is on its way out anyway.
     override void close()
     {
         if (atomicLoad(closed))
@@ -182,11 +189,7 @@ class PipeStream : Stream
             sysClose(writeFd);
             writeFd = -1;
         }
-        if (readFd >= 0)
-        {
-            sysClose(readFd);
-            readFd = -1;
-        }
+        readFd = -1;
     }
 }
 

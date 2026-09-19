@@ -2829,6 +2829,10 @@ private class ClientHandler
             "world_cache_count": JSONValue(stats.worldCacheCount),
             "avatar_cache_count": JSONValue(stats.avatarCacheCount),
             "db_size_bytes": JSONValue(stats.dbSizeBytes),
+            // Where the file actually is. An embedded server picks the path
+            // itself, so this is the front-end's only way to tell the user
+            // what to copy when they move to a standalone one.
+            "db_path": JSONValue(server.store.path()),
         ]);
         sendLine(resp.toString() ~ "\n");
         logDebugging("handleGetStats: events=%d worlds=%d avatars=%d db_bytes=%d",

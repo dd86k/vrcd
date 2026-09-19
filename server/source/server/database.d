@@ -85,6 +85,7 @@ string eventSource(EventType type)
 class Database
 {
     private Sqlite db;
+    private string dbFilePath;
 
     this(string dbPath)
     {
@@ -92,6 +93,7 @@ class Database
         if (exists(dir) == false)
             mkdirRecurse(dir);
 
+        dbFilePath = dbPath;
         db = new Sqlite(dbPath);
 
         // Enable WAL for concurrent read/write.
@@ -101,6 +103,12 @@ class Database
         foreach (_; db.query("PRAGMA journal_mode=WAL")) {}
 
         initSchema();
+    }
+
+    /// Path of the SQLite file backing this database.
+    string path() const
+    {
+        return dbFilePath;
     }
 
     /// Store a raw WebSocket event. Returns the assigned event ID.
