@@ -99,6 +99,13 @@ class APIServer
     private ushort tlsPort;
     private bool tlsOnly;
 
+    // Embedded operation: the front-end that launched us holds the other end
+    // of this pipe. Set, it becomes a client at start() alongside (or instead
+    // of) any listener.
+    private Stream stdioStream;
+    private bool listenEnabled = true;
+    private void delegate() stdioClosedCallback;
+
     // Re-seed worker state.
     private Thread reseedThread;
     private Mutex reseedSignalMutex;
@@ -246,12 +253,57 @@ class APIServer
         broadcastStatus();
     }
 
+    /// Serve the front-end that launched this process over its own stdio.
+    ///
+    /// `onClosed` fires when that pipe goes away, which is how an embedded
+    /// server learns its front-end is gone: there is nobody left to delegate
+    /// a login to and nobody to receive events, so the caller shuts down.
+    void setStdioStream(Stream stream, void delegate() onClosed = null)
+    {
+        stdioStream = stream;
+        stdioClosedCallback = onClosed;
+    }
+
+    /// Whether to open a TCP listener at all. False leaves the stdio pipe as
+    /// the only way in, which is the default for an embedded server: no port
+    /// bound means nothing to find and no secret to agree on.
+    void setListenEnabled(bool enabled)
+    {
+        listenEnabled = enabled;
+    }
+
     /// Start accepting client connections.
     void start()
     {
         if (running)
             return;
         running = true;
+
+        if (stdioStream)
+        {
+            // Trusted: arriving over the pipe means holding a descriptor this
+            // process was launched with, which is a stronger claim than any
+            // secret sent over a socket.
+            ClientHandler handler = new ClientHandler(stdioStream, this, true);
+            handler.onClosed = stdioClosedCallback;
+
+            clientsMutex.lock();
+            clients ~= handler;
+            clientsMutex.unlock();
+
+            logInfo("Serving front-end over stdio");
+            Thread t = new Thread(&handler.run);
+            t.isDaemon = true;
+            t.start();
+        }
+
+        if (listenEnabled == false)
+        {
+            reseedThread = new Thread(&reseedLoop);
+            reseedThread.isDaemon = true;
+            reseedThread.start();
+            return;
+        }
 
         // When a separate TLS port is configured, start two listeners:
         // one for plain TCP and one for TLS. When tlsOnly is set and TLS
@@ -899,6 +951,11 @@ private class ClientHandler
     Stream stream;
     APIServer server;
     bool authenticated;
+    /// Reached us over a transport that is itself the credential (the stdio
+    /// pipe of an embedded server), so the shared secret does not apply.
+    private bool trusted;
+    /// Fired once the connection ends. Only the stdio client sets it.
+    void delegate() onClosed;
     private Mutex sendMutex;
     private Mutex pongMutex;
     private MonoTime lastPongAt;
@@ -910,10 +967,11 @@ private class ClientHandler
     /// the first is how a lock order gets invented by accident.
     private shared long lastSendProgressTicks;
 
-    this(Stream stream, APIServer server)
+    this(Stream stream, APIServer server, bool trusted = false)
     {
         this.stream = stream;
         this.server = server;
+        this.trusted = trusted;
         this.sendMutex = new Mutex();
         this.pongMutex = new Mutex();
         this.lastPongAt = MonoTime.currTime;
@@ -967,6 +1025,8 @@ private class ClientHandler
             logInfo("Client disconnected");
             server.removeClient(this);
             stream.close();
+            if (onClosed)
+                onClosed();
         }
 
         // Upload messages carry base64 image data (a 10 MB PNG is ~13.7 MB
@@ -1302,7 +1362,7 @@ private class ClientHandler
         string token;
         if (const(JSONValue)* v = "token" in msg)
             token = v.str;
-        if (server.sharedSecret.length == 0 || token == server.sharedSecret)
+        if (trusted || server.sharedSecret.length == 0 || token == server.sharedSecret)
         {
             authenticated = true;
             JSONValue resp = JSONValue([

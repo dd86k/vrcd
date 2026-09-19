@@ -79,6 +79,35 @@ void cmdRun(ref Config config)
         config.dbPath, config.listenAddr, config.listenPort,
         config.credentialsPath, config.cookieJarPath);
 
+    // Claim stdout before anything can write to it: from here on it is the
+    // wire, and descriptor 1 points at stderr so a stray write is logged
+    // rather than injected into a JSON line.
+    PipeStream stdioStream;
+    if (config.stdio)
+    {
+        try stdioStream = PipeStream.fromStdio();
+        catch (Exception e)
+        {
+            logError("Could not take over stdio: %s", e.msg);
+            exit(1);
+        }
+    }
+
+    // End the process here rather than returning up through druntime.
+    //
+    // The worker threads are daemons that never finish -- the re-seed timer,
+    // a client's ping loop -- so returning from main reaches gc_term(), whose
+    // final collect suspends those threads and then frees the pools they are
+    // still running out of. Exiting skips the teardown and lets the kernel
+    // reclaim everything, which is all a shutdown here ever needed; atexit
+    // still flushes the log. Ctrl+C on a standalone server takes this path
+    // too, it is just rare there, where an embedded server shuts down every
+    // time somebody closes the app.
+    void finish()
+    {
+        exit(0);
+    }
+
     // Attempt to load OpenSSL for TLS support.
     loadTLS();
 
@@ -91,7 +120,14 @@ void cmdRun(ref Config config)
     AuthDelegator delegator;
     APIServer apiServer;
 
-    if (config.apiSecret.length == 0)
+    // Listening is opt-in under --stdio: the pipe is how the front-end that
+    // launched us gets in, and a port only needs to exist when some other
+    // device has to reach this server too.
+    bool wantListener = config.stdio == false || config.listenRequested;
+
+    // Only a listener makes an unauthenticated connection possible. Holding
+    // the pipe already means being the process that started this one.
+    if (wantListener && config.apiSecret.length == 0)
         logWarn("No --secret set, clients can connect without authentication");
 
     // Initialize TLS context if cert and key are configured.
@@ -125,6 +161,34 @@ void cmdRun(ref Config config)
     else if (hasCert || hasKey)
         logWarn("TLS partially configured; both tls_cert and tls_key are required");
 
+    // Attach the pipe and announce whichever ways in are actually open. The
+    // pipe closing means the front-end is gone, which for an embedded server
+    // is the shutdown signal: nobody left to delegate a login to, and nobody
+    // to receive events.
+    void wireTransport(APIServer srv)
+    {
+        srv.setListenEnabled(wantListener);
+        if (stdioStream is null)
+            return;
+        srv.setStdioStream(stdioStream, {
+            logInfo("Front-end closed the pipe, shutting down");
+            g_running = false;
+            // Startup may still be parked on a delegated login, which the
+            // shutdown flag alone will not reach: it is waited on well before
+            // the main loop this flag is read from.
+            if (delegator)
+                delegator.abort();
+        });
+    }
+
+    void announceStarted()
+    {
+        if (wantListener)
+            logInfo("Server started, listening on %s:%d", config.listenAddr, config.listenPort);
+        else
+            logInfo("Server started, serving the front-end over stdio only");
+    }
+
     if (headless)
     {
         logInfo("Running in headless mode (no TTY), auth will be delegated to clients");
@@ -134,10 +198,11 @@ void cmdRun(ref Config config)
         delegator = new AuthDelegator();
         apiServer = new APIServer(config.listenAddr, config.listenPort, config.apiSecret, store, config.reseedInterval);
         apiServer.setAuthDelegator(delegator);
+        wireTransport(apiServer);
         if (tlsCtx)
             apiServer.setTLS(tlsCtx, config.tlsPort, config.tlsOnly);
         apiServer.start();
-        logInfo("Server started, listening on %s:%d", config.listenAddr, config.listenPort);
+        announceStarted();
     }
 
     // Auth VRChat (may block waiting for client in headless mode).
@@ -145,6 +210,13 @@ void cmdRun(ref Config config)
     try authState = authenticate(config, client, delegator);
     catch (Exception e)
     {
+        // A front-end that closed its pipe mid-login did not fail to
+        // authenticate; it left, and the prompt was abandoned on purpose.
+        if (g_running == false)
+        {
+            logInfo("Shut down before authentication completed");
+            finish();
+        }
         logError("Authentication failed: %s", e.msg);
         exit(1);
     }
@@ -165,10 +237,11 @@ void cmdRun(ref Config config)
     {
         // Interactive mode: start API server after auth.
         apiServer = new APIServer(config.listenAddr, config.listenPort, config.apiSecret, store, config.reseedInterval);
+        wireTransport(apiServer);
         if (tlsCtx)
             apiServer.setTLS(tlsCtx, config.tlsPort, config.tlsOnly);
         apiServer.start();
-        logInfo("Server started, listening on %s:%d", config.listenAddr, config.listenPort);
+        announceStarted();
     }
 
     // Rate limit tracker for VRChat API.
@@ -465,6 +538,8 @@ void cmdRun(ref Config config)
     logInfo("Shutting down, flushing session...");
     synchronized (vrcApiMutex)
         client.flushCookies();
+
+    finish();
 }
 
 void cmdAuth(ref Config config)
@@ -883,7 +958,11 @@ int main(string[] args)
         },
         "listen|l", "Listen address (host:port)", (string _, string val) {
             config.parseListen(val);
+            config.listenRequested = true;
             cliSet |= Config.SET_LISTEN;
+        },
+        "stdio",    "Serve the launching front-end over stdin/stdout (embedded mode)", () {
+            config.stdio = true;
         },
         "secret",   "Shared secret for client auth", (string _, string val) {
             config.apiSecret = val;

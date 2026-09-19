@@ -64,6 +64,7 @@ class AuthDelegator
     private Condition cond;
     private AuthRequest* pending;   /// Non-null when waiting for a response.
     private AuthResponse* response; /// Non-null when a client has responded.
+    private bool aborted;           /// Latched by abort(); no prompt can be answered after it.
     private void delegate(JSONValue) broadcastFn;
 
     static immutable Duration timeout = dur!"minutes"(30);
@@ -89,6 +90,13 @@ class AuthDelegator
         mtx.lock();
         scope(exit) mtx.unlock();
 
+        if (aborted)
+        {
+            AuthResponse gone;
+            gone.cancelled = true;
+            return gone;
+        }
+
         // Set pending request.
         pending = new AuthRequest(req.kind, req.twoFactorMethod, req.error);
         response = null;
@@ -107,6 +115,15 @@ class AuthDelegator
         MonoTime deadline = MonoTime.currTime + timeout;
         while (response is null)
         {
+            if (aborted)
+            {
+                logInfo("Auth delegation abandoned: nobody left to answer the prompt");
+                pending = null;
+                AuthResponse gone;
+                gone.cancelled = true;
+                return gone;
+            }
+
             Duration remaining = deadline - MonoTime.currTime;
             if (remaining <= Duration.zero)
             {
@@ -150,6 +167,22 @@ class AuthDelegator
             resp.cancelled, resp.username.length, resp.code.length);
         response = new AuthResponse(resp.username, resp.password, resp.code, resp.cancelled);
         cond.notify();
+    }
+
+    /// Abandon any prompt in flight and refuse every later one.
+    ///
+    /// For an embedded server losing its front-end: the login is delegated,
+    /// so with the pipe gone there is nobody to type into it and the thirty
+    /// minutes the prompt would otherwise sit there are thirty minutes the
+    /// process outlives the app that started it. Latched rather than a
+    /// one-shot, since the login retries around a timeout.
+    void abort()
+    {
+        mtx.lock();
+        scope(exit) mtx.unlock();
+        aborted = true;
+        pending = null;
+        cond.notifyAll();
     }
 
     /// Non-blocking check for a pending request. Used when a new client connects.

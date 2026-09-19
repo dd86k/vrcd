@@ -81,6 +81,12 @@ struct Config
     /// When true and TLS is configured, disable the plain TCP listener.
     bool tlsOnly;
     bool verbose;
+    /// Serve the launching front-end over this process's stdin/stdout instead
+    /// of a socket. Set by a front-end that embeds the server as a child.
+    bool stdio;
+    /// Whether --listen was given. In stdio mode it is what decides between
+    /// the pipe alone and a pipe plus a listener other devices can reach.
+    bool listenRequested;
     /// Directory for the downloaded-image cache (gallery, icons, prints...).
     string imageCachePath;
     /// Image cache size cap in MiB. Oldest entries are evicted past this.

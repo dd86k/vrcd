@@ -1,4 +1,4 @@
-/// TCP stream abstraction (plain or TLS).
+/// Stream abstraction (plain TCP, TLS, or a stdio pipe).
 ///
 /// Provides a common send/receive interface so the rest of the server
 /// can operate identically whether the transport is plain TCP or TLS
@@ -76,6 +76,117 @@ class PlainStream : Stream
             return;
         atomicStore(closed, true);
         sock.close();
+    }
+}
+
+version (Posix)
+{
+    private import core.sys.posix.unistd : sysRead = read, sysWrite = write,
+        sysDup = dup, sysDup2 = dup2, sysClose = close;
+}
+else version (Windows)
+{
+    // The CRT's descriptor layer rather than the Win32 handle one: a child's
+    // redirected stdio arrives as descriptors 0/1/2 either way, and going
+    // through _dup/_read keeps this module identical on both platforms.
+    private extern (C) nothrow @nogc
+    {
+        int _read(int, void*, uint);
+        int _write(int, const(void)*, uint);
+        int _dup(int);
+        int _dup2(int, int);
+        int _close(int);
+    }
+    private alias sysRead  = _read;
+    private alias sysWrite = _write;
+    private alias sysDup   = _dup;
+    private alias sysDup2  = _dup2;
+    private alias sysClose = _close;
+}
+
+/// Pipe stream over a pair of file descriptors.
+///
+/// The transport an embedded server speaks: the front-end launches it as a
+/// child and talks JSON-L over its stdin/stdout, so there is no listener, no
+/// port to pick and no secret to agree on -- holding the pipe *is* the
+/// authorization, and the pipe closing is how either side learns the other
+/// is gone.
+class PipeStream : Stream
+{
+    private int readFd = -1;
+    private int writeFd = -1;
+    private shared bool closed;
+
+    this(int readFd, int writeFd)
+    {
+        this.readFd = readFd;
+        this.writeFd = writeFd;
+    }
+
+    /// Take over the process's stdin/stdout, and point descriptor 1 at stderr.
+    ///
+    /// Stdout is the wire from here on, so a stray `writeln` anywhere in the
+    /// server would corrupt a JSON line rather than fail loudly. Only the
+    /// duplicate this returns still reaches the pipe; the descriptor the rest
+    /// of the process writes through lands in the log beside every other
+    /// diagnostic.
+    static PipeStream fromStdio()
+    {
+        int out_ = sysDup(1);
+        if (out_ < 0)
+            throw new Exception("Could not duplicate stdout for the pipe");
+        sysDup2(2, 1);
+        return new PipeStream(0, out_);
+    }
+
+    override ptrdiff_t receive(void[] buf)
+    {
+        if (atomicLoad(closed))
+            return 0;
+        return sysRead(readFd, buf.ptr, cast(uint) buf.length);
+    }
+
+    override ptrdiff_t send(const(void)[] data)
+    {
+        if (atomicLoad(closed))
+            return -1;
+        return sysWrite(writeFd, data.ptr, cast(uint) data.length);
+    }
+
+    /// Close the write end so the peer reads EOF and hangs up, which is what
+    /// wakes a thread blocked in receive().
+    ///
+    /// Closing the read end directly would be the socket shutdown's
+    /// equivalent, but a descriptor number released while a reader is still
+    /// parked on it is the one hazard worth avoiding: the next open() gets
+    /// that number. Going through the peer costs a round trip and cannot
+    /// read somebody else's pipe.
+    override void shutdown()
+    {
+        if (atomicLoad(closed))
+            return;
+        if (writeFd >= 0)
+        {
+            sysClose(writeFd);
+            writeFd = -1;
+        }
+    }
+
+    override void close()
+    {
+        if (atomicLoad(closed))
+            return;
+        atomicStore(closed, true);
+        if (writeFd >= 0)
+        {
+            sysClose(writeFd);
+            writeFd = -1;
+        }
+        if (readFd >= 0)
+        {
+            sysClose(readFd);
+            readFd = -1;
+        }
     }
 }
 
