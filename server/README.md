@@ -377,7 +377,7 @@ VRChat authentication and session management.
 - Cookie jar persistence for session reuse
 - Credential file read/write for unattended operation
 - Headless 2FA delegation: when running without a TTY, credential and 2FA prompts are sent to the connected clients
-- A prompt nobody answered inside 30 minutes is not a failed sign-in, so the server keeps running: it sends `auth_cancelled` to take the modal down, then starts the login over and asks again. A stale code is useless anyway, and the alternative is a server that dies because its owner was asleep. Exiting stays for a real failure (bad credentials, three wrong codes, an explicit cancel)
+- A prompt nobody answered inside 30 minutes is not a failed sign-in: the server sends `auth_cancelled` to take the modal down, restarts the login and asks again. Exiting stays for a real failure (bad credentials, three wrong codes, an explicit cancel)
 
 ### `vrchat/websocket.d`
 Persistent WebSocket connection to `wss://pipeline.vrchat.cloud`.

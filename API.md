@@ -457,7 +457,7 @@ Note this is VRChat's sign-in, not this API's: the `auth` handshake above is a s
 
 ### `auth_cancelled`
 
-Nobody answered an `auth_request` within the 30 minutes, so the server dropped it. The server does not exit: it starts the VRChat sign-in over and sends a fresh `auth_request`, which for a 2FA prompt is the only useful outcome anyway, since a code typed half an hour late is dead. Front-ends should take the prompt down — an answer to a request nobody is waiting on is discarded — and wait for the next one.
+Nobody answered an `auth_request` in time, so the server dropped it, restarted the sign-in and will send a fresh one. Front-ends should take the prompt down: an answer to a request nobody is waiting on is discarded.
 
 | Field    | Type   | Description                    |
 |----------|--------|--------------------------------|

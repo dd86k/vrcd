@@ -30,6 +30,9 @@
 - Ignore SIGPIPE (POSIX): a front-end hanging up mid-response, or a dropped
   VRChat connection, could kill the daemon from inside an OpenSSL or libcurl
   write.
+- Stay up when a delegated sign-in prompt times out: send `auth_cancelled` so
+  the front-ends drop the stale modal, then restart the login and ask again.
+  Bad credentials, three wrong codes and an explicit cancel still exit.
 
 ### Web
 

@@ -48,13 +48,10 @@ AuthState authenticate(ref Config config, HTTPClient client, AuthDelegator deleg
 {
     setupClient(client, config);
 
-    // A delegated prompt that expired means nobody was at a front-end, not that
-    // the sign-in was refused. The server has nothing to do without a VRChat
-    // session, so it starts the login over -- and keeps serving clients in the
-    // meantime -- rather than ending the process. Each pass blocks on the
-    // prompt for the delegator's timeout, so this costs one request per
-    // timeout, not a spin. Unreachable without a delegator: stdin has no
-    // deadline.
+    // An expired prompt means nobody was at a front-end, not that the sign-in
+    // was refused, so start the login over rather than end the process. Each
+    // pass blocks for the delegator's timeout, so this is one request per
+    // timeout, not a spin.
     for (;;)
     {
         try return attemptAuth(config, client, delegator);
