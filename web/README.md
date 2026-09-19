@@ -590,7 +590,10 @@ A dropped link clears it too, since an answer would have nowhere to go and the
 server re-sends after the next `auth_ok`.
 
 Cancel is an answer, not a dismissal: the server stops waiting, and a headless
-one gives up on the sign-in.
+one gives up on the sign-in. Letting the prompt sit is not an answer at all --
+after half an hour the server drops it, says so with `auth_cancelled`, and
+starts its login over, so the modal comes down here and a fresh one arrives
+with the next `auth_request`.
 
 > **Note:** the password crosses the browser-to-web-server hop, so this is one
 > more reason to keep the listener on loopback or behind TLS. It is held only
@@ -624,7 +627,7 @@ TCP client for the vrcd-server JSON-L API, on its own thread.
   `inventory_action_result`, `delete_file_result`, `delete_print_result`,
   `set_user_icon_result`, `upload_image_result`, `upload_print_result`,
   `image`, `set_status_result`, `moderations`, `moderate_result`,
-  `unfriend_result`, `auth_request`, `ping`, `error`.
+  `unfriend_result`, `auth_request`, `auth_cancelled`, `ping`, `error`.
   Everything else is logged and dropped.
 - `self()`, `status()`, `roster()`, `joinResult()`, `notifications()`,
   `notifyResult()`, `statusResult()`, `authPrompt()`, `content(section)`,

@@ -2015,6 +2015,17 @@ private:
                 : "a 2FA code (" ~ asked.method ~ ")");
             break;
 
+        case "auth_cancelled":
+            // vrcd-server gave up waiting and restarts its login, so a fresh
+            // auth_request follows. The modal comes down in the meantime: it
+            // would otherwise collect a code for a prompt nobody is on.
+            synchronized (stateMutex)
+                pendingAuth = AuthPrompt.init;
+            notifyChange();
+
+            logWarn("vrcd-server's sign-in prompt timed out; it is asking again");
+            break;
+
         case "status":
             bool vrchatConnected;
             if (const(JSONValue) *v = "vrchat_connected" in message)
