@@ -3977,7 +3977,117 @@ private void drawSettingsTab(mu_Context* ctx, AppState* state, int scrollDelta)
     applyScroll(ctx, scrollDelta);
 
     // Section: Server connection.
-    sectionHeader(ctx, "Server Connection");
+    sectionHeader(ctx, "Server");
+
+    // Two buttons rather than a checkbox: they swap out the whole block
+    // below them, which is a choice and not an option, and a pair of big
+    // targets is what a headset can actually hit.
+    static immutable int[2] halfCols = [-1, -1];
+    mu_layout_row(ctx, 2, halfCols.ptr, 60);
+    drawModeButton(ctx, state, "THIS PC", 1);
+    drawModeButton(ctx, state, "REMOTE", 0);
+
+    if (state.settingsEmbedded)
+        drawEmbeddedServerSettings(ctx, state);
+    else
+        drawRemoteServerSettings(ctx, state);
+
+    // Connect / Reconnect button. Commits the whole block above.
+    spacer(ctx);
+    mu_layout_row(ctx, 1, fullCol.ptr, 60);
+    string btnLabel = state.connected ? "Reconnect" : "Connect";
+    if (mu_button(ctx, btnLabel))
+        state.reconnectRequested = true;
+
+    // Section: Font settings.
+    spacer(ctx);
+    sectionHeader(ctx, "Font");
+
+    mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
+    mu_label(ctx, "Font Path");
+    mu_textbox(ctx, state.settingsFontPath.ptr, cast(int) state.settingsFontPath.length);
+
+    mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
+    mu_label(ctx, "Font Size");
+    mu_slider_ex(ctx, &state.settingsFontSize, 8.0f, 72.0f, 1.0f, "%.0f", MU_OPT_ALIGNCENTER);
+
+    mu_layout_row(ctx, 1, fullCol.ptr, 60);
+    if (mu_button(ctx, "Apply Font"))
+    {
+        state.fontReloadRequested = true;
+        setStatusFlash(state, "  Font applied");
+    }
+
+    drawRestOfSettings(ctx, state);
+}
+
+/// One half of the THIS PC / REMOTE pair, drawn selected when it is the
+/// current mode.
+private void drawModeButton(mu_Context* ctx, AppState* state, string label, int mode)
+{
+    if (state.settingsEmbedded == mode)
+    {
+        mu_Color prev = ctx.style.colors[MU_COLOR_BUTTON];
+        ctx.style.colors[MU_COLOR_BUTTON] = ctx.style.colors[MU_COLOR_BASEFOCUS];
+        mu_button(ctx, label);
+        ctx.style.colors[MU_COLOR_BUTTON] = prev;
+        return;
+    }
+    if (mu_button(ctx, label))
+        state.settingsEmbedded = mode;
+}
+
+/// The embedded block: nothing to configure, so it is status plus the two
+/// things somebody might actually need -- where the database is, and how to
+/// let another device in.
+private void drawEmbeddedServerSettings(mu_Context* ctx, AppState* state)
+{
+    static immutable int[2] labelFieldCols = [200, -1];
+    static immutable int[1] fullCol = [-1];
+
+    mu_layout_row(ctx, 1, fullCol.ptr, 0);
+    mu_label(ctx, "vrcd runs its own server. Sign in to VRChat when asked.");
+
+    mu_layout_row(ctx, 1, fullCol.ptr, 0);
+    mu_label(ctx, "Events are only recorded while vrcd is open.");
+
+    if (state.embeddedStatus.length > 0)
+    {
+        mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
+        mu_label(ctx, "Server");
+        mu_label(ctx, state.embeddedStatus);
+    }
+
+    // Only useful when the binary is somewhere the search does not predict,
+    // so it says so rather than sitting there looking required.
+    mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
+    mu_label(ctx, "Server path (optional)");
+    mu_textbox(ctx, state.settingsServerPath.ptr, cast(int) state.settingsServerPath.length);
+
+    // Empty means the pipe is the only way in. An address here additionally
+    // opens a port, which is what lets a phone running the web front-end
+    // reach this server.
+    mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
+    mu_label(ctx, "Listen for other devices");
+    mu_textbox(ctx, state.settingsServerListen.ptr, cast(int) state.settingsServerListen.length);
+
+    mu_layout_row(ctx, 1, fullCol.ptr, 0);
+    mu_label(ctx, "Blank = this PC only. Example: 0.0.0.0:9700");
+
+    // The one fact somebody moving to a standalone server needs. Switching
+    // to REMOTE leaves this file alone, which is what makes the move safe.
+    if (state.statsDbPath.length > 0)
+    {
+        mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
+        mu_label(ctx, "Database");
+        mu_label(ctx, state.statsDbPath);
+    }
+}
+
+private void drawRemoteServerSettings(mu_Context* ctx, AppState* state)
+{
+    static immutable int[2] labelFieldCols = [200, -1];
+    static immutable int[1] fullCol = [-1];
 
     mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
     mu_label(ctx, "Host");
@@ -4024,32 +4134,16 @@ private void drawSettingsTab(mu_Context* ctx, AppState* state, int scrollDelta)
         mu_layout_row(ctx, 1, fullCol.ptr, 0);
         mu_label(ctx, "(unavailable)");
     }
+}
 
-    // Connect / Reconnect button. Commits all connection settings above.
-    spacer(ctx);
-    mu_layout_row(ctx, 1, fullCol.ptr, 60);
-    string btnLabel = state.connected ? "Reconnect" : "Connect";
-    if (mu_button(ctx, btnLabel))
-        state.reconnectRequested = true;
-
-    // Section: Font settings.
-    spacer(ctx);
-    sectionHeader(ctx, "Font");
-
-    mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
-    mu_label(ctx, "Font Path");
-    mu_textbox(ctx, state.settingsFontPath.ptr, cast(int) state.settingsFontPath.length);
-
-    mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
-    mu_label(ctx, "Font Size");
-    mu_slider_ex(ctx, &state.settingsFontSize, 8.0f, 72.0f, 1.0f, "%.0f", MU_OPT_ALIGNCENTER);
-
-    mu_layout_row(ctx, 1, fullCol.ptr, 60);
-    if (mu_button(ctx, "Apply Font"))
-    {
-        state.fontReloadRequested = true;
-        setStatusFlash(state, "  Font applied");
-    }
+/// Everything below the server block: unaffected by which mode is chosen.
+///
+/// Split off drawSettingsTab only to keep that function readable, so this
+/// runs inside the panel that one opened and closes it on the way out.
+private void drawRestOfSettings(mu_Context* ctx, AppState* state)
+{
+    static immutable int[2] labelFieldCols = [200, -1];
+    static immutable int[1] fullCol = [-1];
 
     // Section: Feed settings.
     spacer(ctx);

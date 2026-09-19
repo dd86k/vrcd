@@ -26,7 +26,8 @@ import vrcd.notifications : NotificationInfo, NotificationChange,
     applyNotificationEvent, parseNotificationsMessage;
 
 import client.connection;
-import client.stream : loadTLS;
+import client.embedded : EmbeddedServer;
+import client.stream : loadTLS, Stream;
 import client.imagecache;
 import client.logwatcher;
 import client.notifications;
@@ -66,6 +67,9 @@ private LogWatcher logWatcher;
 /// Server connection.
 /// __gshared: used by network thread after main thread finishes setup.
 private __gshared ServerConnection conn;
+
+/// The server this client launched, when it owns one. Null in remote mode.
+private EmbeddedServer embedded;
 
 /// Persisted settings (used for notification dispatch).
 private Settings saved;
@@ -402,19 +406,18 @@ int runGui(string host, ushort port, string secret, long sinceId,
     initSettingsBuf(appState.settingsSecret, secret);
     if (saved.fontPath.length > 0)
         initSettingsBuf(appState.settingsFontPath, saved.fontPath);
+    appState.settingsEmbedded = cast(int) saved.embeddedServer;
+    if (saved.serverPath.length > 0)
+        initSettingsBuf(appState.settingsServerPath, saved.serverPath);
+    if (saved.serverListen.length > 0)
+        initSettingsBuf(appState.settingsServerListen, saved.serverListen);
 
     // Connect asynchronously: the TCP connect can take 20s+ to time out,
     // so we do it on the network thread to keep the window responsive.
-    appState.serverStatus = "Connecting...";
-    conn = new ServerConnection(host, port, secret,
+    appState.serverStatus = saved.embeddedServer ? "Starting server..." : "Connecting...";
+    startLink(host, port, secret,
         saved.useTls, saved.tlsSkipVerify,
-        saved.tlsClientCert, saved.tlsClientKey, saved.tlsCaCert);
-    long initialSinceId = sinceId;
-    netThread = new Thread({
-        conn.connectAndRun(msgQueue, networkEventType, initialSinceId);
-    });
-    netThread.isDaemon = true;
-    netThread.start();
+        saved.tlsClientCert, saved.tlsClientKey, saved.tlsCaCert, sinceId);
 
     // Start log watcher for local VRChat player join/leave events.
     logWatcher = new LogWatcher(msgQueue, networkEventType);
@@ -1199,17 +1202,10 @@ private void guiCleanup()
     }
     if (timerID)
         SDL_RemoveTimer(timerID);
-    if (conn)
-        conn.close();
-    if (netThread)
-    {
-        netThread.join();
-        netThread = null;
-    }
-    // Only once the network thread is gone: with TLS, close() leaves the
-    // OpenSSL state alone precisely because that thread may still be in it.
-    if (conn)
-        conn.dispose();
+    // Takes the embedded server with it, and only once the network thread is
+    // gone: with TLS, close() leaves the OpenSSL state alone precisely
+    // because that thread may still be in it.
+    stopLink();
     // Persist the event cursor so the next run resumes instead of
     // replaying everything from id 0.
     saveSettings(saved);
@@ -1422,6 +1418,11 @@ private void drainNetworkMessages()
                     appState.statsAvatarCacheCount = avatar_cache_count.integer;
                 if (const(JSONValue) *db_size_bytes = "db_size_bytes" in msg)
                     appState.statsDbSizeBytes = db_size_bytes.integer;
+                // Absent from servers older than this field; the panel just
+                // does not draw the path then.
+                if (const(JSONValue) *db_path = "db_path" in msg)
+                    if (db_path.type == JSONType.string)
+                        appState.statsDbPath = db_path.str;
                 appState.statsKnown = true;
                 break;
 
@@ -2671,15 +2672,53 @@ extern(C) void set_clipboard(mu_Context* ctx, const(char)* text)
 
 /// Tear down the current connection and establish a new one using
 /// the host/port/secret from the Settings tab.
-private void doReconnect()
+/// Bring the link up: launch a server first when this client owns one, then
+/// connect over whichever transport that implies.
+///
+/// Both callers go through here so embedded and remote cannot drift apart:
+/// past the handshake a pipe and a socket are the same stream, and the only
+/// thing that differs is who started the process on the other end.
+private bool startLink(string host, ushort port, string secret,
+    bool useTls, bool skipVerify,
+    string clientCert, string clientKey, string caCert, long sinceId)
 {
-    import std.conv : to;
+    Stream embeddedStream;
+    if (saved.embeddedServer)
+    {
+        embedded = new EmbeddedServer();
+        embeddedStream = embedded.start(saved.serverPath, false, saved.serverListen);
+        if (embeddedStream is null)
+        {
+            appState.serverStatus = embedded.lastError();
+            appState.embeddedStatus = embedded.lastError();
+            appState.connected = false;
+            embedded = null;
+            return false;
+        }
+        appState.embeddedStatus = "Running (" ~ embedded.binary() ~ ")";
+    }
+    else
+        appState.embeddedStatus = null;
 
-    logDebugging("doReconnect: tearing down existing connection");
+    conn = new ServerConnection(host, port, secret,
+        useTls, skipVerify, clientCert, clientKey, caCert);
+    if (embeddedStream)
+        conn.setEmbeddedStream(embeddedStream);
 
-    // Close existing connection and wait for network thread. The socket is
-    // shut down first so the thread's blocked receive() returns; freeing
-    // waits until it has joined, since with TLS it is inside OpenSSL.
+    netThread = new Thread({
+        conn.connectAndRun(msgQueue, networkEventType, sinceId);
+    });
+    netThread.isDaemon = true;
+    netThread.start();
+    return true;
+}
+
+/// Tear the link down, including a server we started.
+private void stopLink()
+{
+    // The stream is shut down first so the thread's blocked receive()
+    // returns; freeing waits until it has joined, since with TLS it is
+    // inside OpenSSL.
     if (conn)
         conn.close();
     if (netThread)
@@ -2689,6 +2728,25 @@ private void doReconnect()
     }
     if (conn)
         conn.dispose();
+    conn = null;
+
+    // After the reader is gone: stop() closes the child's stdin so it can
+    // flush its VRChat session on the way out, and killing it instead would
+    // cost a fresh login, 2FA included, next launch.
+    if (embedded)
+    {
+        embedded.stop();
+        embedded = null;
+    }
+}
+
+private void doReconnect()
+{
+    import std.conv : to;
+
+    logDebugging("doReconnect: tearing down existing connection");
+
+    stopLink();
 
     // Read settings buffers.
     string host = cast(string) appState.settingsHost[0 .. strlen(appState.settingsHost.ptr)].idup;
@@ -2709,8 +2767,15 @@ private void doReconnect()
     // Silence notifications until the fresh catch-up completes.
     catchUpComplete = false;
 
-    logDebugging("doReconnect: connecting to %s:%d", host, port);
-    appState.serverStatus = "Connecting...";
+    // The mode toggle and the paths beside it only take effect on reconnect,
+    // which is what the button under them is for.
+    saved.embeddedServer = appState.settingsEmbedded != 0;
+    saved.serverPath   = cast(string) appState.settingsServerPath[0 .. strlen(appState.settingsServerPath.ptr)].idup;
+    saved.serverListen = cast(string) appState.settingsServerListen[0 .. strlen(appState.settingsServerListen.ptr)].idup;
+
+    logDebugging("doReconnect: embedded=%s connecting to %s:%d",
+        saved.embeddedServer, host, port);
+    appState.serverStatus = saved.embeddedServer ? "Starting server..." : "Connecting...";
     appState.connected = false;
     // Pair state is unknown until the new connection replays a dap_status
     // snapshot. Reset here (initiation) rather than on the `connected`
@@ -2720,15 +2785,9 @@ private void doReconnect()
     string clientCert = cast(string) appState.settingsTlsClientCert[0 .. strlen(appState.settingsTlsClientCert.ptr)].idup;
     string clientKey  = cast(string) appState.settingsTlsClientKey[0 .. strlen(appState.settingsTlsClientKey.ptr)].idup;
     string caCert     = cast(string) appState.settingsTlsCaCert[0 .. strlen(appState.settingsTlsCaCert.ptr)].idup;
-    conn = new ServerConnection(host, port, secret,
+    startLink(host, port, secret,
         appState.settingsTls != 0, appState.settingsTlsSkipVerify != 0,
-        clientCert, clientKey, caCert);
-    long sinceId = saved.lastEventId;
-    netThread = new Thread({
-        conn.connectAndRun(msgQueue, networkEventType, sinceId);
-    });
-    netThread.isDaemon = true;
-    netThread.start();
+        clientCert, clientKey, caCert, saved.lastEventId);
 }
 
 /// Read current UI state into a Settings struct and persist to disk.
@@ -2752,6 +2811,9 @@ private void syncNotifySettings()
 private void doSaveSettings()
 {
     Settings s;
+    s.embeddedServer = appState.settingsEmbedded != 0;
+    s.serverPath   = cast(string) appState.settingsServerPath[0 .. strlen(appState.settingsServerPath.ptr)].idup;
+    s.serverListen = cast(string) appState.settingsServerListen[0 .. strlen(appState.settingsServerListen.ptr)].idup;
     s.host = cast(string) appState.settingsHost[0 .. strlen(appState.settingsHost.ptr)].idup;
     s.port = {
         string p = cast(string) appState.settingsPort[0 .. strlen(appState.settingsPort.ptr)].idup;

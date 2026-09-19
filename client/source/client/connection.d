@@ -63,6 +63,10 @@ class ServerConnection
     private string tlsClientCert;
     private string tlsClientKey;
     private Stream stream;
+    /// Set when the server is this process's own child: connect() adopts
+    /// this instead of opening a socket. Everything past the handshake is
+    /// identical, which is the point of reusing the transport abstraction.
+    private Stream embeddedStream;
     private void* sslCtx;
     private string recvBuffer;
     private bool authenticated;
@@ -102,10 +106,20 @@ class ServerConnection
         this.onError = cb;
     }
 
+    /// Talk to a server this process launched, over its stdio, instead of
+    /// opening a socket. Must be set before connect().
+    void setEmbeddedStream(Stream s)
+    {
+        embeddedStream = s;
+    }
+
     /// Connect to the server and authenticate.
     /// Returns true on success.
     bool connect()
     {
+        if (embeddedStream)
+            return connectEmbedded();
+
         logDebugging("connect: attempting %s:%d (secretLen=%d tls=%s)", host, port, secret.length, useTls);
         TcpSocket tcpSock = new TcpSocket();
         try
@@ -151,6 +165,23 @@ class ServerConnection
 
         logInfo("Connected to %s:%d%s", host, port, useTls ? " (TLS)" : "");
 
+        return handshake();
+    }
+
+    /// Adopt the pipe to an embedded server and run the same handshake.
+    ///
+    /// The server answers `auth` without checking the token here: reaching
+    /// it over a pipe means being the process that launched it, which no
+    /// secret would strengthen.
+    private bool connectEmbedded()
+    {
+        stream = embeddedStream;
+        logInfo("Connected to embedded server");
+        return handshake();
+    }
+
+    private bool handshake()
+    {
         // Send auth.
         sendMessage(JSONValue([
             "type": JSONValue("auth"),

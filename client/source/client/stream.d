@@ -1,4 +1,4 @@
-/// TCP stream abstraction (plain or TLS).
+/// Stream abstraction (plain TCP, TLS, or a pipe to an embedded server).
 ///
 /// Provides a common send/receive interface so the rest of the client
 /// can operate identically whether the transport is plain TCP or TLS
@@ -65,6 +65,91 @@ class PlainStream : Stream
     {
         unblock();
         sock.close();
+    }
+}
+
+version (Posix)
+{
+    private import core.sys.posix.unistd : sysRead = read, sysWrite = write;
+}
+else version (Windows)
+{
+    // The CRT's descriptor layer rather than the Win32 handle one: a child's
+    // redirected stdio arrives as descriptors either way, and going through
+    // _read keeps this module identical on both platforms.
+    private extern (C) nothrow @nogc
+    {
+        int _read(int, void*, uint);
+        int _write(int, const(void)*, uint);
+    }
+    private alias sysRead  = _read;
+    private alias sysWrite = _write;
+}
+
+/// Pipe stream over an embedded server's stdin/stdout.
+///
+/// The transport for a server the client launched itself: no port to pick,
+/// no secret to agree on, and the pipe closing is how each side learns the
+/// other is gone.
+///
+/// Holds the `File`s rather than bare descriptors, because those descriptors
+/// belong to them: closing a number behind a `File`'s back leaves its
+/// destructor to close that number again later, by which point an unrelated
+/// open may have been handed it. Reads and writes still go through the raw
+/// descriptor, since the protocol is framed by newline and a buffering layer
+/// in the middle would only hold lines back.
+class PipeStream : Stream
+{
+    import std.stdio : File;
+
+    private File readFile;
+    private File writeFile;
+    private int readFd = -1;
+    private int writeFd = -1;
+
+    this(File readFile, File writeFile)
+    {
+        this.readFile = readFile;
+        this.writeFile = writeFile;
+        this.readFd = readFile.fileno();
+        this.writeFd = writeFile.fileno();
+    }
+
+    override ptrdiff_t receive(void[] buf)
+    {
+        if (readFd < 0)
+            return 0;
+        return sysRead(readFd, buf.ptr, cast(uint) buf.length);
+    }
+
+    override ptrdiff_t send(const(void)[] data)
+    {
+        if (writeFd < 0)
+            return -1;
+        return sysWrite(writeFd, data.ptr, cast(uint) data.length);
+    }
+
+    /// Close the write end so the server reads EOF and shuts down, which
+    /// closes its own end and wakes a thread blocked in receive().
+    ///
+    /// Closing the read end directly would release a descriptor number a
+    /// reader is still parked on, and the next file opened would get that
+    /// number. Going through the peer cannot read somebody else's pipe.
+    override void unblock()
+    {
+        if (writeFd < 0)
+            return;
+        writeFd = -1;
+        try writeFile.close(); catch (Exception) {}
+    }
+
+    override void close()
+    {
+        unblock();
+        if (readFd < 0)
+            return;
+        readFd = -1;
+        try readFile.close(); catch (Exception) {}
     }
 }
 

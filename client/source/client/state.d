@@ -281,8 +281,22 @@ struct AppState
     long statsWorldCacheCount;
     long statsAvatarCacheCount;
     long statsDbSizeBytes;
+    /// Where the server keeps its database. The one thing somebody moving
+    /// to a standalone server needs to know, and an embedded server picks
+    /// the path itself, so it can only come from the server.
+    string statsDbPath;
 
     // Settings (editable via UI)
+
+    /// Run the server ourselves rather than connecting to one. Drawn as the
+    /// THIS PC / REMOTE pair rather than a checkbox: the two swap out the
+    /// whole block under them, which is a choice and not an option.
+    int settingsEmbedded;
+    char[256] settingsServerPath = '\0';
+    char[64] settingsServerListen = '\0';
+    /// Live state of the child, for the status line under the toggle.
+    string embeddedStatus;
+
     char[128] settingsHost = '\0';
     char[8] settingsPort = '\0';
     char[128] settingsSecret = '\0';

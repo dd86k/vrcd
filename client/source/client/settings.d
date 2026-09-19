@@ -16,6 +16,17 @@ import client.notifications : notifyEventLabels, feedEventLabels, feedEventDefau
 /// Persistent application settings, saved as JSON.
 struct Settings
 {
+    /// Run the server as our own child rather than connecting to one over
+    /// the network. Defaults to false so a settings file written before
+    /// embedding existed keeps pointing at whatever server it named; a
+    /// fresh install gets true from loadSettings instead.
+    bool embeddedServer;
+    /// Override path to the server binary. Empty searches beside the client.
+    string serverPath;
+    /// Address an embedded server additionally listens on, so other devices
+    /// (a phone running the web front-end) can reach it. Empty = pipe only.
+    string serverListen;
+
     string host = "127.0.0.1";
     ushort port = 9700;
     string secret;
@@ -59,7 +70,10 @@ Settings loadSettings()
 
     if (exists(path) == false)
     {
-        logDebugging("loadSettings: no settings file at %s, using defaults", path);
+        // Nothing configured means nobody has set a server up, which is the
+        // case embedding exists for: launch, sign in to VRChat, done.
+        logDebugging("loadSettings: no settings file at %s, defaulting to an embedded server", path);
+        s.embeddedServer = true;
         return s;
     }
 
@@ -69,6 +83,15 @@ Settings loadSettings()
         string text = readText(path);
         JSONValue json = parseJSON(text);
 
+        if (const(JSONValue) *jembedded_server = "embedded_server" in json)
+            if (jembedded_server.type == JSONType.true_)
+                s.embeddedServer = true;
+        if (const(JSONValue) *jserver_path = "server_path" in json)
+            if (jserver_path.type == JSONType.string)
+                s.serverPath = jserver_path.str;
+        if (const(JSONValue) *jserver_listen = "server_listen" in json)
+            if (jserver_listen.type == JSONType.string)
+                s.serverListen = jserver_listen.str;
         if (const(JSONValue) *jhost = "host" in json)
             if (jhost.type == JSONType.string)
                 s.host = jhost.str;
@@ -195,8 +218,8 @@ Settings loadSettings()
     }
 
     // Log important entries
-    logDebugging("loadSettings: host=%s port=%d last_event_id=%d",
-        s.host, s.port, s.lastEventId);
+    logDebugging("loadSettings: embedded=%s host=%s port=%d last_event_id=%d",
+        s.embeddedServer, s.host, s.port, s.lastEventId);
     return s;
 }
 
@@ -213,6 +236,9 @@ void saveSettings(Settings s)
             mkdirRecurse(dir);
 
         JSONValue json;
+        json["embedded_server"] = s.embeddedServer;
+        json["server_path"] = s.serverPath;
+        json["server_listen"] = s.serverListen;
         json["host"] = s.host;
         json["port"] = s.port;
         json["secret"] = s.secret;
