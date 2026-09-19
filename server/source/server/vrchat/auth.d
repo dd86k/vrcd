@@ -48,7 +48,30 @@ AuthState authenticate(ref Config config, HTTPClient client, AuthDelegator deleg
 {
     setupClient(client, config);
 
-    // Try existing session first.
+    // A delegated prompt that expired means nobody was at a front-end, not that
+    // the sign-in was refused. The server has nothing to do without a VRChat
+    // session, so it starts the login over -- and keeps serving clients in the
+    // meantime -- rather than ending the process. Each pass blocks on the
+    // prompt for the delegator's timeout, so this costs one request per
+    // timeout, not a spin. Unreachable without a delegator: stdin has no
+    // deadline.
+    for (;;)
+    {
+        try return attemptAuth(config, client, delegator);
+        catch (AuthTimeoutException e)
+        {
+            logWarn("%s; restarting VRChat login", e.msg);
+        }
+    }
+}
+
+/// One pass of the sign-in: reuse the session if it is still good, log in
+/// otherwise. Throws `AuthTimeoutException` when a delegated prompt expired.
+private AuthState attemptAuth(ref Config config, HTTPClient client, AuthDelegator delegator)
+{
+    // Try existing session first. After a 2FA prompt expired this still holds
+    // the half-finished login, so the retry comes straight back to the code
+    // prompt without spending a second login call on it.
     logInfo("Checking existing session...");
     HTTPResponse userResp = client.get("/auth/user");
     logDebugging("GET /auth/user -> HTTP %d (bodyLen=%d)", userResp.code, userResp.text.length);
@@ -156,8 +179,10 @@ AuthState fullLogin(ref Config config, HTTPClient client, AuthDelegator delegato
         logInfo("No credentials file found. Requesting credentials from client...");
         AuthResponse resp = delegator.requestFromClient(
             AuthRequest(AuthRequestKind.credentials));
+        if (resp.timedOut)
+            throw new AuthTimeoutException("Credential prompt timed out");
         if (resp.cancelled)
-            throw new Exception("Auth delegation timed out or was cancelled");
+            throw new Exception("Auth delegation was cancelled");
         username = resp.username;
         password = resp.password;
         saveCredentials(config.credentialsPath, username, password);
@@ -279,8 +304,11 @@ void handle2FA(ref Config config, HTTPClient client, AuthDelegator delegator, co
                     attempt + 1, MAX_ATTEMPTS);
                 AuthResponse dresp = delegator.requestFromClient(
                     AuthRequest(AuthRequestKind.twoFactor, method, retryError));
+                if (dresp.timedOut)
+                    throw new AuthTimeoutException(
+                        text("2FA (", method, ") prompt timed out"));
                 if (dresp.cancelled)
-                    throw new Exception("Auth delegation timed out or was cancelled");
+                    throw new Exception("Auth delegation was cancelled");
                 code = dresp.code;
             }
             else

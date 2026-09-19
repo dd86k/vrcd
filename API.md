@@ -403,7 +403,7 @@ Upload a PNG as a print. Same size limits as `upload_image`; additionally thrott
 
 ### `auth_response`
 
-Answer to an `auth_request`. The first answer to arrive wins; the server does not acknowledge it, it either signs in to VRChat or sends a new `auth_request` carrying the error. A cancel makes the server give up on that sign-in attempt, which for a headless server means it stops waiting and exits.
+Answer to an `auth_request`. The first answer to arrive wins; the server does not acknowledge it, it either signs in to VRChat or sends a new `auth_request` carrying the error. A cancel makes the server give up on that sign-in attempt, which for a headless server means it stops waiting and exits. Letting the prompt expire is not the same thing: see `auth_cancelled`.
 
 | Field       | Type   | Description                                              |
 |-------------|--------|----------------------------------------------------------|
@@ -444,7 +444,7 @@ Authentication failed.
 
 ### `auth_request`
 
-The server needs to sign in to VRChat and has no TTY to ask on, so it delegates the prompt to its clients. Broadcast when the sign-in reaches that point, and replayed to a client that authenticates while one is still pending. Answered with `auth_response`; the server waits 30 minutes before giving up. Both front-ends handle these, so either can sign a headless server in.
+The server needs to sign in to VRChat and has no TTY to ask on, so it delegates the prompt to its clients. Broadcast when the sign-in reaches that point, and replayed to a client that authenticates while one is still pending. Answered with `auth_response`; after 30 minutes the server gives up on that prompt and sends `auth_cancelled`. Both front-ends handle these, so either can sign a headless server in.
 
 Note this is VRChat's sign-in, not this API's: the `auth` handshake above is a separate shared secret.
 
@@ -454,6 +454,15 @@ Note this is VRChat's sign-in, not this API's: the `auth` handshake above is a s
 | `kind`   | string | One of `"credentials"`, `"two_factor"`                          |
 | `method` | string | Two-factor only. One of `"totp"`, `"otp"`, `"emailOtp"`         |
 | `error`  | string | Optional. Why the previous attempt failed (e.g. `"Invalid code"`) |
+
+### `auth_cancelled`
+
+Nobody answered an `auth_request` within the 30 minutes, so the server dropped it. The server does not exit: it starts the VRChat sign-in over and sends a fresh `auth_request`, which for a 2FA prompt is the only useful outcome anyway, since a code typed half an hour late is dead. Front-ends should take the prompt down — an answer to a request nobody is waiting on is discarded — and wait for the next one.
+
+| Field    | Type   | Description                    |
+|----------|--------|--------------------------------|
+| `type`   | string | `"auth_cancelled"`             |
+| `reason` | string | Currently always `"timeout"`   |
 
 ### `status`
 

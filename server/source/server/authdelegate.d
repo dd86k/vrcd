@@ -37,6 +37,20 @@ struct AuthResponse
     string password;
     string code;
     bool cancelled;
+    bool timedOut; /// Set with `cancelled` when the deadline expired rather than a client refusing.
+}
+
+/// Thrown when a delegated prompt expired with nobody answering it.
+///
+/// Distinct from a plain Exception because it is not an authentication
+/// failure: the credentials were never tried. The caller restarts the login
+/// instead of taking the process down.
+class AuthTimeoutException : Exception
+{
+    this(string msg, string file = __FILE__, size_t line = __LINE__)
+    {
+        super(msg, file, line);
+    }
 }
 
 /// Synchronization hub for delegating auth prompts to connected clients.
@@ -86,8 +100,8 @@ class AuthDelegator
             broadcastFn(msg);
         }
 
-        logInfo("Waiting for client to provide %s (timeout: 30 minutes)...",
-            req.kind == AuthRequestKind.credentials ? "credentials" : "2FA code");
+        logInfo("Waiting for client to provide %s (timeout: %s)...",
+            req.kind == AuthRequestKind.credentials ? "credentials" : "2FA code", timeout);
 
         // Wait for response with timeout.
         MonoTime deadline = MonoTime.currTime + timeout;
@@ -96,10 +110,19 @@ class AuthDelegator
             Duration remaining = deadline - MonoTime.currTime;
             if (remaining <= Duration.zero)
             {
-                logError("Auth delegation timed out after 30 minutes");
+                logError("Auth delegation timed out after %s", timeout);
                 pending = null;
+                // Take the prompt down everywhere it is drawn: a code typed
+                // into it now would be answering a request nobody is waiting
+                // on, and the login that restarts sends a fresh one.
+                if (broadcastFn)
+                    broadcastFn(JSONValue([
+                        "type":   JSONValue("auth_cancelled"),
+                        "reason": JSONValue("timeout"),
+                    ]));
                 AuthResponse timedOut;
                 timedOut.cancelled = true;
+                timedOut.timedOut = true;
                 return timedOut;
             }
             cond.wait(remaining);
