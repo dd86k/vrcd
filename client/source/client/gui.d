@@ -1681,6 +1681,21 @@ private void drainNetworkMessages()
                 appState.authCode[] = '\0';
                 break;
 
+            case "auth_cancelled":
+                // The server gave up waiting. It restarts the login, so a
+                // fresh auth_request follows; until then the dialog would be
+                // collecting an answer for a prompt that is gone.
+                appState.authDialogVisible = false;
+                appState.authDialogKind = AppState.AuthDialogKind.none;
+                appState.authDialogError = null;
+                appState.authUsername[] = '\0';
+                appState.authPassword[] = '\0';
+                appState.authCode[] = '\0';
+                appState.addFeedEntry(0, "info", "",
+                    "VRChat sign-in prompt timed out, server is asking again",
+                    timeNow(), "", false, EventSource.system);
+                break;
+
             case "dap_status":
                 {
                     // Quiet state replay from the server, sent on
