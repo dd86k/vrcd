@@ -9,6 +9,8 @@ import std.path : dirName;
 import std.conv : to;
 import std.datetime.systime : SysTime;
 import std.datetime.timezone : UTC;
+import std.format : format;
+import std.random : uniform;
 
 import ddlogger;
 import arsd.sqlite;
@@ -30,6 +32,14 @@ import server.events;
 //                      survives a restart.
 // - cache_avatar     : VRChat avatar metadata cache. Schema only for now:
 //                      nothing writes to it yet.
+
+// Timestamps are stored fixed-width in UTC, `YYYY-MM-DDTHH:MM:SS.sssZ`, the
+// same as VRCX's. Event order is sorted on the text: UTC because local time
+// repeats an hour when daylight saving ends, fixed-width because a variable
+// fraction sorts "…:56Z" after "…:56.5Z".
+private enum string SQL_NOW        = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
+/// ditto, with a SQLite modifier bound as the one parameter.
+private enum string SQL_NOW_OFFSET = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?)";
 
 /// Server statistics returned by Database.getStats().
 struct DatabaseStats
@@ -136,34 +146,63 @@ class Database
         return -1;
     }
 
-    /// Query the newest `limit` events after a given ID, oldest first
+    /// Query the newest `limit` events stored after a given ID, oldest first
     /// (for client catch-up).
     ///
-    /// The limit is taken from the newest end, not the oldest: walking forward
-    /// from an ID hands out the *oldest* page first, which on a long backlog is
-    /// the page nobody wants and the one a front-end with a capped feed throws
-    /// away again. Selecting the tail descending and re-ordering it keeps
-    /// catch-up ascending, which is what makes the last id sent a usable
-    /// cursor.
+    /// "After" is by ID, since the cursor is about what the client has been
+    /// sent, while the order is by time, since an import can store old events
+    /// late. The limit is taken from the newest end: walking forward hands out
+    /// the *oldest* page first, which on a long backlog is the page nobody
+    /// wants and the one a front-end with a capped feed throws away again.
     auto queryEventsAfterTail(long afterId, int limit)
     {
         logDebugging("queryEventsAfterTail: afterId=%d limit=%d", afterId, limit);
         return db.query(
             "SELECT id, received_at, event_type, data FROM " ~
             "(SELECT id, received_at, event_type, data FROM ws_events " ~
-            "WHERE id > ? ORDER BY id DESC LIMIT ?) ORDER BY id ASC",
+            "WHERE id > ? ORDER BY received_at DESC, id DESC LIMIT ?) " ~
+            "ORDER BY received_at ASC, id ASC",
             afterId.to!string,
             limit.to!string,
         );
     }
 
-    /// Query events before a given ID, newest first (for client back-fill).
+    /// Query events older than a given event, newest first (for client
+    /// back-fill).
+    ///
+    /// A `beforeId` naming no row still has to mean something: past the
+    /// newest ID it means "from the newest" (the web link seeds with
+    /// `long.max`), otherwise the nearest lower ID is where to resume, pruned
+    /// or not.
     auto queryEventsBefore(long beforeId, int limit = 100)
     {
         logDebugging("queryEventsBefore: beforeId=%d limit=%d", beforeId, limit);
-        return db.query(
-            "SELECT id, received_at, event_type, data FROM ws_events WHERE id < ? ORDER BY id DESC LIMIT ?",
+
+        string anchorAt;
+        long anchorId;
+        foreach (row; db.query(
+            "SELECT received_at, id FROM ws_events WHERE id <= ? ORDER BY id DESC LIMIT 1",
             beforeId.to!string,
+        ))
+        {
+            anchorAt = row[0];
+            anchorId = row[1].to!long;
+        }
+
+        if (anchorId && anchorId != beforeId && anchorId == getLatestEventId())
+            return db.query(
+                "SELECT id, received_at, event_type, data FROM ws_events " ~
+                "ORDER BY received_at DESC, id DESC LIMIT ?",
+                limit.to!string,
+            );
+
+        // No anchor leaves ('', 0), which nothing sorts below.
+        return db.query(
+            "SELECT id, received_at, event_type, data FROM ws_events " ~
+            "WHERE (received_at, id) " ~ (anchorId == beforeId ? "<" : "<=") ~ " (?, ?) " ~
+            "ORDER BY received_at DESC, id DESC LIMIT ?",
+            anchorAt,
+            anchorId.to!string,
             limit.to!string,
         );
     }
@@ -172,7 +211,8 @@ class Database
     auto queryRecentEvents(int limit = 50)
     {
         return db.query(
-            "SELECT id, received_at, event_type, data FROM ws_events ORDER BY id DESC LIMIT ?",
+            "SELECT id, received_at, event_type, data FROM ws_events " ~
+            "ORDER BY received_at DESC, id DESC LIMIT ?",
             limit.to!string,
         );
     }
@@ -194,7 +234,7 @@ class Database
     {
         logDebugging("logConnection: %s", eventType);
         foreach (_; db.query(
-            "INSERT INTO ws_connection_log (timestamp, event) VALUES (datetime('now'), ?)",
+            "INSERT INTO ws_connection_log (timestamp, event) VALUES (" ~ SQL_NOW ~ ", ?)",
             eventType,
         )) {}
     }
@@ -208,7 +248,7 @@ class Database
         
         // Process WS events
         foreach (_; db.query(
-            "DELETE FROM ws_events WHERE received_at < datetime('now', ?)",
+            "DELETE FROM ws_events WHERE received_at < " ~ SQL_NOW_OFFSET,
             modifier,
         )) {}
         long deleted;
@@ -217,7 +257,7 @@ class Database
 
         // Process WS connection logs
         foreach (_; db.query(
-            "DELETE FROM ws_connection_log WHERE timestamp < datetime('now', ?)",
+            "DELETE FROM ws_connection_log WHERE timestamp < " ~ SQL_NOW_OFFSET,
             modifier,
         )) {}
         // NOTE: Included connection logs in this number is asking for confusion.
@@ -365,6 +405,34 @@ class Database
         )) {}
     }
 
+    /// Which history the event IDs refer to. A front-end holding a cursor
+    /// from another epoch holds an ID that no longer means what it did.
+    ///
+    /// Random rather than starting at 1, so that a database deleted and
+    /// recreated is a different epoch too: its IDs start over.
+    long eventsEpoch()
+    {
+        string value = getState("events_epoch");
+        if (value.length > 0)
+        {
+            try return value.to!long;
+            catch (Exception) {}
+        }
+        // Below 2^53 so it survives a round trip through a browser.
+        long epoch = uniform!"[]"(1L, (1L << 53) - 1);
+        setState("events_epoch", epoch.to!string);
+        return epoch;
+    }
+
+    /// Start a new epoch, for after history has been rewritten.
+    long bumpEventsEpoch()
+    {
+        long epoch = eventsEpoch() + 1;
+        setState("events_epoch", epoch.to!string);
+        logInfo("Event history rewritten, epoch is now %d", epoch);
+        return epoch;
+    }
+
     /// Close the database.
     void close()
     {
@@ -477,13 +545,41 @@ private:
             ")"
         );
 
+        // Once, and before the index is built over the rewritten column.
+        if (getState("timestamp_format") != "1")
+        {
+            logInfo("Migrating timestamps to fixed width...");
+            db.exec("BEGIN");
+            db.exec("UPDATE ws_events SET received_at = " ~
+                "COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', received_at), received_at)");
+            db.exec("UPDATE ws_connection_log SET timestamp = " ~
+                "COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', timestamp), timestamp)");
+            setState("timestamp_format", "1");
+            db.exec("COMMIT");
+        }
+
+        db.exec("CREATE INDEX IF NOT EXISTS idx_ws_events_time ON ws_events (received_at, id)");
+
         logInfo("Database schema ready");
     }
 }
 
 private string toISO(SysTime t)
 {
-    return t.toUTC().toISOExtString();
+    SysTime u = t.toUTC();
+    return format!"%04d-%02d-%02dT%02d:%02d:%02d.%03dZ"(
+        u.year, cast(int) u.month, u.day, u.hour, u.minute, u.second,
+        u.fracSecs.total!"msecs");
+}
+
+unittest
+{
+    import std.datetime.date : DateTime;
+    import core.time : msecs, hnsecs;
+
+    SysTime t = SysTime(DateTime(2026, 9, 26, 12, 34, 56), UTC());
+    assert(toISO(t) == "2026-09-26T12:34:56.000Z");
+    assert(toISO(t + msecs(5) + hnsecs(9)) == "2026-09-26T12:34:56.005Z");
 }
 
 // Bounded catch-up: the tail query hands back the *newest* page of what is
@@ -544,6 +640,119 @@ unittest
     foreach (row; db.queryEventsAfterTail(ids[$ - 1], 100))
         got ~= row[0].to!long;
     assert(got.length == 0);
+}
+
+// History stored late -- an import -- sorts by when it happened, not by ID, and
+// the back-fill anchors hold when the named ID is not a row.
+unittest
+{
+    import std.file : remove, tempDir;
+    import std.path : buildPath;
+    import std.datetime.date : DateTime;
+    import core.time : minutes;
+
+    string path = buildPath(tempDir(), "vrcd-timeorder-test.db");
+
+    static void scrub(string file)
+    {
+        import std.file : exists;
+
+        foreach (string suffix; [ "", "-wal", "-shm" ])
+            if (exists(file ~ suffix))
+                remove(file ~ suffix);
+    }
+
+    scrub(path);
+    scope(exit) scrub(path);
+
+    Database db = new Database(path);
+    scope(exit) db.close();
+
+    SysTime base = SysTime(DateTime(2026, 1, 1, 12, 0, 0), UTC());
+    long store(int minute)
+    {
+        VRCEvent ev;
+        ev.type       = EventType.friendOnline;
+        ev.typeRaw    = "friend-online";
+        ev.receivedAt = base + minutes(minute);
+        ev.rawJson    = `{"type":"friend-online"}`;
+        return db.storeEvent(ev);
+    }
+
+    // Live at minutes 10..12, then history from minutes 1..3 stored after.
+    long[] live = [ store(10), store(11), store(12) ];
+    long[] old  = [ store(1), store(2), store(3) ];
+
+    long[] ids(R)(R rows)
+    {
+        long[] r;
+        foreach (row; rows)
+            r ~= row[0].to!long;
+        return r;
+    }
+
+    // Catch-up from scratch is the newest by time, not the highest IDs.
+    assert(ids(db.queryEventsAfterTail(0, 2)) == live[1 .. $]);
+    assert(ids(db.queryEventsAfterTail(0, 100)) == old ~ live);
+
+    // Back-fill walks back through the live rows into the history.
+    assert(ids(db.queryEventsBefore(live[0], 2)) == [ old[2], old[1] ]);
+    assert(ids(db.queryEventsBefore(old[0], 10)).length == 0);
+
+    // Past the newest ID: from the newest by time.
+    assert(ids(db.queryEventsBefore(long.max, 2)) == [ live[2], live[1] ]);
+
+    // A pruned row: resume at the nearest lower ID, that one included.
+    foreach (_; db.db.query("DELETE FROM ws_events WHERE id = ?", live[1].to!string)) {}
+    assert(ids(db.queryEventsBefore(live[1], 10)) == [ live[0] ] ~ [ old[2], old[1], old[0] ]);
+
+    assert(ids(db.queryEventsBefore(0, 10)).length == 0);
+
+    // The epoch survives a reopen and moves on a bump.
+    long epoch = db.eventsEpoch();
+    assert(epoch > 0);
+    assert(db.eventsEpoch() == epoch);
+    assert(db.bumpEventsEpoch() == epoch + 1);
+    assert(db.eventsEpoch() == epoch + 1);
+}
+
+// The one-time timestamp migration rewrites what older builds wrote.
+unittest
+{
+    import std.file : remove, tempDir;
+    import std.path : buildPath;
+
+    string path = buildPath(tempDir(), "vrcd-tsmigrate-test.db");
+
+    static void scrub(string file)
+    {
+        import std.file : exists;
+
+        foreach (string suffix; [ "", "-wal", "-shm" ])
+            if (exists(file ~ suffix))
+                remove(file ~ suffix);
+    }
+
+    scrub(path);
+    scope(exit) scrub(path);
+
+    Database db = new Database(path);
+    scope(exit) db.close();
+
+    foreach (string at; [ "2026-09-26T12:34:56.1234567Z", "2026-09-26T12:34:56Z" ])
+        foreach (_; db.db.query(
+            "INSERT INTO ws_events (received_at, event_type) VALUES (?, 'x')", at)) {}
+    foreach (_; db.db.query(
+        "INSERT INTO ws_connection_log (timestamp, event) VALUES ('2026-09-26 12:34:56', 'x')")) {}
+    db.deleteState("timestamp_format");
+    db.initSchema();
+
+    string[] got;
+    foreach (row; db.db.query("SELECT received_at FROM ws_events ORDER BY id"))
+        got ~= row[0];
+    assert(got == [ "2026-09-26T12:34:56.123Z", "2026-09-26T12:34:56.000Z" ]);
+    foreach (row; db.db.query("SELECT timestamp FROM ws_connection_log"))
+        assert(row[0] == "2026-09-26T12:34:56.000Z");
 }
 
 // The world cache round-trip: the columns, the upsert, and `added_at` coming

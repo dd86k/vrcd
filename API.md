@@ -56,6 +56,7 @@ Protocol versions:
 - `9` = bounds catch-up (`catch_up` takes a `limit`, `caught_up` reports a gap)
 - `10` = server-side notification inbox (`notifications` re-broadcast on change, `get_notifications` answered from it)
 - `11` = filtered inventory listings (`get_inventory` takes `types`, `not_types` and `not_flags`; `inventory` echoes them)
+- `12` = events ordered by time (`catch_up` takes an `epoch`, `caught_up` carries it, `events_reset` when history was rewritten)
 
 **Failure:**
 ```json
@@ -85,7 +86,11 @@ Request current server status.
 
 ### `catch_up`
 
-Request events since a given ID. Server sends the **newest** `limit` of them in ascending order, followed by a `caught_up` message.
+Request events stored since a given ID. Server sends the **newest** `limit` of them in ascending time order, followed by a `caught_up` message.
+
+Events are ordered by `received_at`, not by ID: history stored after the fact (an import) gets higher IDs than the events that follow it. IDs stay the cursors: `since_id` means "stored after", and `before_id` names a position in time order. Timestamps are UTC with millisecond precision (`YYYY-MM-DDTHH:MM:SS.sssZ`), ties broken by ID; local time would interleave the hour repeated when daylight saving ends.
+
+An ID only means something within one epoch of the server's history. A client that has been told one sends it back as `epoch`; when the server's differs (history was rewritten, or the database is not the one the ID came from), it answers `events_reset` instead of replaying. A client that sends no `epoch` adopts the one in `caught_up`.
 
 The limit exists because the event log does not shrink: a server running for months holds tens of thousands of events, and replaying all of them takes long enough that the keepalive gives up on a client that is perfectly healthy. What was skipped is not lost — `caught_up` says so with `gap`, and the client back-fills a page at a time with `fetch_older`.
 
@@ -94,15 +99,18 @@ The limit exists because the event log does not shrink: a server running for mon
 | `type`     | string | `"catch_up"`                     |
 | `since_id` | long | Last known event ID (0 for all)    |
 | `limit`    | int  | Max events to replay (default 1000, max 5000) |
+| `epoch`    | long | Epoch `since_id` came from. Optional |
 
 ### `fetch_older`
 
-Request a page of older events (with id strictly less than `before_id`). Server sends matching events in **descending** order as `event_older` messages (capped at `limit`, max 500), followed by an `older_fetched` terminator. Intended for UI back-fill when a client has caught up and wants to scroll into history.
+Request a page of events older than the one named by `before_id`. Server sends matching events in **descending** order as `event_older` messages (capped at `limit`, max 500), followed by an `older_fetched` terminator. Intended for UI back-fill when a client has caught up and wants to scroll into history.
+
+A `before_id` naming no row is still a position: past the newest ID it means "from the newest" (`long.max` seeds a feed), otherwise the nearest lower ID stands in for it, that event included.
 
 | Field       | Type | Description                               |
 |-------------|------|-------------------------------------------|
 | `type`      | string | `"fetch_older"`                         |
-| `before_id` | long | Return events with id < before_id         |
+| `before_id` | long | Return events older than this one         |
 | `limit`     | int  | Max events to return (default 100, max 500) |
 
 ### `get_friends`
@@ -495,11 +503,21 @@ Sent after all catch-up events have been delivered.
 | Field      | Type   | Description                  |
 |------------|--------|------------------------------|
 | `type`     | string | `"caught_up"`                |
-| `last_id`  | long   | ID of the last event sent, or `since_id` when none were |
+| `last_id`  | long   | Highest ID stored when the replay started, or `since_id` when none were. The next `since_id` |
+| `epoch`    | long   | The server's current epoch (APIv12) |
 | `first_id` | long   | ID of the first event sent. Absent when none were |
 | `gap`      | bool   | True when older events after `since_id` were skipped to stay under the limit. Absent when no events were sent |
 
 A client that gets `gap: true` is missing the events between `since_id` and `first_id`; `fetch_older` from `first_id` is what pulls them in.
+
+### `events_reset`
+
+The event history was rewritten, so every ID a client holds is from a history that no longer exists. Sent instead of a replay when `catch_up` names another epoch, and broadcast when the server rewrites its history. A client drops its feed and cursor and sends `catch_up` from 0 with the new epoch.
+
+| Field   | Type   | Description             |
+|---------|--------|-------------------------|
+| `type`  | string | `"events_reset"`        |
+| `epoch` | long   | The new epoch           |
 
 ### `event_older`
 

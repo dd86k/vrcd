@@ -45,8 +45,10 @@ import vrcd.notifications;
 /// 10 = server-side inbox (`notifications` re-broadcast on change,
 /// `get_notifications` answered from it),
 /// 11 = filtered inventory listings (`get_inventory` takes `types`,
-/// `not_types` and `not_flags`; `inventory` echoes them).
-private enum int PROTOCOL_VERSION = 11;
+/// `not_types` and `not_flags`; `inventory` echoes them),
+/// 12 = events ordered by time (`catch_up` takes an `epoch`, `caught_up`
+/// carries it, `events_reset` when history was rewritten).
+private enum int PROTOCOL_VERSION = 12;
 
 /// Shortest gap between two re-seed passes. A pass paginates the whole
 /// friends list, so this is what keeps a reconnect storm -- or somebody
@@ -737,6 +739,20 @@ class APIServer
 
         logDebugging("broadcast: id=%d type=%s clients=%d/%d",
             eventId, event.typeRaw, delivered, clients.length);
+    }
+
+    /// Start a new event epoch and tell every client to drop its feed and
+    /// catch up again. For after the event history has been rewritten.
+    void resetEvents()
+    {
+        string line = buildEventsReset(store.bumpEventsEpoch());
+
+        clientsMutex.lock();
+        scope(exit) clientsMutex.unlock();
+
+        foreach (client; clients)
+            if (client.authenticated)
+                client.sendLine(line);
     }
 
     /// Broadcast the current self snapshot to all authenticated clients.
@@ -1453,7 +1469,25 @@ private class ClientHandler
         if (limit > CATCH_UP_MAX_LIMIT)
             limit = CATCH_UP_MAX_LIMIT;
 
+        // A client naming no epoch has never been told one, and adopts
+        // whatever `caught_up` says.
+        long epoch = server.store.eventsEpoch();
+        if (const(JSONValue)* v = "epoch" in msg)
+        {
+            if (v.type == JSONType.integer && v.integer != 0 && v.integer != epoch)
+            {
+                logInfo("Client cursor is from epoch %d, now %d; resetting", v.integer, epoch);
+                sendLine(buildEventsReset(epoch));
+                return;
+            }
+        }
+
         logInfo("Client catching up from event #%d (limit %d)", sinceId, limit);
+
+        // Read before the replay: the client goes on to resume from here, and
+        // anything stored after the read arrives by broadcast anyway. Not the
+        // last row sent, which is the newest by time rather than by ID.
+        long latestId = server.store.getLatestEventId();
 
         // One row past the limit: getting it back is what says the backlog was
         // truncated, and it costs one row rather than a second COUNT over a
@@ -1481,12 +1515,16 @@ private class ClientHandler
             sendLine(eventMsg.toString() ~ "\n");
             if (firstId == 0)
                 firstId = id;
-            lastId = id;
+            if (id > lastId)
+                lastId = id;
         }
+        if (latestId > lastId)
+            lastId = latestId;
 
         JSONValue doneMsg = JSONValue([
             "type": JSONValue("caught_up"),
             "last_id": JSONValue(lastId),
+            "epoch": JSONValue(epoch),
         ]);
         // Only meaningful when something was actually sent: with no events
         // there is no id the client could back-fill from.
@@ -1505,7 +1543,7 @@ private class ClientHandler
     /// Refresh instance occupancy for every public instance that has at
     /// least one friend in it, then send the friends snapshot. Caps the
     /// number of fetches per refresh to avoid spamming the VRChat API.
-    /// Send a page of older events (id < before_id) for UI back-fill.
+    /// Send a page of events older than `before_id` for UI back-fill.
     /// Events are sent newest-first as `event_older` messages, capped at
     /// the requested limit (hard cap 500), followed by an `older_fetched`
     /// terminator carrying the oldest id in the page (or the floor sentinel).
@@ -3301,6 +3339,15 @@ private string vrchatError(HTTPResponse resp)
     catch (Exception) {}
 
     return fallback;
+}
+
+/// The line telling a front-end its event IDs are from another history.
+private string buildEventsReset(long epoch)
+{
+    return JSONValue([
+        "type": JSONValue("events_reset"),
+        "epoch": JSONValue(epoch),
+    ]).toString() ~ "\n";
 }
 
 /// Build a JSON event message for broadcasting.
