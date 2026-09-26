@@ -1765,6 +1765,17 @@ private:
                 onFeed([ toFeedEntry(message) ], false);
             break;
 
+        case "events_reset":
+            // History was rewritten under the feed; seed it again, which
+            // replaces what every browser holds.
+            pendingBacklog = null;
+            sendMessage(JSONValue([
+                "type":      JSONValue("fetch_older"),
+                "before_id": JSONValue(long.max),
+                "limit":     JSONValue(FEED_BACKLOG),
+            ]));
+            break;
+
         case "event_older":
             // Delivered newest first; held until older_fetched terminates it.
             pendingBacklog ~= toFeedEntry(message);
