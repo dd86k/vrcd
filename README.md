@@ -27,7 +27,7 @@ Server features:
 - Record incoming VRChat events.
 - Event-stream API with 'catch-up' and 'back-fill' actions to know what you missed.
 
-Feel free to join the official [VRChat group](https://vrc.group/VRCD.7796) (`VRCD.7796`)!
+Feel free to join the official [VRCD VRChat group](https://vrc.group/VRCD.7796) (`VRCD.7796`)!
 
 Related projects:
 - [vrcd-server-container](https://github.com/ArcaneDisgea/vrcd-server-container) by ArcaneDisgea.
@@ -113,6 +113,7 @@ to a server-side self-invite.
 Targets:
 - **[Server](server/)**: Stays connected to VRChat's WebSocket 24/7, records events to SQLite, and serves them over TCP.
 - **[Client](client/)**: Connects to the server, watches local VRChat logs, and injects metadata into photos.
+- **[Web](web/)**: Connects to the server, and allows you to browse vrcd using a Web browser.
 
 Targets Windows and Linux.
 
@@ -132,15 +133,20 @@ dub upgrade -s
 
 # Build, test, and run server (might be best to setup config first)
 # For more info, see server/README.md
-dub build :server
 dub test :server
-./client/vrcd_server
+dub build :server
+# Will live at ./server/vrcd_server
 
 # Build, test, and run client
 # For more info, see client/README.md
-dub build :client
 dub test :client
-./client/vrcd_client
+dub build :client
+# Lives at ./client/vrcd_client
+
+# Ditto
+dub test :web
+dub build :web
+# Lives at ./web/vrcd_web
 ```
 
 See [API.md](./API.md) for server-client API details.
@@ -150,7 +156,7 @@ See [API.md](./API.md) for server-client API details.
 ```bash
 ./packaging/package-appimage.sh   # client AppImage (builds with -c static)
 ./packaging/package-deb.sh all    # client and server .deb
-./packaging/package-deb.sh --static server
+./packaging/package-deb.sh --static server # Package server as static build
 ```
 
 On Windows, in PowerShell (no MSYS2 or Git Bash needed):

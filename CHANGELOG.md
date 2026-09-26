@@ -1,57 +1,53 @@
 # CHANGELOG
 
+Changelog file for vrcd with newest tags first.
+
+Rules:
+- Separated by component: Client, Server, Web
+- Keep things simple and easy to read, technical topics best left in source.
+
 ## v0.3.0
 
 ### Client
 
-- Officially upgraded from SDL2 to SDL3.
-- Stickers and emoji are each split into two groups: the ones you uploaded, and
-  the exclusive ones VRChat handed out (inventory entries, so nothing to
-  delete).
-- STUFF detail pages have a "Download Image" button: the original file (not the
-  thumbnail) is written to your Downloads folder, named after the entry.
-- Look for the window icon beside the binary (and in the installed icon theme)
-  instead of only under the working directory, so a launcher-started or
-  installed copy gets one too.
-- Fix the client dying on SIGPIPE (POSIX) when the server connection drops:
-  OpenSSL writes from inside SSL_read, so a disconnect killed the process from
-  the network thread instead of reconnecting.
+- Now uses SDL3.
+- Can run its own server, so setting one up separately is optional.
+- Save multiple server connections and switch between them.
+- New PROFILE tab, and profiles can be opened for anyone, friend or not.
+- Stickers and emoji are split between your uploads and the exclusive ones
+  VRChat gave you.
+- STUFF items can be downloaded as the original image to your Downloads folder.
+- Window icon now shows up when launched from a menu or installed.
+- Fix a crash when the server connection drops (Linux).
 
 ### Server
 
-- Reconnect to the VRChat WebSocket after 2 seconds instead of 30.
-  The pipeline drops a connection after about two minutes no matter what is sent on it.
-- Only re-seed after a WebSocket gap longer than 15 seconds. Reconnecting now
-  takes two seconds, so re-seeding on every reconnect was some thirty full REST
-  passes an hour to recover a gap that rarely spans an event.
-- Re-seed friend state every 30 minutes instead of every 2 hours. It is now the
-  only re-seed in normal operation, so it also bounds how long a friend can sit
-  at a stale location after an event lost inside a reconnect gap.
-- Ignore SIGPIPE (POSIX): a front-end hanging up mid-response, or a dropped
-  VRChat connection, could kill the daemon from inside an OpenSSL or libcurl
-  write.
-- Stay up when a delegated sign-in prompt times out: send `auth_cancelled` so
-  the front-ends drop the stale modal, then restart the login and ask again.
-  Bad credentials, three wrong codes and an explicit cancel still exit.
+- Reconnects to VRChat faster (2 seconds instead of 30).
+- Friend state is refreshed every 30 minutes instead of every 2 hours, and
+  after a long disconnect.
+- A sign-in prompt left unanswered no longer stops the server; it asks again.
+- Supports communitating over standard I/O (`--stdio`).
+- Fix a crash when a client or VRChat disconnects mid-transfer (Linux).
 
 ### Web
 
-- Same split in the STICKERS and EMOJI sections.
-- Ignore SIGPIPE (POSIX) as well, so a browser disconnecting can never take the
-  front-end down on a platform whose sends lack MSG_NOSIGNAL.
-- DOWNLOAD button on every STUFF entry with artwork, saving the original file
-  without going through the viewer first.
-- Sessions now slide: a page left open past the 12-hour term kept its
-  WebSocket, so state stayed live while every picture on it came back 401. Each
-  authorized request pushes the term back and re-sends the cookie past halfway,
-  and a 401 on an image or a profile goes to the sign-in page instead of
-  drawing a blank.
+- Stickers and emoji are split the same way as in the client.
+- DOWNLOAD button on STUFF items.
+- Sessions stay signed in while the page is in use, fixing pictures going
+  blank after 12 hours.
+- Guard against a browser disconnect crashing vrcd-web on some platforms.
+
+### Packaging
+
+- The client .deb recommends vrcd-server.
 
 ### API
 
-- APIv9 brings a `limit` property to `catch_up` to avoid drowning new setups when synchronizing.
-- APIv10 moves the notification inbox into the server: seeded from VRChat at startup and on every re-seed, kept current from the WebSocket, and `notifications` is re-broadcast to every client on change. A front-end connecting late still sees what arrived while nobody was watching.
-- APIv11 lets `get_inventory` be filtered by item type and capability flag, which is how the exclusive stickers and emoji are asked for apart from the props. The reply echoes the filter, since one endpoint now feeds three of a front-end's listings.
+- APIv9: `catch_up` accepts a `limit`, so new setups aren't flooded on first sync.
+- APIv10: The server keeps the notification inbox, so notifications that
+  arrived while no client was open still show up.
+- APIv11: `get_inventory` can filter by item type and flag.
+- `get_stats` includes the database path (`db_path`).
 
 ## v0.2.0
 
