@@ -80,7 +80,13 @@ class EmbeddedServer
     /// `listenAddr` non-empty additionally opens a TCP listener, which is
     /// what lets a phone running the web front-end reach this server. Null
     /// leaves the pipe as the only way in.
-    Stream start(string overridePath, bool verbose, string listenAddr = null)
+    ///
+    /// `baseDir` non-empty puts this server's database, credentials and
+    /// cookie jar under a directory of its own, which is what lets a second
+    /// connection profile be a second VRChat account. Null leaves it on the
+    /// server's own defaults.
+    Stream start(string overridePath, bool verbose, string listenAddr = null,
+        string baseDir = null)
     {
         binaryPath = findBinary(overridePath);
         if (binaryPath is null)
@@ -96,6 +102,8 @@ class EmbeddedServer
             args ~= "--verbose";
         if (listenAddr.length > 0)
             args ~= ["--listen", listenAddr];
+        if (baseDir.length > 0)
+            args ~= ["--basedir", baseDir];
 
         logInfo("Starting embedded server: %s", binaryPath);
 

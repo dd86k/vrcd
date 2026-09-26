@@ -3979,13 +3979,15 @@ private void drawSettingsTab(mu_Context* ctx, AppState* state, int scrollDelta)
     // Section: Server connection.
     sectionHeader(ctx, "Server");
 
-    // Two buttons rather than a checkbox: they swap out the whole block
-    // below them, which is a choice and not an option, and a pair of big
-    // targets is what a headset can actually hit.
-    static immutable int[2] halfCols = [-1, -1];
-    mu_layout_row(ctx, 2, halfCols.ptr, 60);
-    drawModeButton(ctx, state, "THIS PC", 1);
-    drawModeButton(ctx, state, "REMOTE", 0);
+    drawProfileRows(ctx, state);
+
+    mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
+    mu_label(ctx, "Name");
+    mu_textbox(ctx, state.settingsProfileName.ptr, cast(int) state.settingsProfileName.length);
+
+    mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
+    mu_label(ctx, "Use local server");
+    mu_checkbox(ctx, "", &state.settingsEmbedded);
 
     if (state.settingsEmbedded)
         drawEmbeddedServerSettings(ctx, state);
@@ -4021,20 +4023,81 @@ private void drawSettingsTab(mu_Context* ctx, AppState* state, int scrollDelta)
     drawRestOfSettings(ctx, state);
 }
 
-/// One half of the THIS PC / REMOTE pair, drawn selected when it is the
-/// current mode.
-private void drawModeButton(mu_Context* ctx, AppState* state, string label, int mode)
+/// The saved connections as a row of buttons, the active one lit, then a row
+/// for Add and Remove.
+///
+/// Pressing a connection reconnects on the spot rather than waiting for the
+/// Connect button: picking a server out of a list is the act of connecting to
+/// it. The form below edits whichever one is lit.
+private void drawProfileRows(mu_Context* ctx, AppState* state)
 {
-    if (state.settingsEmbedded == mode)
+    import std.algorithm : min;
+
+    enum perRow = 4;
+    int[perRow] cols;
+    int spacing = ctx.style.spacing;
+    
+    static immutable int[1] fullRow = [ -1 ];
+    
+    mu_layout_row(ctx, cast(int)fullRow.length, fullRow.ptr, 0);
+    mu_label(ctx, "Connection profiles");
+
+    for (size_t start; start < state.profileNames.length; start += perRow)
     {
-        mu_Color prev = ctx.style.colors[MU_COLOR_BUTTON];
-        ctx.style.colors[MU_COLOR_BUTTON] = ctx.style.colors[MU_COLOR_BASEFOCUS];
-        mu_button(ctx, label);
-        ctx.style.colors[MU_COLOR_BUTTON] = prev;
-        return;
+        int n = cast(int) min(perRow, state.profileNames.length - start);
+        int w = (mu_get_layout(ctx).body_.w - spacing * (n - 1)) / n;
+        cols[] = w;
+        cols[n - 1] = -1;
+        mu_layout_row(ctx, n, cols.ptr, 50);
+
+        foreach (size_t idx; start .. start + n)
+        {
+            int i = cast(int) idx;
+            string name = state.profileNames[idx];
+            if (i == state.activeProfile)
+            {
+                mu_Color prev = ctx.style.colors[MU_COLOR_BUTTON];
+                ctx.style.colors[MU_COLOR_BUTTON] = ctx.style.colors[MU_COLOR_BASEFOCUS];
+                mu_button(ctx, name);
+                ctx.style.colors[MU_COLOR_BUTTON] = prev;
+                continue;
+            }
+            if (mu_button(ctx, name))
+                state.profileSwitchRequested = i;
+        }
     }
-    if (mu_button(ctx, label))
-        state.settingsEmbedded = mode;
+
+    // Remove is only offered from the second profile on: the tab is built
+    // around there being one. It takes the entry and not the server's
+    // database, which is not this button's to delete.
+    bool removable = state.profileNames.length > 1;
+    static immutable int[1] fullCol = [-1];
+    int half = (mu_get_layout(ctx).body_.w - spacing) / 2;
+    int[2] pairCols = [half, -1];
+    bool armed = removable && state.armedConfirm.kind == "profile";
+    mu_layout_row(ctx, removable ? 2 : 1, removable ? pairCols.ptr : fullCol.ptr, 50);
+
+    // Arming Remove swaps the pair in place, Cancel where Remove was and
+    // Confirm where Add was, so a double tap cancels without a row appearing.
+    if (armed)
+    {
+        if (clickButton(ctx, "Confirm"))
+        {
+            state.armedConfirm = ArmedConfirm.init;
+            state.profileRemoveRequested = true;
+        }
+        if (clickButton(ctx, "Cancel"))
+            state.armedConfirm = ArmedConfirm.init;
+    }
+    else
+    {
+        if (mu_button(ctx, "Add"))
+            state.profileAddRequested = true;
+        if (removable && clickButton(ctx, "Remove"))
+            state.armedConfirm = ArmedConfirm("profile", "active");
+    }
+
+    spacer(ctx);
 }
 
 /// The embedded block: nothing to configure, so it is status plus the two
@@ -4043,18 +4106,11 @@ private void drawModeButton(mu_Context* ctx, AppState* state, string label, int 
 private void drawEmbeddedServerSettings(mu_Context* ctx, AppState* state)
 {
     static immutable int[2] labelFieldCols = [200, -1];
-    static immutable int[1] fullCol = [-1];
-
-    mu_layout_row(ctx, 1, fullCol.ptr, 0);
-    mu_label(ctx, "vrcd runs its own server. Sign in to VRChat when asked.");
-
-    mu_layout_row(ctx, 1, fullCol.ptr, 0);
-    mu_label(ctx, "Events are only recorded while vrcd is open.");
 
     if (state.embeddedStatus.length > 0)
     {
         mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
-        mu_label(ctx, "Server");
+        mu_label(ctx, "Status");
         mu_label(ctx, state.embeddedStatus);
     }
 
@@ -4064,15 +4120,19 @@ private void drawEmbeddedServerSettings(mu_Context* ctx, AppState* state)
     mu_label(ctx, "Server path (optional)");
     mu_textbox(ctx, state.settingsServerPath.ptr, cast(int) state.settingsServerPath.length);
 
+    // Where this connection's server keeps everything. Blank is the server's
+    // own default, which is what the first connection uses; a second one is
+    // given a folder of its own so the two do not share a VRChat login.
+    mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
+    mu_label(ctx, "Server folder");
+    mu_textbox(ctx, state.settingsServerBaseDir.ptr, cast(int) state.settingsServerBaseDir.length);
+
     // Empty means the pipe is the only way in. An address here additionally
     // opens a port, which is what lets a phone running the web front-end
     // reach this server.
     mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
-    mu_label(ctx, "Listen for other devices");
+    mu_label(ctx, "Listen address (optional)");
     mu_textbox(ctx, state.settingsServerListen.ptr, cast(int) state.settingsServerListen.length);
-
-    mu_layout_row(ctx, 1, fullCol.ptr, 0);
-    mu_label(ctx, "Blank = this PC only. Example: 0.0.0.0:9700");
 
     // The one fact somebody moving to a standalone server needs. Switching
     // to REMOTE leaves this file alone, which is what makes the move safe.

@@ -257,17 +257,22 @@ int runGui(string host, ushort port, string secret, long sinceId,
     bool hostExplicit, bool portExplicit, bool secretExplicit, bool sinceExplicit,
     bool hardwareAccel)
 {
-    // Load saved settings; CLI args override.
+    // Load saved settings; CLI args override the active profile for this run.
     saved = loadSettings();
-    if (hostExplicit == false)
-        host = saved.host;
-    if (portExplicit == false)
-        port = saved.port;
-    if (secretExplicit == false)
-        secret = saved.secret;
-    // Resume catch-up from persisted cursor unless --since was explicit.
-    if (sinceExplicit == false)
-        sinceId = saved.lastEventId;
+    {
+        Profile* p = &saved.active();
+        if (hostExplicit)
+            p.host = host;
+        if (portExplicit)
+            p.port = port;
+        if (secretExplicit)
+            p.secret = secret;
+        // Resume catch-up from this profile's cursor unless --since was
+        // explicit. Per-profile because an id is a rowid in one server's
+        // database and means nothing in another's.
+        if (sinceExplicit == false)
+            sinceId = p.lastEventId;
+    }
     appState.settingsFontSize = saved.fontSize;
     appState.feedPageSize = saved.feedPageSize;
 
@@ -290,16 +295,6 @@ int runGui(string host, ushort port, string secret, long sinceId,
 
     // Load picture metadata setting into appState (bool -> int).
     appState.insertPictureMetadata = cast(int) saved.insertPictureMetadata;
-
-    // Load TLS settings into appState (bool -> int).
-    appState.settingsTls = cast(int) saved.useTls;
-    appState.settingsTlsSkipVerify = cast(int) saved.tlsSkipVerify;
-    if (saved.tlsCaCert.length > 0)
-        initSettingsBuf(appState.settingsTlsCaCert, saved.tlsCaCert);
-    if (saved.tlsClientCert.length > 0)
-        initSettingsBuf(appState.settingsTlsClientCert, saved.tlsClientCert);
-    if (saved.tlsClientKey.length > 0)
-        initSettingsBuf(appState.settingsTlsClientKey, saved.tlsClientKey);
 
     // Attempt to load OpenSSL for TLS support.
     loadTLS();
@@ -401,23 +396,16 @@ int runGui(string host, ushort port, string secret, long sinceId,
     msgQueue = new MessageQueue();
 
     // Populate settings buffers.
-    initSettingsBuf(appState.settingsHost, host);
-    initSettingsBuf(appState.settingsPort, format!"%d"(port));
-    initSettingsBuf(appState.settingsSecret, secret);
     if (saved.fontPath.length > 0)
         initSettingsBuf(appState.settingsFontPath, saved.fontPath);
-    appState.settingsEmbedded = cast(int) saved.embeddedServer;
-    if (saved.serverPath.length > 0)
-        initSettingsBuf(appState.settingsServerPath, saved.serverPath);
-    if (saved.serverListen.length > 0)
-        initSettingsBuf(appState.settingsServerListen, saved.serverListen);
+    profileToBuffers(saved.active());
+    syncProfileNames();
 
     // Connect asynchronously: the TCP connect can take 20s+ to time out,
     // so we do it on the network thread to keep the window responsive.
-    appState.serverStatus = saved.embeddedServer ? "Starting server..." : "Connecting...";
-    startLink(host, port, secret,
-        saved.useTls, saved.tlsSkipVerify,
-        saved.tlsClientCert, saved.tlsClientKey, saved.tlsCaCert, sinceId);
+    appState.serverStatus = saved.active().embeddedServer
+        ? "Starting server..." : "Connecting...";
+    startLink(sinceId);
 
     // Start log watcher for local VRChat player join/leave events.
     logWatcher = new LogWatcher(msgQueue, networkEventType);
@@ -724,6 +712,25 @@ private void eventLoop(mu_Context* uictx)
             doReconnect();
         }
 
+        // Handle connection profile requests from the Settings tab. All three
+        // reconnect, so they run here rather than mid-draw.
+        if (appState.profileSwitchRequested >= 0)
+        {
+            int index = appState.profileSwitchRequested;
+            appState.profileSwitchRequested = -1;
+            doProfileSwitch(index);
+        }
+        if (appState.profileAddRequested)
+        {
+            appState.profileAddRequested = false;
+            doProfileAdd();
+        }
+        if (appState.profileRemoveRequested)
+        {
+            appState.profileRemoveRequested = false;
+            doProfileRemove();
+        }
+
         // Handle Drop a Portal unpair request from Settings tab.
         // The token now lives on the server; cancelling a pair flow is the
         // closest "unpair" gesture available from the client. Actual token
@@ -804,7 +811,7 @@ private void eventLoop(mu_Context* uictx)
                 // Cursor: smallest id currently in feed, or lastEventId+1
                 // if the feed hasn't loaded any server events yet.
                 long beforeId = appState.oldestLoadedEventId == long.max
-                    ? saved.lastEventId + 1
+                    ? saved.active().lastEventId + 1
                     : appState.oldestLoadedEventId;
                 if (beforeId > 0)
                 {
@@ -1239,8 +1246,8 @@ private void drainNetworkMessages()
                 if (const(JSONValue) *jid = "id" in msg)
                     id = jid.integer;
 
-                if (id > saved.lastEventId)
-                    saved.lastEventId = id;
+                if (id > saved.active().lastEventId)
+                    saved.active().lastEventId = id;
 
                 string eventType;
                 if (const(JSONValue)* v = "event_type" in msg)
@@ -1303,8 +1310,8 @@ private void drainNetworkMessages()
                 long lastId;
                 if (const(JSONValue) *last_id = "last_id" in msg)
                     lastId = last_id.integer;
-                if (lastId > saved.lastEventId)
-                    saved.lastEventId = lastId;
+                if (lastId > saved.active().lastEventId)
+                    saved.active().lastEventId = lastId;
                 saveSettings(saved);
                 // The server replays a bounded page. When it had more than
                 // that to give, say so: the feed is missing the events between
@@ -1330,7 +1337,7 @@ private void drainNetworkMessages()
             case "event_older":
                 // Back-filled event from a fetch_older request. Append to
                 // the tail of the feed (oldest position). Do NOT touch
-                // saved.lastEventId, that's the high-water mark for live
+                // the profile's lastEventId, that's the high-water mark for live
                 // catch-up, not the oldest.
                 long id;
                 if (const(JSONValue) *jid = "id" in msg)
@@ -1450,7 +1457,10 @@ private void drainNetworkMessages()
                 if (const(JSONValue)* v = "id" in msg)
                     appState.selfUserId = v.str;
                 if (const(JSONValue)* v = "displayName" in msg)
+                {
                     appState.selfDisplayName = v.str;
+                    nameProfileFromSelf(v.str);
+                }
                 if (const(JSONValue)* v = "status" in msg)
                     appState.selfStatus = v.str;
                 if (const(JSONValue)* v = "statusDescription" in msg)
@@ -2678,15 +2688,16 @@ extern(C) void set_clipboard(mu_Context* ctx, const(char)* text)
 /// Both callers go through here so embedded and remote cannot drift apart:
 /// past the handshake a pipe and a socket are the same stream, and the only
 /// thing that differs is who started the process on the other end.
-private bool startLink(string host, ushort port, string secret,
-    bool useTls, bool skipVerify,
-    string clientCert, string clientKey, string caCert, long sinceId)
+private bool startLink(long sinceId)
 {
+    Profile prof = saved.active();
+
     Stream embeddedStream;
-    if (saved.embeddedServer)
+    if (prof.embeddedServer)
     {
         embedded = new EmbeddedServer();
-        embeddedStream = embedded.start(saved.serverPath, false, saved.serverListen);
+        embeddedStream = embedded.start(prof.serverPath, false,
+            prof.serverListen, prof.baseDir);
         if (embeddedStream is null)
         {
             appState.serverStatus = embedded.lastError();
@@ -2700,8 +2711,9 @@ private bool startLink(string host, ushort port, string secret,
     else
         appState.embeddedStatus = null;
 
-    conn = new ServerConnection(host, port, secret,
-        useTls, skipVerify, clientCert, clientKey, caCert);
+    conn = new ServerConnection(prof.host, prof.port, prof.secret,
+        prof.useTls, prof.tlsSkipVerify,
+        prof.tlsClientCert, prof.tlsClientKey, prof.tlsCaCert);
     if (embeddedStream)
         conn.setEmbeddedStream(embeddedStream);
 
@@ -2740,26 +2752,106 @@ private void stopLink()
     }
 }
 
-private void doReconnect()
+/// Copy the edit buffers into a profile. Returns false when the port does not
+/// parse, leaving the profile untouched so a typo cannot lose a connection.
+private bool buffersToProfile(ref Profile p)
 {
     import std.conv : to;
 
-    logDebugging("doReconnect: tearing down existing connection");
-
-    stopLink();
-
-    // Read settings buffers.
-    string host = cast(string) appState.settingsHost[0 .. strlen(appState.settingsHost.ptr)].idup;
-    string portStr = cast(string) appState.settingsPort[0 .. strlen(appState.settingsPort.ptr)].idup;
-    string secret = cast(string) appState.settingsSecret[0 .. strlen(appState.settingsSecret.ptr)].idup;
-
     ushort port = void;
-    try port = portStr.to!ushort;
+    try port = readSettingsBuf(appState.settingsPort).to!ushort;
     catch (Exception)
     {
         appState.serverStatus = "Invalid port";
-        return;
+        return false;
     }
+
+    p.name = readSettingsBuf(appState.settingsProfileName);
+    p.embeddedServer = appState.settingsEmbedded != 0;
+    p.serverPath   = readSettingsBuf(appState.settingsServerPath);
+    p.serverListen = readSettingsBuf(appState.settingsServerListen);
+    p.baseDir      = readSettingsBuf(appState.settingsServerBaseDir);
+    p.host   = readSettingsBuf(appState.settingsHost);
+    p.port   = port;
+    p.secret = readSettingsBuf(appState.settingsSecret);
+    p.useTls = appState.settingsTls != 0;
+    p.tlsSkipVerify  = appState.settingsTlsSkipVerify != 0;
+    p.tlsCaCert      = readSettingsBuf(appState.settingsTlsCaCert);
+    p.tlsClientCert  = readSettingsBuf(appState.settingsTlsClientCert);
+    p.tlsClientKey   = readSettingsBuf(appState.settingsTlsClientKey);
+    return true;
+}
+
+/// Copy a profile into the edit buffers. Unconditional, so switching away
+/// from a profile cannot leave the previous one's paths on screen.
+private void profileToBuffers(ref Profile p)
+{
+    initSettingsBuf(appState.settingsProfileName, p.name);
+    appState.settingsEmbedded = cast(int) p.embeddedServer;
+    initSettingsBuf(appState.settingsServerPath, p.serverPath);
+    initSettingsBuf(appState.settingsServerListen, p.serverListen);
+    initSettingsBuf(appState.settingsServerBaseDir, p.baseDir);
+    initSettingsBuf(appState.settingsHost, p.host);
+    initSettingsBuf(appState.settingsPort, format!"%d"(p.port));
+    initSettingsBuf(appState.settingsSecret, p.secret);
+    appState.settingsTls = cast(int) p.useTls;
+    appState.settingsTlsSkipVerify = cast(int) p.tlsSkipVerify;
+    initSettingsBuf(appState.settingsTlsCaCert, p.tlsCaCert);
+    initSettingsBuf(appState.settingsTlsClientCert, p.tlsClientCert);
+    initSettingsBuf(appState.settingsTlsClientKey, p.tlsClientKey);
+}
+
+/// Label an unnamed profile with the account its server is signed in as.
+///
+/// Which is the name worth having and the one nobody can supply up front: the
+/// server has to connect and authenticate before anyone knows it. Only fills
+/// a blank, so a name typed in the Settings tab is never overwritten.
+private void nameProfileFromSelf(string displayName)
+{
+    if (displayName.length == 0)
+        return;
+    if (saved.active().name.length > 0)
+        return;
+
+    saved.active().name = displayName;
+    // The tab may be open on this profile right now, and its name box was
+    // populated back when it was still blank.
+    if (readSettingsBuf(appState.settingsProfileName).length == 0)
+        initSettingsBuf(appState.settingsProfileName, displayName);
+    syncProfileNames();
+    logDebugging("Profile %d named '%s' from self", saved.activeProfile, displayName);
+}
+
+/// Mirror the profile list into appState so the Settings tab can draw it.
+///
+/// An unnamed profile is numbered rather than left blank: the list is what
+/// you press to switch, and a row with nothing written on it is unpressable.
+private void syncProfileNames()
+{
+    string[] names;
+    foreach (size_t i, ref Profile p; saved.profiles)
+        names ~= p.name.length > 0 ? p.name : format!"Server %d"(i + 1);
+    appState.profileNames = names;
+    appState.activeProfile = cast(int) saved.activeProfile;
+}
+
+private void doReconnect()
+{
+    logDebugging("doReconnect: tearing down existing connection");
+
+    // Read the buffers before tearing anything down: a bad port should leave
+    // the working connection alone rather than drop it and refuse to return.
+    Profile edited = saved.active();
+    if (buffersToProfile(edited) == false)
+        return;
+
+    stopLink();
+    saved.active() = edited;
+    syncProfileNames();
+    // Written now rather than at exit: a connection only exists once it is
+    // in the file, and losing the choice to a crash means coming back as
+    // another account.
+    saveSettings(saved);
 
     // Reset queue state for the new connection.
     msgQueue = new MessageQueue();
@@ -2767,27 +2859,97 @@ private void doReconnect()
     // Silence notifications until the fresh catch-up completes.
     catchUpComplete = false;
 
-    // The mode toggle and the paths beside it only take effect on reconnect,
-    // which is what the button under them is for.
-    saved.embeddedServer = appState.settingsEmbedded != 0;
-    saved.serverPath   = cast(string) appState.settingsServerPath[0 .. strlen(appState.settingsServerPath.ptr)].idup;
-    saved.serverListen = cast(string) appState.settingsServerListen[0 .. strlen(appState.settingsServerListen.ptr)].idup;
-
     logDebugging("doReconnect: embedded=%s connecting to %s:%d",
-        saved.embeddedServer, host, port);
-    appState.serverStatus = saved.embeddedServer ? "Starting server..." : "Connecting...";
+        edited.embeddedServer, edited.host, edited.port);
+    appState.serverStatus = edited.embeddedServer ? "Starting server..." : "Connecting...";
     appState.connected = false;
     // Pair state is unknown until the new connection replays a dap_status
     // snapshot. Reset here (initiation) rather than on the `connected`
     // transition so we can't race-clobber the freshly arrived snapshot.
     appState.dapPairState = AppState.DapPairState.unknown;
     appState.dapStatus = "";
-    string clientCert = cast(string) appState.settingsTlsClientCert[0 .. strlen(appState.settingsTlsClientCert.ptr)].idup;
-    string clientKey  = cast(string) appState.settingsTlsClientKey[0 .. strlen(appState.settingsTlsClientKey.ptr)].idup;
-    string caCert     = cast(string) appState.settingsTlsCaCert[0 .. strlen(appState.settingsTlsCaCert.ptr)].idup;
-    startLink(host, port, secret,
-        appState.settingsTls != 0, appState.settingsTlsSkipVerify != 0,
-        clientCert, clientKey, caCert, saved.lastEventId);
+    startLink(saved.active().lastEventId);
+}
+
+/// Switch to another saved connection: commit what is on screen, then bring
+/// the link up against the new one.
+///
+/// A switch reconnects rather than waiting for the button below it. Picking
+/// a server out of a list is the act of connecting to it; leaving the old
+/// link up would put a roster from one account under a name from another.
+private void doProfileSwitch(int index)
+{
+    if (index < 0 || index >= cast(int) saved.profiles.length)
+        return;
+    if (index == cast(int) saved.activeProfile)
+        return;
+
+    Profile edited = saved.active();
+    if (buffersToProfile(edited) == false)
+        return;
+    saved.active() = edited;
+
+    saved.activeProfile = cast(size_t) index;
+    profileToBuffers(saved.active());
+    syncProfileNames();
+    resetForProfileSwitch();
+
+    logInfo("Switching to profile '%s'", appState.profileNames[index]);
+    doReconnect();
+}
+
+private void doProfileAdd()
+{
+    Profile edited = saved.active();
+    if (buffersToProfile(edited) == false)
+        return;
+    saved.active() = edited;
+
+    Profile p;
+    p.embeddedServer = true;
+    // Its own directory from the start: two embedded servers sharing one
+    // would fight over the same cookie jar and log each other out.
+    p.baseDir = newProfileBaseDir(saved.profiles);
+    saved.profiles ~= p;
+    saved.activeProfile = saved.profiles.length - 1;
+
+    profileToBuffers(saved.active());
+    syncProfileNames();
+    resetForProfileSwitch();
+    doReconnect();
+}
+
+private void doProfileRemove()
+{
+    // The list is what the tab is built around, so there is always one.
+    if (saved.profiles.length <= 1)
+        return;
+
+    size_t victim = saved.activeProfile;
+    logInfo("Removing profile '%s'", appState.profileNames[victim]);
+    // Only the entry goes: an embedded server's database lives outside the
+    // settings file and deleting it is not something a Remove button should
+    // decide for somebody.
+    saved.profiles = saved.profiles[0 .. victim] ~ saved.profiles[victim + 1 .. $];
+    saved.activeProfile = victim > 0 ? victim - 1 : 0;
+
+    profileToBuffers(saved.active());
+    syncProfileNames();
+    resetForProfileSwitch();
+    doReconnect();
+}
+
+/// Drop what described the server we are leaving.
+///
+/// Only the feed and the stats block: the roster, self and the inbox are
+/// re-sent in full on connect, but the feed is appended to, so without this
+/// one account's events would sit above another's.
+private void resetForProfileSwitch()
+{
+    appState.clearFeed();
+    appState.statsKnown = false;
+    appState.statsDbPath = null;
+    appState.embeddedStatus = null;
 }
 
 /// Read current UI state into a Settings struct and persist to disk.
@@ -2811,22 +2973,13 @@ private void syncNotifySettings()
 private void doSaveSettings()
 {
     Settings s;
-    s.embeddedServer = appState.settingsEmbedded != 0;
-    s.serverPath   = cast(string) appState.settingsServerPath[0 .. strlen(appState.settingsServerPath.ptr)].idup;
-    s.serverListen = cast(string) appState.settingsServerListen[0 .. strlen(appState.settingsServerListen.ptr)].idup;
-    s.host = cast(string) appState.settingsHost[0 .. strlen(appState.settingsHost.ptr)].idup;
-    s.port = {
-        string p = cast(string) appState.settingsPort[0 .. strlen(appState.settingsPort.ptr)].idup;
-        try return p.to!ushort;
-        catch (Exception) return cast(ushort) 9700;
-    }();
-    s.secret = cast(string) appState.settingsSecret[0 .. strlen(appState.settingsSecret.ptr)].idup;
-    s.useTls = appState.settingsTls != 0;
-    s.tlsSkipVerify = appState.settingsTlsSkipVerify != 0;
-    s.tlsCaCert = cast(string) appState.settingsTlsCaCert[0 .. strlen(appState.settingsTlsCaCert.ptr)].idup;
-    s.tlsClientCert = cast(string) appState.settingsTlsClientCert[0 .. strlen(appState.settingsTlsClientCert.ptr)].idup;
-    s.tlsClientKey  = cast(string) appState.settingsTlsClientKey[0 .. strlen(appState.settingsTlsClientKey.ptr)].idup;
-    s.fontPath = cast(string) appState.settingsFontPath[0 .. strlen(appState.settingsFontPath.ptr)].idup;
+    // The connections carry over wholesale; only the active one is on screen.
+    s.profiles = saved.profiles;
+    s.activeProfile = saved.activeProfile;
+    buffersToProfile(s.active());
+    syncProfileNames();
+
+    s.fontPath = readSettingsBuf(appState.settingsFontPath);
     s.fontSize = appState.settingsFontSize;
     s.feedPageSize = appState.feedPageSize;
 
@@ -2850,10 +3003,9 @@ private void doSaveSettings()
     // Picture metadata setting (int -> bool).
     s.insertPictureMetadata = appState.insertPictureMetadata != 0;
 
-    // Preserve the runtime-tracked event cursor; the Settings tab
-    // doesn't expose it and we don't want to reset it to 0.
-    s.lastEventId = saved.lastEventId;
-
+    // The event cursor survives without being restored here: buffersToProfile
+    // leaves it alone, and the profile array it wrote into is the same one
+    // the live cursor is tracked in.
     saved = s; // Update module-level copy used by notification dispatch.
     saveSettings(s);
 }
@@ -2935,6 +3087,12 @@ private string validateUploadPNG(const(ubyte)[] data, InvSection section)
 }
 
 /// Copy a D string into a fixed-size null-terminated char buffer.
+/// Read a NUL-terminated settings buffer back out as a string.
+private string readSettingsBuf(const(char)[] buf)
+{
+    return cast(string) buf[0 .. strlen(buf.ptr)].idup;
+}
+
 private void initSettingsBuf(char[] buf, string value)
 {
     assert(buf);

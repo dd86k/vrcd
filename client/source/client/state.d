@@ -288,13 +288,24 @@ struct AppState
 
     // Settings (editable via UI)
 
-    /// Run the server ourselves rather than connecting to one. Drawn as the
-    /// THIS PC / REMOTE pair rather than a checkbox: the two swap out the
-    /// whole block under them, which is a choice and not an option.
+    // Connection profiles. The list is mirrored out of Settings so the tab
+    // can draw it without reaching into the saved copy, and the fields below
+    // are the edit buffers for whichever one is active.
+    string[] profileNames;
+    int activeProfile;
+    /// Index the user pressed, or -1. Switching reconnects, so it is a
+    /// request rather than an assignment.
+    int profileSwitchRequested = -1;
+    bool profileAddRequested;
+    bool profileRemoveRequested;
+    char[64] settingsProfileName = '\0';
+
+    /// Run the server ourselves rather than connecting to one.
     int settingsEmbedded;
     char[256] settingsServerPath = '\0';
     char[64] settingsServerListen = '\0';
-    /// Live state of the child, for the status line under the toggle.
+    char[256] settingsServerBaseDir = '\0';
+    /// Live state of the child, for the status line under the tickbox.
     string embeddedStatus;
 
     char[128] settingsHost = '\0';
@@ -561,6 +572,24 @@ struct AppState
         feedEntries ~= FeedEntry(id, eventType, user, detail, receivedAt, rawContent, isSelf, source);
         if (id > 0 && id < oldestLoadedEventId)
             oldestLoadedEventId = id;
+    }
+
+    /// Empty the feed and everything that indexes into it.
+    ///
+    /// For switching to another server: an event id is a rowid in one
+    /// particular database, so the dedup set and the back-fill cursor are
+    /// about the server that answered, not about the events. The roster,
+    /// self and the inbox need no equivalent -- each arrives as a full
+    /// snapshot on connect, while the feed is only ever appended to.
+    void clearFeed()
+    {
+        feedEntries = null;
+        feedIds = null;
+        oldestLoadedEventId = long.max;
+        fetchingOlder = false;
+        noOlderEvents = false;
+        feedDetailOpen = false;
+        selectedFeedEntry = FeedEntry.init;
     }
 
     /// Add an older event at the oldest end of the feed.
