@@ -229,14 +229,20 @@ class ServerConnection
     /// The server replays at most `limit` events, the newest ones, and says
     /// in `caught_up` whether it had to skip any. A server older than
     /// protocol 9 ignores the limit and replays everything after `sinceId`.
-    void catchUp(long sinceId = 0, int limit = CATCH_UP_LIMIT)
+    ///
+    /// `epoch` is the one `sinceId` came from, zero when there is none yet. A
+    /// server on another answers `events_reset` instead of replaying.
+    void catchUp(long sinceId, long epoch, int limit = CATCH_UP_LIMIT)
     {
-        logDebugging("catchUp: sinceId=%d limit=%d", sinceId, limit);
-        sendMessage(JSONValue([
+        logDebugging("catchUp: sinceId=%d epoch=%d limit=%d", sinceId, epoch, limit);
+        JSONValue msg = JSONValue([
             "type": JSONValue("catch_up"),
             "since_id": JSONValue(sinceId),
             "limit": JSONValue(limit),
-        ]));
+        ]);
+        if (epoch)
+            msg["epoch"] = JSONValue(epoch);
+        sendMessage(msg);
     }
 
     /// Request a page of older events (with id < beforeId), newest first.
@@ -646,7 +652,7 @@ class ServerConnection
     /// Connect (blocking) and then run the receive loop, all on this thread.
     /// Reports connection state via the queue and wakes the main thread on
     /// each transition so the UI never blocks on TCP connect.
-    void connectAndRun(MessageQueue queue, uint sdlEventType, long sinceId)
+    void connectAndRun(MessageQueue queue, uint sdlEventType, long sinceId, long epoch)
     {
         bool ok;
         try ok = connect();
@@ -669,7 +675,7 @@ class ServerConnection
 
         try
         {
-            catchUp(sinceId);
+            catchUp(sinceId, epoch);
             requestFriends();
             // Older servers reply to unknown message types with an error
             // that would land in the feed; only ask when supported.

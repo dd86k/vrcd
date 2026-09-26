@@ -357,7 +357,9 @@ struct AppState
     int[feedEventLabels.length] feedEventVisible = 1;
     int feedShowSelfEvents;
 
-    // Smallest server event id currently loaded in feedEntries (long.max = none).
+    // Id of the oldest server event loaded in feedEntries (long.max = none).
+    // Oldest by time, which is the server's order, not the smallest id:
+    // history can be stored after the events that follow it.
     // Used as the cursor for "Fetch older" back-fill requests.
     long oldestLoadedEventId = long.max;
     // True while a fetch_older request is in flight; button shows "Fetching...".
@@ -570,7 +572,8 @@ struct AppState
             feedEntries = feedEntries[1 .. $];
         }
         feedEntries ~= FeedEntry(id, eventType, user, detail, receivedAt, rawContent, isSelf, source);
-        if (id > 0 && id < oldestLoadedEventId)
+        // Catch-up and live events only get newer; the first one is the oldest.
+        if (id > 0 && oldestLoadedEventId == long.max)
             oldestLoadedEventId = id;
     }
 
@@ -605,7 +608,7 @@ struct AppState
             feedIds[id] = true;
         }
         feedEntries = FeedEntry(id, eventType, user, detail, receivedAt, rawContent, isSelf, source) ~ feedEntries;
-        if (id > 0 && id < oldestLoadedEventId)
+        if (id > 0)
             oldestLoadedEventId = id;
     }
 
@@ -790,6 +793,13 @@ unittest
     assert(st.feedEntries[1].id == 9);
     assert(st.feedEntries[2].id == 10);
     assert(st.oldestLoadedEventId == 8);
+
+    // Imported history: older than 8 by time, stored later. The cursor is
+    // the server's order, so it follows the page and not the smaller id.
+    st.appendOldFeedEntry(20, "friend-offline", "somebody", "", "");
+    assert(st.oldestLoadedEventId == 20);
+    st.addFeedEntry(14, "friend-online", "somebody", "", "");
+    assert(st.oldestLoadedEventId == 20);
 
     // Entries without an id (local, synthetic) are never deduplicated.
     st.addFeedEntry(0, "system", "", "one", "");

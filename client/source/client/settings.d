@@ -52,6 +52,8 @@ struct Profile
     // Highest event id processed from this server. Used on reconnect
     // to resume catch-up instead of replaying the entire event store.
     long lastEventId;
+    // The server's event epoch lastEventId belongs to. Zero until told.
+    long eventsEpoch;
 }
 
 /// Persistent application settings, saved as JSON.
@@ -174,6 +176,9 @@ private void readProfileKeys(const(JSONValue) json, ref Profile p)
     if (const(JSONValue) *jlast_event_id = "last_event_id" in json)
         if (jlast_event_id.type == JSONType.integer)
             p.lastEventId = jlast_event_id.integer;
+    if (const(JSONValue) *jevents_epoch = "events_epoch" in json)
+        if (jevents_epoch.type == JSONType.integer)
+            p.eventsEpoch = jevents_epoch.integer;
 }
 
 private JSONValue profileToJSON(Profile p)
@@ -193,6 +198,7 @@ private JSONValue profileToJSON(Profile p)
     j["tls_client_cert"] = p.tlsClientCert;
     j["tls_client_key"] = p.tlsClientKey;
     j["last_event_id"] = p.lastEventId;
+    j["events_epoch"] = p.eventsEpoch;
     return j;
 }
 

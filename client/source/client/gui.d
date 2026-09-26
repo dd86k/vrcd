@@ -1312,6 +1312,9 @@ private void drainNetworkMessages()
                     lastId = last_id.integer;
                 if (lastId > saved.active().lastEventId)
                     saved.active().lastEventId = lastId;
+                if (const(JSONValue) *jepoch = "epoch" in msg)
+                    if (jepoch.type == JSONType.integer)
+                        saved.active().eventsEpoch = jepoch.integer;
                 saveSettings(saved);
                 // The server replays a bounded page. When it had more than
                 // that to give, say so: the feed is missing the events between
@@ -1332,6 +1335,22 @@ private void drainNetworkMessages()
                 }
                 appState.addFeedEntry(0, "system", "", caughtUpText, timeNow(), "", false, EventSource.system);
                 catchUpComplete = true;
+                break;
+
+            case "events_reset":
+                // The server's history was rewritten, or is another
+                // database: every id held here is from the old one.
+                long epoch;
+                if (const(JSONValue) *jepoch = "epoch" in msg)
+                    if (jepoch.type == JSONType.integer)
+                        epoch = jepoch.integer;
+                appState.clearFeed();
+                saved.active().lastEventId = 0;
+                saved.active().eventsEpoch = epoch;
+                saveSettings(saved);
+                catchUpComplete = false;
+                if (conn)
+                    conn.catchUp(0, epoch);
                 break;
 
             case "event_older":
@@ -2718,7 +2737,7 @@ private bool startLink(long sinceId)
         conn.setEmbeddedStream(embeddedStream);
 
     netThread = new Thread({
-        conn.connectAndRun(msgQueue, networkEventType, sinceId);
+        conn.connectAndRun(msgQueue, networkEventType, sinceId, prof.eventsEpoch);
     });
     netThread.isDaemon = true;
     netThread.start();
