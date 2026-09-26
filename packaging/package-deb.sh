@@ -103,13 +103,20 @@ EOF
     local installed_size
     installed_size="$(du -sk "${stage}" | cut -f1)"
 
+    # Client can run server itself, if vrcd_server is in PATH.
+    # Recommends over Depends because it is optional
+    local recommends=""
+    if [[ "${component}" == "client" ]]; then
+        recommends=$'\nRecommends: vrcd-server'
+    fi
+
     cat > "${stage}/DEBIAN/control" <<EOF
 Package: ${pkgname}
 Version: ${VERSION}
 Section: $( [[ "${component}" == "client" ]] && echo utils || echo net )
 Priority: optional
 Architecture: ${ARCH}
-Depends: ${depends}
+Depends: ${depends}${recommends}
 Installed-Size: ${installed_size}
 Maintainer: ${MAINTAINER}
 Homepage: https://github.com/dd86k/vrcd
