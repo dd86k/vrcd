@@ -28,6 +28,7 @@ import server.moderations;
 import server.notifications;
 import server.ratelimit;
 import server.database;
+import server.importer;
 import server.stream;
 import server.userprofile;
 import server.worldcache;
@@ -47,8 +48,9 @@ import vrcd.notifications;
 /// 11 = filtered inventory listings (`get_inventory` takes `types`,
 /// `not_types` and `not_flags`; `inventory` echoes them),
 /// 12 = events ordered by time (`catch_up` takes an `epoch`, `caught_up`
-/// carries it, `events_reset` when history was rewritten).
-private enum int PROTOCOL_VERSION = 12;
+/// carries it, `events_reset` when history was rewritten),
+/// 13 = imports (`import_begin`, `import_events`, `import_end`, `import_abort`).
+private enum int PROTOCOL_VERSION = 13;
 
 /// Shortest gap between two re-seed passes. A pass paginates the whole
 /// friends list, so this is what keeps a reconnect storm -- or somebody
@@ -118,6 +120,12 @@ class APIServer
     private bool firstReseed = true;
     private Duration reseedInterval;
 
+    // One import at a time: two would each plan around spans the other has
+    // not recorded yet.
+    private Mutex importMutex;
+    private ImportSession activeImport;
+    private string pruneRetain;
+
     this(string bindAddr, ushort port, string sharedSecret, Database store,
         Duration reseedInterval = DEFAULT_RESEED_INTERVAL)
     {
@@ -134,6 +142,7 @@ class APIServer
         this.reseedSignalMutex = new Mutex();
         this.reseedSignalCond = new Condition(this.reseedSignalMutex);
         this.reseedInterval = reseedInterval;
+        this.importMutex = new Mutex();
     }
 
     /// Access the friends tracker (e.g. to seed from REST API).
@@ -741,6 +750,27 @@ class APIServer
             eventId, event.typeRaw, delivered, clients.length);
     }
 
+    /// Where pruning cuts history off, so an import is not offered spans the
+    /// next start would delete again.
+    void setPruneRetain(string modifier)
+    {
+        pruneRetain = modifier;
+    }
+
+    /// Drop the import `owner` left unfinished, and what it stored.
+    void abortImportOf(ClientHandler owner)
+    {
+        importMutex.lock();
+        scope(exit) importMutex.unlock();
+        if (activeImport is null || activeImport.owner !is owner)
+            return;
+        ImportSession session = activeImport;
+        activeImport = null;
+        logWarn("Import %s abandoned", session.tag);
+        if (store.deleteImport(session.tag) > 0)
+            resetEvents();
+    }
+
     /// Start a new event epoch and tell every client to drop its feed and
     /// catch up again. For after the event history has been rewritten.
     void resetEvents()
@@ -961,6 +991,27 @@ private enum int CATCH_UP_DEFAULT_LIMIT = 1000;
 /// ditto
 private enum int CATCH_UP_MAX_LIMIT     = 5000;
 
+/// Most events one `import_events` may carry.
+private enum int IMPORT_BATCH_MAX = 5000;
+
+/// Import sources accepted, and the prefix of the tag their events carry.
+private immutable string[] IMPORT_SOURCES = [ "vrcx" ];
+
+/// An import in progress. Only its owner's thread feeds it.
+private class ImportSession
+{
+    ClientHandler owner;
+    long id;
+    string source;
+    string account;
+    string tag;
+    TimeRange[] accept;
+    // Per accept span: events stored, and the earliest and latest of them.
+    long[] rows;
+    string[] first;
+    string[] last;
+}
+
 /// Handles a single client connection.
 private class ClientHandler
 {
@@ -1040,6 +1091,7 @@ private class ClientHandler
             atomicStore(disconnected, true);
             logInfo("Client disconnected");
             server.removeClient(this);
+            server.abortImportOf(this);
             stream.close();
             if (onClosed)
                 onClosed();
@@ -1252,6 +1304,14 @@ private class ClientHandler
                     }
                     if (server.dapDelegator)
                         server.dapDelegator.cancel();
+                    break;
+                case "import_begin", "import_events", "import_end", "import_abort":
+                    if (authenticated == false)
+                    {
+                        sendError("Not authenticated");
+                        return;
+                    }
+                    handleImport(type, msg);
                     break;
                 case "get_stats":
                     if (authenticated == false)
@@ -2858,6 +2918,224 @@ private class ClientHandler
         server.authDelegator.submitResponse(resp);
     }
 
+    //
+    // Imports: history from another tool, filling the spans vrcd was not
+    // recording. The client reads and converts; the server decides what fits.
+    //
+
+    void handleImport(string type, JSONValue msg)
+    {
+        server.importMutex.lock();
+        scope(exit) server.importMutex.unlock();
+
+        if (type == "import_begin")
+        {
+            handleImportBegin(msg);
+            return;
+        }
+
+        long importId;
+        if (const(JSONValue)* v = "import_id" in msg)
+            if (v.type == JSONType.integer)
+                importId = v.integer;
+        ImportSession session = server.activeImport;
+        if (session is null || session.owner !is this || session.id != importId)
+        {
+            sendImportError(importId, "No such import in progress");
+            return;
+        }
+
+        switch (type)
+        {
+        case "import_events":
+            handleImportEvents(session, msg);
+            break;
+        case "import_end":
+            handleImportEnd(session);
+            break;
+        default:
+            server.activeImport = null;
+            long deleted = server.store.deleteImport(session.tag);
+            sendLine(JSONValue([
+                "type": JSONValue("import_aborted"),
+                "import_id": JSONValue(session.id),
+            ]).toString() ~ "\n");
+            if (deleted > 0)
+                server.resetEvents();
+        }
+    }
+
+    /// Plan an import: the spans it may fill are the ones vrcd did not record
+    /// and no earlier import covered, back to where pruning would cut them.
+    void handleImportBegin(JSONValue msg)
+    {
+        string source = stringField(msg, "source");
+        string account = stringField(msg, "account");
+
+        bool known;
+        foreach (string s; IMPORT_SOURCES)
+            if (s == source)
+                known = true;
+        if (known == false)
+        {
+            sendImportError(0, "Unknown import source: " ~ source);
+            return;
+        }
+
+        // Another account's history would land in this one's feed.
+        string self = server.friendsTracker.getSelfUserId();
+        if (self.length == 0)
+        {
+            sendImportError(0, "Not signed in to VRChat yet");
+            return;
+        }
+        if (account != self)
+        {
+            sendImportError(0, "This server is signed in as another account");
+            return;
+        }
+
+        if (server.activeImport)
+        {
+            sendImportError(0, "Another import is in progress");
+            return;
+        }
+
+        import std.datetime.systime : Clock;
+
+        Database store = server.store;
+        string now = toISO(Clock.currTime());
+        TimeRange[] recorded = recordedRanges(store.connectionLog(), &store.lastLiveEventIn, now);
+        TimeRange[] imported = store.importedRanges();
+        string floor = server.pruneRetain.length ? store.timeFromNow(server.pruneRetain) : null;
+
+        ImportSession session = new ImportSession();
+        session.owner = this;
+        session.source = source;
+        session.account = account;
+        session.accept = uncovered(recorded ~ imported, floor, now);
+        session.rows.length = session.accept.length;
+        session.first.length = session.accept.length;
+        session.last.length = session.accept.length;
+        session.tag = store.beginImport(source, session.id);
+        server.activeImport = session;
+
+        sendLine(JSONValue([
+            "type": JSONValue("import_plan"),
+            "import_id": JSONValue(session.id),
+            "accept": rangesJSON(session.accept),
+            "recorded": rangesJSON(mergeRanges(recorded)),
+            "imported": rangesJSON(mergeRanges(imported)),
+        ]).toString() ~ "\n");
+        logInfo("Import %s planned: %d span(s) open", session.tag, session.accept.length);
+    }
+
+    void handleImportEvents(ImportSession session, JSONValue msg)
+    {
+        JSONValue* jevents = "events" in msg;
+        if (jevents is null || jevents.type != JSONType.array)
+        {
+            sendImportError(session.id, "No events");
+            return;
+        }
+        if (jevents.array.length > IMPORT_BATCH_MAX)
+        {
+            sendImportError(session.id, "Batch too large (max " ~ IMPORT_BATCH_MAX.to!string ~ ")");
+            return;
+        }
+
+        ImportedEvent[] batch;
+        batch.reserve(jevents.array.length);
+        long rejected;
+        foreach (ref JSONValue j; jevents.array)
+        {
+            if (j.type != JSONType.object)
+            {
+                ++rejected;
+                continue;
+            }
+            string at;
+            string eventType;
+            if (const(JSONValue)* v = "received_at" in j)
+                if (v.type == JSONType.string)
+                    at = normalizeTime(v.str);
+            if (const(JSONValue)* v = "event_type" in j)
+                if (v.type == JSONType.string)
+                    eventType = v.str;
+            JSONValue* content = "content" in j;
+            // Ephemeral types are never stored, so neither is history of them.
+            EventType et = toEventType(eventType);
+            ptrdiff_t span = at.length ? findRange(session.accept, at) : -1;
+            if (span < 0 || et == EventType.unknown || et == EventType.friendTraveling ||
+                content is null || content.type != JSONType.object)
+            {
+                ++rejected;
+                continue;
+            }
+
+            batch ~= ImportedEvent(at, eventType, JSONValue([
+                "type": JSONValue(eventType),
+                "content": *content,
+            ]).toString());
+            ++session.rows[span];
+            if (session.first[span].length == 0 || at < session.first[span])
+                session.first[span] = at;
+            if (at > session.last[span])
+                session.last[span] = at;
+        }
+
+        if (batch.length)
+            server.store.storeImported(session.tag, batch);
+
+        sendLine(JSONValue([
+            "type": JSONValue("import_ack"),
+            "import_id": JSONValue(session.id),
+            "accepted": JSONValue(batch.length),
+            "rejected": JSONValue(rejected),
+        ]).toString() ~ "\n");
+    }
+
+    /// Record what was covered. Each span is the first to the last event the
+    /// source had in it rather than the whole gap: a later, newer copy of the
+    /// same source can still fill in past where this one ended.
+    void handleImportEnd(ImportSession session)
+    {
+        TimeRange[] spans;
+        long[] rows;
+        long total;
+        foreach (size_t i, long n; session.rows)
+        {
+            if (n == 0)
+                continue;
+            spans ~= TimeRange(session.first[i], shiftTime(session.last[i], dur!"msecs"(1)));
+            rows ~= n;
+            total += n;
+        }
+        server.store.finishImport(session.id, session.source, session.account, spans, rows);
+        server.activeImport = null;
+
+        sendLine(JSONValue([
+            "type": JSONValue("import_done"),
+            "import_id": JSONValue(session.id),
+            "rows": JSONValue(total),
+        ]).toString() ~ "\n");
+        logInfo("Import %s done: %d event(s)", session.tag, total);
+        if (total > 0)
+            server.resetEvents();
+    }
+
+    void sendImportError(long importId, string message)
+    {
+        JSONValue resp = JSONValue([
+            "type": JSONValue("import_error"),
+            "message": JSONValue(message),
+        ]);
+        if (importId)
+            resp["import_id"] = JSONValue(importId);
+        sendLine(resp.toString() ~ "\n");
+        logWarn("Import: %s", message);
+    }
+
     void handleGetStats()
     {
         DatabaseStats stats = server.store.getStats();
@@ -3341,6 +3619,26 @@ private string vrchatError(HTTPResponse resp)
     return fallback;
 }
 
+private string stringField(ref JSONValue msg, string key)
+{
+    if (const(JSONValue)* v = key in msg)
+        if (v.type == JSONType.string)
+            return v.str;
+    return null;
+}
+
+/// Spans as `[from, to]` pairs, `from` null for the beginning of time.
+private JSONValue rangesJSON(TimeRange[] ranges)
+{
+    JSONValue[] list;
+    foreach (ref TimeRange r; ranges)
+        list ~= JSONValue([
+            r.from.length ? JSONValue(r.from) : JSONValue(null),
+            JSONValue(r.to),
+        ]);
+    return JSONValue(list);
+}
+
 /// The line telling a front-end its event IDs are from another history.
 private string buildEventsReset(long epoch)
 {
@@ -3356,8 +3654,135 @@ JSONValue buildEventMessage(VRCEvent event, long eventId)
     return JSONValue([
         "type": JSONValue("event"),
         "id": JSONValue(eventId),
-        "received_at": JSONValue(event.receivedAt.toUTC().toISOExtString()),
+        "received_at": JSONValue(toISO(event.receivedAt)),
         "event_type": JSONValue(event.typeRaw),
         "content": event.content,
     ]);
+}
+
+// An import end to end over the protocol: the plan leaves out what vrcd
+// recorded, events outside it or of no known type are turned away, the finished
+// import's span is not offered again, and an abandoned one leaves nothing.
+unittest
+{
+    import std.file : remove, tempDir;
+    import std.path : buildPath;
+    import std.string : splitLines;
+    import server.userimage : UserImage;
+
+    static class CaptureStream : Stream
+    {
+        string sent;
+        override ptrdiff_t receive(void[] buf) { return 0; }
+        override ptrdiff_t send(const(void)[] data)
+        {
+            sent ~= cast(const(char)[]) data;
+            return data.length;
+        }
+        override void shutdown() {}
+        override void close() {}
+
+        JSONValue[] take()
+        {
+            JSONValue[] lines;
+            foreach (string line; sent.splitLines())
+                lines ~= parseJSON(line);
+            sent = null;
+            return lines;
+        }
+    }
+
+    static void scrub(string file)
+    {
+        import std.file : exists;
+
+        foreach (string suffix; [ "", "-wal", "-shm" ])
+            if (exists(file ~ suffix))
+                remove(file ~ suffix);
+    }
+
+    string path = buildPath(tempDir(), "vrcd-import-test.db");
+    scrub(path);
+    scope(exit) scrub(path);
+
+    Database store = new Database(path);
+    scope(exit) store.close();
+    store.logConnection("connected");
+
+    APIServer server = new APIServer("127.0.0.1", 0, null, store);
+    server.friendsTracker.setSelf("usr_me", "me", null, null, null, null, null, null, UserImage.init);
+
+    CaptureStream stream = new CaptureStream();
+    ClientHandler client = new ClientHandler(stream, server, true);
+    client.authenticated = true;
+    server.clients ~= client;
+
+    JSONValue[] send(string line)
+    {
+        client.processMessage(line);
+        return stream.take();
+    }
+
+    // Another account, and an unknown source.
+    assert(send(`{"type":"import_begin","source":"vrcx","account":"usr_other"}`)[0]["type"].str == "import_error");
+    assert(send(`{"type":"import_begin","source":"nope","account":"usr_me"}`)[0]["type"].str == "import_error");
+
+    JSONValue plan = send(`{"type":"import_begin","source":"vrcx","account":"usr_me"}`)[0];
+    assert(plan["type"].str == "import_plan");
+    long id = plan["import_id"].integer;
+    // Recording since just now: one span, from the beginning of time.
+    assert(plan["accept"].array.length == 1);
+    assert(plan["accept"][0][0].type == JSONType.null_);
+    assert(plan["recorded"].array.length == 1);
+
+    // Only one import at a time.
+    assert(send(`{"type":"import_begin","source":"vrcx","account":"usr_me"}`)[0]["type"].str == "import_error");
+
+    string batch = `{"type":"import_events","import_id":` ~ id.to!string ~ `,"events":[` ~
+        `{"received_at":"2026-01-01T10:00:00.000Z","event_type":"friend-online","content":{"userId":"usr_a"}},` ~
+        `{"received_at":"2026-01-01T11:00:00Z","event_type":"friend-offline","content":{"userId":"usr_a"}},` ~
+        `{"received_at":"2026-01-01T12:00:00.000Z","event_type":"made-up","content":{}},` ~
+        `{"received_at":"2026-01-01T12:00:00.000Z","event_type":"friend-traveling","content":{}},` ~
+        `{"received_at":"` ~ plan["accept"][0][1].str ~ `","event_type":"friend-online","content":{}},` ~
+        `{"received_at":"whenever","event_type":"friend-online","content":{}}` ~
+        `]}`;
+    JSONValue ack = send(batch)[0];
+    assert(ack["type"].str == "import_ack");
+    assert(ack["accepted"].integer == 2);
+    assert(ack["rejected"].integer == 4);
+
+    long epoch = store.eventsEpoch();
+    JSONValue[] done = send(`{"type":"import_done_typo","import_id":1}`);
+    assert(done[0]["type"].str == "error");
+    done = send(`{"type":"import_end","import_id":` ~ id.to!string ~ `}`);
+    assert(done[0]["type"].str == "import_done");
+    assert(done[0]["rows"].integer == 2);
+    // The epoch moved; this client is authenticated, so it was told too.
+    assert(store.eventsEpoch() == epoch + 1);
+    assert(done[1]["type"].str == "events_reset");
+
+    // History is served in time order, content as sent.
+    string[] types;
+    foreach (row; store.queryEventsAfterTail(0, 10))
+        types ~= row[2];
+    assert(types == [ "friend-online", "friend-offline" ]);
+
+    // The imported span is not offered again; either side of it still is.
+    plan = send(`{"type":"import_begin","source":"vrcx","account":"usr_me"}`)[0];
+    id = plan["import_id"].integer;
+    assert(plan["imported"].array.length == 1);
+    assert(plan["imported"][0][0].str == "2026-01-01T10:00:00.000Z");
+    assert(plan["imported"][0][1].str == "2026-01-01T11:00:00.001Z");
+    assert(plan["accept"].array.length == 2);
+    assert(plan["accept"][0][1].str == "2026-01-01T10:00:00.000Z");
+    assert(plan["accept"][1][0].str == "2026-01-01T11:00:00.001Z");
+
+    // Abandoned by its client: what it stored goes with it.
+    ack = send(`{"type":"import_events","import_id":` ~ id.to!string ~ `,"events":[` ~
+        `{"received_at":"2025-06-01T00:00:00.000Z","event_type":"friend-online","content":{}}]}`)[0];
+    assert(ack["accepted"].integer == 1);
+    assert(store.getStats().eventCount == 3);
+    server.abortImportOf(client);
+    assert(store.getStats().eventCount == 2);
+    assert(server.activeImport is null);
 }

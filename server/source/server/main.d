@@ -197,6 +197,7 @@ void cmdRun(ref Config config)
         // and provide credentials/2FA codes if needed.
         delegator = new AuthDelegator();
         apiServer = new APIServer(config.listenAddr, config.listenPort, config.apiSecret, store, config.reseedInterval);
+        apiServer.setPruneRetain(config.pruneRetain);
         apiServer.setAuthDelegator(delegator);
         wireTransport(apiServer);
         if (tlsCtx)
@@ -237,6 +238,7 @@ void cmdRun(ref Config config)
     {
         // Interactive mode: start API server after auth.
         apiServer = new APIServer(config.listenAddr, config.listenPort, config.apiSecret, store, config.reseedInterval);
+        apiServer.setPruneRetain(config.pruneRetain);
         wireTransport(apiServer);
         if (tlsCtx)
             apiServer.setTLS(tlsCtx, config.tlsPort, config.tlsOnly);

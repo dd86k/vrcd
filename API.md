@@ -57,6 +57,7 @@ Protocol versions:
 - `10` = server-side notification inbox (`notifications` re-broadcast on change, `get_notifications` answered from it)
 - `11` = filtered inventory listings (`get_inventory` takes `types`, `not_types` and `not_flags`; `inventory` echoes them)
 - `12` = events ordered by time (`catch_up` takes an `epoch`, `caught_up` carries it, `events_reset` when history was rewritten)
+- `13` = imports (`import_begin`, `import_events`, `import_end`, `import_abort`)
 
 **Failure:**
 ```json
@@ -421,6 +422,38 @@ Answer to an `auth_request`. The first answer to arrive wins; the server does no
 | `password`  | string | Credentials only                                         |
 | `code`      | string | Two-factor only. The 2FA code                            |
 | `cancelled` | bool   | Optional. `true` refuses the prompt; other fields ignored |
+
+### Imports: `import_begin`, `import_events`, `import_end`, `import_abort`
+
+History from another tool (only VRCX so far) stored into the event log. The client reads the other tool's data and converts it; the server decides what fits. What fits is the time vrcd was not recording itself: its own log is authoritative where it exists, so an import only fills the periods before vrcd ran and the gaps while it was disconnected (per the connection log, widened by a minute at each edge), minus what earlier imports covered, back to where `prune_retain` would cut history off. One import runs at a time, server-wide.
+
+1. `import_begin` names the source and the VRChat account the data belongs to, and is refused unless that is the account the server is signed in as. The reply is `import_plan`: the spans the import may fill, and what was left out and why, so a client can say so before sending anything.
+2. `import_events` carries one batch; `import_ack` answers it. Send the next batch after the ack. Events outside the accepted spans, of an unknown or ephemeral type, or malformed, are counted as rejected rather than stored.
+3. `import_end` finishes it: what each span covered (its first to its last event, not the whole span, so a newer copy of the same data can fill in past where this one ended) is recorded, and if anything was stored the epoch moves and every client gets `events_reset`. `import_abort` deletes what the import stored instead. So does the client disconnecting, and so does the server restarting in the middle of one.
+
+| Field        | Type   | Description |
+|--------------|--------|-------------|
+| `type`       | string | `"import_begin"` |
+| `source`     | string | `"vrcx"` |
+| `account`    | string | VRChat user ID the data belongs to |
+
+| Field        | Type   | Description |
+|--------------|--------|-------------|
+| `type`       | string | `"import_events"` |
+| `import_id`  | long   | From `import_plan` |
+| `events`     | array  | Up to 5000 of `{received_at, event_type, content}`: an ISO 8601 time (normalised to the stored format), a type from [VRChat Event Types](#vrchat-event-types), and the content object as an `event` would carry it |
+
+`import_end` and `import_abort` carry only `type` and `import_id`.
+
+Replies:
+
+| Message          | Fields |
+|------------------|--------|
+| `import_plan`    | `import_id`; `accept`, `recorded`, `imported`: lists of `[from, to)` pairs in the stored timestamp format, `from` null for the beginning of time. `accept` is what may be sent; `recorded` is where vrcd was recording (with its margin); `imported` is what earlier imports covered |
+| `import_ack`     | `import_id`, `accepted`, `rejected` |
+| `import_done`    | `import_id`, `rows`: events stored over the whole import |
+| `import_aborted` | `import_id` |
+| `import_error`   | `message`, and `import_id` when there is one. Nothing changed |
 
 ### `pong`
 
@@ -1032,13 +1065,26 @@ Events are stored in SQLite with WAL mode:
 ```sql
 CREATE TABLE ws_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  received_at TEXT NOT NULL,
+  received_at TEXT NOT NULL,   -- YYYY-MM-DDTHH:MM:SS.sssZ
   event_type TEXT NOT NULL,
-  content_json TEXT,
-  raw_json TEXT
+  source TEXT,                 -- "raw", "synthetic", or "<import source>:<import id>"
+  data TEXT
 );
 
 CREATE INDEX idx_ws_events_type ON ws_events (event_type);
+CREATE INDEX idx_ws_events_time ON ws_events (received_at, id);
+CREATE INDEX idx_ws_events_source ON ws_events (source);
+
+-- One row per span an import covered.
+CREATE TABLE import_log (
+  import_id INTEGER NOT NULL,
+  source TEXT NOT NULL,
+  account TEXT,
+  range_from TEXT NOT NULL,
+  range_to TEXT NOT NULL,
+  rows INTEGER NOT NULL,
+  imported_at TEXT NOT NULL
+);
 ```
 
 ## Configuration

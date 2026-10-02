@@ -11,6 +11,7 @@ import std.datetime.systime : SysTime;
 import std.datetime.timezone : UTC;
 import std.format : format;
 import std.random : uniform;
+import std.string : lastIndexOf;
 
 import ddlogger;
 import arsd.sqlite;
@@ -75,6 +76,29 @@ struct CachedWorld
     long addedAt;
 }
 
+/// A half-open span of time, `[from, to)`, in the stored timestamp format.
+/// An empty `from` is the beginning of time.
+struct TimeRange
+{
+    string from;
+    string to;
+}
+
+/// One `ws_connection_log` row.
+struct ConnectionMark
+{
+    string at;
+    bool connected;
+}
+
+/// One event handed over by an import, already validated.
+struct ImportedEvent
+{
+    string receivedAt;
+    string eventType;
+    string data;
+}
+
 // Returns "raw" or "synthetic".
 //
 // raw events are events directly coming from the server (ie, VRChat).
@@ -96,6 +120,10 @@ class Database
 {
     private Sqlite db;
     private string dbFilePath;
+    // One connection serves every thread, so an insert and its
+    // last_insert_rowid() are only a pair under this, and an import batch's
+    // transaction only holds the batch.
+    private Object writeLock;
 
     this(string dbPath)
     {
@@ -104,6 +132,7 @@ class Database
             mkdirRecurse(dir);
 
         dbFilePath = dbPath;
+        writeLock = new Object();
         db = new Sqlite(dbPath);
 
         // Enable WAL for concurrent read/write.
@@ -113,6 +142,7 @@ class Database
         foreach (_; db.query("PRAGMA journal_mode=WAL")) {}
 
         initSchema();
+        recoverPendingImport();
     }
 
     /// Path of the SQLite file backing this database.
@@ -127,20 +157,22 @@ class Database
         logTrace("storeEvent: type=%s contentLen=%d rawLen=%d",
             event.typeRaw, event.content.toString().length, event.rawJson.length);
 
-        foreach (_; db.query(
-            "INSERT INTO ws_events (received_at, event_type, source, data) VALUES (?, ?, ?, ?)",
-            toISO(event.receivedAt),
-            event.typeRaw,
-            eventSource(event.type),
-            event.rawJson,
-        )) {}
-
-        // Get last insert rowid.
-        foreach (row; db.query("SELECT last_insert_rowid()"))
+        synchronized (writeLock)
         {
-            long id = row[0].to!long;
-            logDebugging("storeEvent: assigned id=%d type=%s", id, event.typeRaw);
-            return id;
+            foreach (_; db.query(
+                "INSERT INTO ws_events (received_at, event_type, source, data) VALUES (?, ?, ?, ?)",
+                toISO(event.receivedAt),
+                event.typeRaw,
+                eventSource(event.type),
+                event.rawJson,
+            )) {}
+
+            foreach (row; db.query("SELECT last_insert_rowid()"))
+            {
+                long id = row[0].to!long;
+                logDebugging("storeEvent: assigned id=%d type=%s", id, event.typeRaw);
+                return id;
+            }
         }
 
         return -1;
@@ -233,6 +265,7 @@ class Database
     void logConnection(string eventType)
     {
         logDebugging("logConnection: %s", eventType);
+        synchronized (writeLock)
         foreach (_; db.query(
             "INSERT INTO ws_connection_log (timestamp, event) VALUES (" ~ SQL_NOW ~ ", ?)",
             eventType,
@@ -344,6 +377,7 @@ class Database
         if (world.id.length == 0)
             return;
 
+        synchronized (writeLock)
         foreach (_; db.query(
             "INSERT INTO cache_world (id, added_at, author_id, author_name, created_at, " ~
             "description, image_url, name, release_status, thumbnail_image_url, " ~
@@ -388,6 +422,7 @@ class Database
     /// A null or empty value is still stored as such.
     void setState(string key, string value)
     {
+        synchronized (writeLock)
         foreach (_; db.query(
             "INSERT INTO server_state (key, value) VALUES (?, ?) " ~
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -433,6 +468,142 @@ class Database
         return epoch;
     }
 
+    /// The connection log, oldest first.
+    ConnectionMark[] connectionLog()
+    {
+        ConnectionMark[] marks;
+        foreach (row; db.query("SELECT timestamp, event FROM ws_connection_log ORDER BY timestamp, id"))
+            marks ~= ConnectionMark(row[0], row[1] == "connected");
+        return marks;
+    }
+
+    /// Time of the last event vrcd recorded itself in `[from, to)`, or null.
+    /// An empty `to` is open-ended.
+    string lastLiveEventIn(string from, string to)
+    {
+        foreach (row; db.query(
+            "SELECT MAX(received_at) FROM ws_events WHERE received_at >= ? AND received_at < ? " ~
+            "AND source IN ('raw', 'synthetic')",
+            from,
+            to.length ? to : "~",
+        ))
+            return row[0];
+        return null;
+    }
+
+    /// Spans earlier imports covered.
+    TimeRange[] importedRanges()
+    {
+        TimeRange[] ranges;
+        foreach (row; db.query("SELECT range_from, range_to FROM import_log ORDER BY range_from"))
+            ranges ~= TimeRange(row[0], row[1]);
+        return ranges;
+    }
+
+    /// The instant `modifier` (a SQLite one, as `prune_retain` holds) from now.
+    string timeFromNow(string modifier)
+    {
+        foreach (row; db.query("SELECT " ~ SQL_NOW_OFFSET, modifier))
+            return row[0];
+        return null;
+    }
+
+    /// Reserve an import ID, and mark `source:<id>` as in progress so that a
+    /// crash leaves nothing half-imported behind. Returns the tag its events
+    /// are stored under.
+    string beginImport(string source, out long importId)
+    {
+        string seq = getState("import_seq");
+        importId = (seq.length ? seq.to!long : 0) + 1;
+        setState("import_seq", importId.to!string);
+        string tag = source ~ ":" ~ importId.to!string;
+        setState("import_pending", tag);
+        return tag;
+    }
+
+    /// Store one batch of an import in one transaction.
+    void storeImported(string tag, ImportedEvent[] events)
+    {
+        synchronized (writeLock)
+        {
+            db.exec("BEGIN");
+            scope(failure) db.exec("ROLLBACK");
+            foreach (ref ImportedEvent ev; events)
+                foreach (_; db.query(
+                    "INSERT INTO ws_events (received_at, event_type, source, data) VALUES (?, ?, ?, ?)",
+                    ev.receivedAt,
+                    ev.eventType,
+                    tag,
+                    ev.data,
+                )) {}
+            db.exec("COMMIT");
+        }
+    }
+
+    /// Record a completed import's spans; it is no longer in progress.
+    void finishImport(long importId, string source, string account,
+        TimeRange[] spans, long[] rows)
+    {
+        synchronized (writeLock)
+        {
+            db.exec("BEGIN");
+            scope(failure) db.exec("ROLLBACK");
+            foreach (size_t i, ref TimeRange span; spans)
+                foreach (_; db.query(
+                    "INSERT INTO import_log (import_id, source, account, range_from, range_to, " ~
+                    "rows, imported_at) VALUES (?, ?, ?, ?, ?, ?, " ~ SQL_NOW ~ ")",
+                    importId.to!string,
+                    source,
+                    account,
+                    span.from,
+                    span.to,
+                    rows[i].to!string,
+                )) {}
+            deleteState("import_pending");
+            db.exec("COMMIT");
+        }
+    }
+
+    /// Delete an import's events and its `import_log` rows. Chunked, so the
+    /// journal holds a chunk rather than the whole import. Returns the number
+    /// of events deleted.
+    long deleteImport(string tag)
+    {
+        enum int CHUNK = 5000;
+        long total;
+        while (true)
+        {
+            long deleted;
+            synchronized (writeLock)
+            {
+                foreach (_; db.query(
+                    "DELETE FROM ws_events WHERE id IN " ~
+                    "(SELECT id FROM ws_events WHERE source = ? LIMIT ?)",
+                    tag,
+                    CHUNK.to!string,
+                )) {}
+                foreach (row; db.query("SELECT changes()"))
+                    deleted = row[0].to!long;
+            }
+            total += deleted;
+            if (deleted < CHUNK)
+                break;
+        }
+
+        ptrdiff_t colon = tag.lastIndexOf(':');
+        if (colon > 0)
+            foreach (_; db.query(
+                "DELETE FROM import_log WHERE source = ? AND import_id = ?",
+                tag[0 .. colon],
+                tag[colon + 1 .. $],
+            )) {}
+        if (getState("import_pending") == tag)
+            deleteState("import_pending");
+
+        logInfo("Deleted %d imported event(s) from %s", total, tag);
+        return total;
+    }
+
     /// Close the database.
     void close()
     {
@@ -441,6 +612,18 @@ class Database
     }
 
 private:
+    // An import the server went down in the middle of. What it stored is
+    // part of no recorded span, so it would never be replaced, only doubled.
+    void recoverPendingImport()
+    {
+        string tag = getState("import_pending");
+        if (tag.length == 0)
+            return;
+        logWarn("Removing unfinished import %s", tag);
+        if (deleteImport(tag) > 0)
+            bumpEventsEpoch();
+    }
+
     void initSchema()
     {
         logInfo("Initializing database schema...");
@@ -559,12 +742,28 @@ private:
         }
 
         db.exec("CREATE INDEX IF NOT EXISTS idx_ws_events_time ON ws_events (received_at, id)");
+        // For deleting one import's events.
+        db.exec("CREATE INDEX IF NOT EXISTS idx_ws_events_source ON ws_events (source)");
+
+        // One row per span an import covered. Coverage is not derivable from
+        // the events: a span the source had nothing in has no events.
+        db.exec(
+            "CREATE TABLE IF NOT EXISTS import_log (" ~
+            "  import_id INTEGER NOT NULL," ~
+            "  source TEXT NOT NULL," ~
+            "  account TEXT," ~
+            "  range_from TEXT NOT NULL," ~
+            "  range_to TEXT NOT NULL," ~
+            "  rows INTEGER NOT NULL," ~
+            "  imported_at TEXT NOT NULL" ~
+            ")"
+        );
 
         logInfo("Database schema ready");
     }
 }
 
-private string toISO(SysTime t)
+package string toISO(SysTime t)
 {
     SysTime u = t.toUTC();
     return format!"%04d-%02d-%02dT%02d:%02d:%02d.%03dZ"(
@@ -822,4 +1021,55 @@ unittest
     db.cacheWorld(world);
     assert(db.getCachedWorld("wrld_test").name == world.name);
     assert(db.getStats().worldCacheCount == 1);
+}
+
+// An import the server went down in the middle of is gone after a restart,
+// and the epoch says so; a finished one stays.
+unittest
+{
+    import std.file : remove, tempDir;
+    import std.path : buildPath;
+
+    string path = buildPath(tempDir(), "vrcd-importrecover-test.db");
+
+    static void scrub(string file)
+    {
+        import std.file : exists;
+
+        foreach (string suffix; [ "", "-wal", "-shm" ])
+            if (exists(file ~ suffix))
+                remove(file ~ suffix);
+    }
+
+    scrub(path);
+    scope(exit) scrub(path);
+
+    ImportedEvent[] batch = [
+        ImportedEvent("2026-01-01T10:00:00.000Z", "friend-online", `{"type":"friend-online","content":{}}`),
+    ];
+
+    Database db = new Database(path);
+    long done;
+    string tag = db.beginImport("vrcx", done);
+    db.storeImported(tag, batch);
+    db.finishImport(done, "vrcx", "usr_me",
+        [ TimeRange("2026-01-01T10:00:00.000Z", "2026-01-01T10:00:00.001Z") ], [ 1 ]);
+
+    long pending;
+    db.storeImported(db.beginImport("vrcx", pending), batch ~ batch);
+    assert(pending == done + 1);
+    assert(db.getStats().eventCount == 3);
+    long epoch = db.eventsEpoch();
+    db.close();
+
+    db = new Database(path);
+    scope(exit) db.close();
+    assert(db.getStats().eventCount == 1);
+    assert(db.eventsEpoch() == epoch + 1);
+    assert(db.importedRanges().length == 1);
+    assert(db.getState("import_pending") is null);
+
+    // Undo of the finished one takes its span along.
+    assert(db.deleteImport(tag) == 1);
+    assert(db.importedRanges().length == 0);
 }

@@ -3,8 +3,10 @@
 Changelog file for vrcd with newest tags first.
 
 Rules:
-- Separated by component: Client, Server, Web
-- Keep things simple and easy to read, technical topics best left in source.
+- Separated by component: Client, Server, Web.
+- Keep things simple and easy to read, long technical topics best left in source.
+- Better to keep entries closest to the actual work done: "Server supports standard I/O"
+  is more true than "Client can start server" (37b843ed1d2d4bca6011a69dcb5e64fa581cf235).
 
 ## v0.3.0
 
