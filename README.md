@@ -173,7 +173,7 @@ See [API.md](./API.md) for server-client API details.
 ### Packaging
 
 ```bash
-./packaging/package-appimage.sh   # client AppImage (builds with -c static)
+./packaging/package-appimage.sh   # client AppImage, with the server (client builds with -c static)
 ./packaging/package-deb.sh all    # client and server .deb
 ./packaging/package-deb.sh --static server # Package server as static build
 ```
@@ -198,7 +198,8 @@ the working directory, which is wherever `dub` was invoked. Having run the fetch
 script once, a plain `dub build :server` from the root works too.
 
 The zips are self-contained: the client carries SDL3, SDL3_ttf and SDL3_image,
-and the server carries libcurl (`sqlite3` is linked in). libcurl comes from
+and the server carries libcurl (`sqlite3` is linked in). The client zip also
+carries the server and its libcurl, for "Use local server". libcurl comes from
 curl.se and is built against the Windows certificate store, so no CA bundle is
 shipped with it. The pipe helper is not in the client zip, because talking to
 VRChat's launch pipe is in-process on Windows.

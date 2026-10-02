@@ -148,3 +148,68 @@ modules:
         sha256: 07f2d4a7cbfa09efb040cd82316d3433d70786b59a70af5c6d999550bac624a8
         dest: .dub/packages/ddui/a70e43e45ceec730a34c5f49f6d3cdb43094b7ab/ddui
         strip-components: 1
+
+  ## vrcd server, for "Use local server": the client looks beside itself
+  # (/app/bin) first, and the sandbox cannot see a server installed on the host.
+  - name: vrcd-server
+    buildsystem: simple
+    build-options:
+      prepend-path: /app/ldc2/bin
+    build-commands:
+      # The GitHub archive's dub.json has no top-level version, and the textual
+      # replace patch_json does above would hit a dependency's "version": "*".
+      - perl -0777 -i -pe 's/\{/{\n  "version": "12.1.2",/' .dub/packages/arsd-official/12.1.2/arsd-official/dub.json
+
+      # Same git-to-path rewrite as the client, ddcurl's own included: every
+      # reference to ddlogger has to land on the one copy or dub sees two.
+      - sed -i 's|dependency "ddlogger" repository=.*|dependency "ddlogger" path="../.dub/packages/ddlogger/4397d8e57a88bd6b3a3e5e4c846ba97ac3bfd364/ddlogger"|' server/dub.sdl
+      - sed -i 's|dependency "ddcurl" repository=.*|dependency "ddcurl" path="../.dub/packages/ddcurl/14ce373e5a61ca98b6e6e8a7a8213abe7e888f8d/ddcurl"|' server/dub.sdl
+      - sed -i 's|dependency "ddlogger" repository=.*|dependency "ddlogger" path="../../../ddlogger/4397d8e57a88bd6b3a3e5e4c846ba97ac3bfd364/ddlogger"|' .dub/packages/ddcurl/14ce373e5a61ca98b6e6e8a7a8213abe7e888f8d/ddcurl/dub.sdl
+      - sed -i 's|dependency "ddloader" repository=.*|dependency "ddloader" path="../../../ddloader/c3eb54d31a17e63a7722f8449033ce13764b7636/ddloader"|' .dub/packages/ddcurl/14ce373e5a61ca98b6e6e8a7a8213abe7e888f8d/ddcurl/dub.sdl
+      # Kept rather than emptied: the server string-imports it for --version.
+      - |
+        cat > server/dub.selections.json <<'EOF'
+        {
+          "fileVersion": 1,
+          "versions": {
+            "arsd-official": "12.1.2"
+          }
+        }
+        EOF
+
+      # -c static links libcurl at build time instead of dlopening it: the
+      # Platform ships libcurl.so.4 but not necessarily any of the file names
+      # ddcurl's loader tries. Both libcurl and sqlite come from the runtime.
+      - dub build :server -c static --skip-registry=all --cache=local -b release --compiler=ldc2
+
+      - install -Dm755 server/vrcd_server /app/bin/vrcd_server
+    sources:
+      - type: git
+        url: https://github.com/dd86k/vrcd.git
+        tag: v0.3.0
+
+      - type: archive
+        url: https://codeload.github.com/adamdruppe/arsd/tar.gz/refs/tags/v12.1.2
+        sha256: 7b34e7f43edd9baf4ed828e2d102052422babaa7dd95c7c3d4f9766eb67671be
+        dest-filename: arsd-12.1.2.tar.gz
+        dest: .dub/packages/arsd-official/12.1.2/arsd-official
+        strip-components: 1
+
+      # Pinned to the exact commits in server/dub.selections.json.
+      - type: archive
+        url: https://github.com/dd86k/ddlogger/archive/4397d8e57a88bd6b3a3e5e4c846ba97ac3bfd364.tar.gz
+        sha256: a0e6cb463102d30080b789fecc851584ef4485a803237e8da72458615c6212df
+        dest: .dub/packages/ddlogger/4397d8e57a88bd6b3a3e5e4c846ba97ac3bfd364/ddlogger
+        strip-components: 1
+
+      - type: archive
+        url: https://github.com/dd86k/ddcurl/archive/14ce373e5a61ca98b6e6e8a7a8213abe7e888f8d.tar.gz
+        sha256: 109d639b04b13364536882ad53b2100a130c03e77e551af35fc8398433c20878
+        dest: .dub/packages/ddcurl/14ce373e5a61ca98b6e6e8a7a8213abe7e888f8d/ddcurl
+        strip-components: 1
+
+      - type: archive
+        url: https://github.com/dd86k/ddloader/archive/c3eb54d31a17e63a7722f8449033ce13764b7636.tar.gz
+        sha256: b0e76aa4553d1b4f20cba90bb4bfe7fbe105428d51698347b2e911d93f9cb171
+        dest: .dub/packages/ddloader/c3eb54d31a17e63a7722f8449033ce13764b7636/ddloader
+        strip-components: 1

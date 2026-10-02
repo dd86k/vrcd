@@ -14,6 +14,7 @@ Rules:
 
 - Now uses SDL3.
 - Can run its own server, so setting one up separately is optional.
+- Windows zip, AppImage and Flatpak now carry the server for this.
 - Save multiple server connections and switch between them.
 - New PROFILE tab, and profiles can be opened for anyone, friend or not.
 - Stickers and emoji are split between your uploads and the exclusive ones

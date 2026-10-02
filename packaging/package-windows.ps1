@@ -10,6 +10,9 @@
         vrcd-client-<version>-windows-x86_64.zip
         vrcd-server-<version>-windows-x86_64.zip
 
+    The client zip carries the server too, since "Use local server" looks for
+    vrcd_server.exe beside the client. The server zip is for headless hosts.
+
     Both are built under the default configuration, which loads SDL3 and
     libcurl at run time rather than linking them. sqlite3 is the exception: it
     is linked into the server, so nothing has to sit beside it.
@@ -99,7 +102,8 @@ function New-Package
         [Parameter(Mandatory)] [string]   $Component,
         [Parameter(Mandatory)] [string]   $Executable,
         [Parameter(Mandatory)] [string[]] $Libraries,
-        [string[]] $Licenses = @()
+        [string[]] $Licenses = @(),
+        [string[]] $Extras = @()
     )
 
     $binary = Join-Path $RootDir "$Component\$Executable"
@@ -121,6 +125,15 @@ function New-Package
     New-Item -ItemType Directory -Path $stage | Out-Null
 
     Copy-Item -Path $binary -Destination $stage
+    foreach ($extra in $Extras)
+    {
+        $path = Join-Path $RootDir $extra
+        if (-not (Test-Path $path))
+        {
+            throw "expected binary not found: $path"
+        }
+        Copy-Item -Path $path -Destination $stage
+    }
     foreach ($library in $Libraries)
     {
         $path = Join-Path $BinDir $library
@@ -156,6 +169,16 @@ function New-Package
     Write-Host "==> Done: $zip"
 }
 
+# Built for either target: the client zip carries it for "Use local server".
+# sqlite3.lib comes from fetch-deps-windows.ps1, which puts it in the repository
+# root rather than under deps\ because that is where the linker looks.
+if (-not (Test-Path (Join-Path $RootDir 'sqlite3.lib')))
+{
+    throw 'sqlite3.lib not found in the repository root - run packaging\fetch-deps-windows.ps1 first'
+}
+
+Invoke-Dub @('build', ':server', '--build=release')
+
 if ($Target -in @('client', 'all'))
 {
     Invoke-Dub @('build', ':client', '--build=release')
@@ -164,21 +187,13 @@ if ($Target -in @('client', 'all'))
     # Windows (client/dub.sdl compiles vrcpipe.d in); the separate executable
     # exists for the Linux client, which runs it inside the game's Proton prefix.
     New-Package -Component 'client' -Executable 'vrcd_client.exe' `
-        -Libraries @('SDL3.dll', 'SDL3_ttf.dll', 'SDL3_image.dll') `
-        -Licenses @('SDL3-LICENSE.txt', 'SDL3_ttf-LICENSE.txt', 'SDL3_image-LICENSE.txt')
+        -Extras @('server\vrcd_server.exe') `
+        -Libraries @('SDL3.dll', 'SDL3_ttf.dll', 'SDL3_image.dll', 'libcurl.dll') `
+        -Licenses @('SDL3-LICENSE.txt', 'SDL3_ttf-LICENSE.txt', 'SDL3_image-LICENSE.txt', 'curl-COPYING.txt')
 }
 
 if ($Target -in @('server', 'all'))
 {
-    # Built by fetch-deps-windows.ps1, which puts it here rather than under
-    # deps\ because the working directory is where the linker will look for it.
-    if (-not (Test-Path (Join-Path $RootDir 'sqlite3.lib')))
-    {
-        throw 'sqlite3.lib not found in the repository root - run packaging\fetch-deps-windows.ps1 first'
-    }
-
-    Invoke-Dub @('build', ':server', '--build=release')
-
     New-Package -Component 'server' -Executable 'vrcd_server.exe' `
         -Libraries @('libcurl.dll') `
         -Licenses @('curl-COPYING.txt')

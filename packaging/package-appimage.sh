@@ -1,5 +1,5 @@
 #!/bin/bash
-# package-appimage.sh: Build and package vrcd client as an AppImage
+# package-appimage.sh: Build and package vrcd client (with server) as an AppImage
 # Usage: [DC=COMPILER] ./package-appimage.sh [-c COMPILER]
 # Needs: appimagetool, linuxdeploy, and the SDL3 development libraries
 #        (libsdl3-dev, libsdl3-ttf-dev, libsdl3-image-dev)
@@ -8,6 +8,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION="$(cat "${SCRIPT_DIR}/VERSION")"
 BINARY="${SCRIPT_DIR}/client/vrcd_client"
+SERVER_BINARY="${SCRIPT_DIR}/server/vrcd_server"
 OUTPUT="${SCRIPT_DIR}/vrcd-client-${VERSION}-x86_64.AppImage"
 ICON="${SCRIPT_DIR}/res/vrcd-logo.png"
 # Windows build of the :pipehelper subpackage ("Open in VRChat" IPC on
@@ -65,10 +66,18 @@ fi
 #   apt install libsdl3-dev libsdl3-ttf-dev libsdl3-image-dev
 dub build :client -c static --build=release "${DUB_COMPILER_ARG[@]}"
 
+# The server rides along for "Use local server", which looks beside the client
+# first. Default configuration, unlike the client: libcurl is dlopen'd from the
+# host, so TLS uses the host's own CA store rather than a bundled OpenSSL
+# looking for certificates where Ubuntu keeps them.
+echo "==> Building vrcd server (release)..."
+dub build :server --build=release "${DUB_COMPILER_ARG[@]}"
+
 echo "==> Creating AppDir in ${WORKDIR}..."
 mkdir -p "${APPDIR}/usr/bin"
 
 cp "${BINARY}" "${APPDIR}/usr/bin/vrcd_client"
+cp "${SERVER_BINARY}" "${APPDIR}/usr/bin/vrcd_server"
 
 # Bundle the pipe helper away from usr/bin, and let AppRun install it to
 # ~/.config/vrcd/ where the client's fallback lookup finds it: the AppImage
@@ -99,12 +108,13 @@ echo "==> Bundling libraries with linuxdeploy..."
 run_tool linuxdeploy \
     --appdir "${APPDIR}" \
     --executable "${APPDIR}/usr/bin/vrcd_client" \
+    --executable "${APPDIR}/usr/bin/vrcd_server" \
     --desktop-file "${APPDIR}/vrcd-client.desktop" \
     --icon-file "${APPDIR}/vrcd-client.png"
 
 # Fail loudly rather than shipping an AppImage that dies on a missing SDL3:
 # linuxdeploy reports a library it could not deploy as a warning and carries on.
-for lib in libSDL3 libSDL3_ttf libSDL3_image; do
+for lib in libSDL3 libSDL3_ttf libSDL3_image libsqlite3; do
     if ! compgen -G "${APPDIR}/usr/lib/${lib}.so*" >/dev/null; then
         echo "error: ${lib} was not bundled into the AppDir" >&2
         exit 1
