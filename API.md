@@ -57,7 +57,7 @@ Protocol versions:
 - `10` = server-side notification inbox (`notifications` re-broadcast on change, `get_notifications` answered from it)
 - `11` = filtered inventory listings (`get_inventory` takes `types`, `not_types` and `not_flags`; `inventory` echoes them)
 - `12` = events ordered by time (`catch_up` takes an `epoch`, `caught_up` carries it, `events_reset` when history was rewritten)
-- `13` = imports (`import_begin`, `import_events`, `import_end`, `import_abort`)
+- `13` = imports (`import_begin`, `import_events`, `import_end`, `import_abort`, `get_imports`, `import_undo`)
 
 **Failure:**
 ```json
@@ -423,7 +423,7 @@ Answer to an `auth_request`. The first answer to arrive wins; the server does no
 | `code`      | string | Two-factor only. The 2FA code                            |
 | `cancelled` | bool   | Optional. `true` refuses the prompt; other fields ignored |
 
-### Imports: `import_begin`, `import_events`, `import_end`, `import_abort`
+### Imports: `import_begin`, `import_events`, `import_end`, `import_abort`, `get_imports`, `import_undo`
 
 History from another tool (only VRCX so far) stored into the event log. The client reads the other tool's data and converts it; the server decides what fits. What fits is the time vrcd was not recording itself: its own log is authoritative where it exists, so an import only fills the periods before vrcd ran and the gaps while it was disconnected (per the connection log, widened by a minute at each edge), minus what earlier imports covered, back to where `prune_retain` would cut history off. One import runs at a time, server-wide.
 
@@ -445,6 +445,8 @@ History from another tool (only VRCX so far) stored into the event log. The clie
 
 `import_end` and `import_abort` carry only `type` and `import_id`.
 
+Finished imports are listed by `get_imports` (no fields) and undone by `import_undo` with an `import_id`. Undoing deletes the import's events and its coverage, so those spans are offered to the next import again, and moves the epoch like finishing one does. The space is handed back to the disk afterwards, not only to SQLite. An import that stored nothing is not listed: it left nothing to undo.
+
 Replies:
 
 | Message          | Fields |
@@ -453,6 +455,8 @@ Replies:
 | `import_ack`     | `import_id`, `accepted`, `rejected` |
 | `import_done`    | `import_id`, `rows`: events stored over the whole import |
 | `import_aborted` | `import_id` |
+| `imports`        | `imports`: list of `{import_id, source, account, from, to, rows, imported_at}`, oldest first. `from`/`to` are its earliest event and just past its latest |
+| `import_undone`  | `import_id`, `rows`: events deleted |
 | `import_error`   | `message`, and `import_id` when there is one. Nothing changed |
 
 ### `pong`
@@ -1060,7 +1064,7 @@ Before forwarding events to clients, the server enriches event content:
 
 ## Database Schema
 
-Events are stored in SQLite with WAL mode:
+Events are stored in SQLite with WAL mode and incremental auto-vacuum: an import can be most of the file, and undoing one should give that back without a full `VACUUM` rewriting everything else. An older database is switched over with one `VACUUM` at startup.
 
 ```sql
 CREATE TABLE ws_events (

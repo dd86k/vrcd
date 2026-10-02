@@ -49,7 +49,7 @@ import vrcd.notifications;
 /// `not_types` and `not_flags`; `inventory` echoes them),
 /// 12 = events ordered by time (`catch_up` takes an `epoch`, `caught_up`
 /// carries it, `events_reset` when history was rewritten),
-/// 13 = imports (`import_begin`, `import_events`, `import_end`, `import_abort`).
+/// 13 = imports (`import_begin`, `import_events`, `import_end`, `import_abort`, `get_imports`, `import_undo`).
 private enum int PROTOCOL_VERSION = 13;
 
 /// Shortest gap between two re-seed passes. A pass paginates the whole
@@ -1305,7 +1305,8 @@ private class ClientHandler
                     if (server.dapDelegator)
                         server.dapDelegator.cancel();
                     break;
-                case "import_begin", "import_events", "import_end", "import_abort":
+                case "import_begin", "import_events", "import_end", "import_abort",
+                    "get_imports", "import_undo":
                     if (authenticated == false)
                     {
                         sendError("Not authenticated");
@@ -2933,11 +2934,22 @@ private class ClientHandler
             handleImportBegin(msg);
             return;
         }
+        if (type == "get_imports")
+        {
+            handleGetImports();
+            return;
+        }
+
 
         long importId;
         if (const(JSONValue)* v = "import_id" in msg)
             if (v.type == JSONType.integer)
                 importId = v.integer;
+        if (type == "import_undo")
+        {
+            handleImportUndo(importId);
+            return;
+        }
         ImportSession session = server.activeImport;
         if (session is null || session.owner !is this || session.id != importId)
         {
@@ -3121,6 +3133,45 @@ private class ClientHandler
         ]).toString() ~ "\n");
         logInfo("Import %s done: %d event(s)", session.tag, total);
         if (total > 0)
+            server.resetEvents();
+    }
+
+    void handleGetImports()
+    {
+        JSONValue[] list;
+        foreach (ref ImportRecord rec; server.store.imports())
+            list ~= JSONValue([
+                "import_id": JSONValue(rec.id),
+                "source": JSONValue(rec.source),
+                "account": JSONValue(rec.account),
+                "from": JSONValue(rec.covered.from),
+                "to": JSONValue(rec.covered.to),
+                "rows": JSONValue(rec.rows),
+                "imported_at": JSONValue(rec.importedAt),
+            ]);
+        sendLine(JSONValue([
+            "type": JSONValue("imports"),
+            "imports": JSONValue(list),
+        ]).toString() ~ "
+");
+    }
+
+    void handleImportUndo(long importId)
+    {
+        long deleted = server.store.undoImport(importId);
+        if (deleted < 0)
+        {
+            sendImportError(importId, "No such import");
+            return;
+        }
+        sendLine(JSONValue([
+            "type": JSONValue("import_undone"),
+            "import_id": JSONValue(importId),
+            "rows": JSONValue(deleted),
+        ]).toString() ~ "
+");
+        logInfo("Import %d undone: %d event(s)", importId, deleted);
+        if (deleted > 0)
             server.resetEvents();
     }
 
@@ -3785,4 +3836,19 @@ unittest
     server.abortImportOf(client);
     assert(store.getStats().eventCount == 2);
     assert(server.activeImport is null);
+    stream.take();
+
+    // The finished one is listed, and can be undone once.
+    JSONValue[] listed = send(`{"type":"get_imports"}`)[0]["imports"].array;
+    assert(listed.length == 1);
+    assert(listed[0]["rows"].integer == 2);
+    assert(listed[0]["from"].str == "2026-01-01T10:00:00.000Z");
+    string undo = `{"type":"import_undo","import_id":` ~ listed[0]["import_id"].integer.to!string ~ `}`;
+    JSONValue[] undone = send(undo);
+    assert(undone[0]["type"].str == "import_undone");
+    assert(undone[0]["rows"].integer == 2);
+    assert(undone[1]["type"].str == "events_reset");
+    assert(store.getStats().eventCount == 0);
+    assert(send(`{"type":"get_imports"}`)[0]["imports"].array.length == 0);
+    assert(send(undo)[0]["type"].str == "import_error");
 }

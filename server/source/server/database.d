@@ -99,6 +99,18 @@ struct ImportedEvent
     string data;
 }
 
+/// One finished import, as `get_imports` lists it.
+struct ImportRecord
+{
+    long id;
+    string source;
+    string account;
+    /// Earliest and latest event it stored, as a span.
+    TimeRange covered;
+    long rows;
+    string importedAt;
+}
+
 // Returns "raw" or "synthetic".
 //
 // raw events are events directly coming from the server (ie, VRChat).
@@ -140,6 +152,7 @@ class Database
         //       Because PRAGMA returns a row and since result callback (onExec) is null,
         //       then the unreferenced function null pointer is called.
         foreach (_; db.query("PRAGMA journal_mode=WAL")) {}
+        enableIncrementalVacuum();
 
         initSchema();
         recoverPendingImport();
@@ -434,10 +447,11 @@ class Database
     /// Delete a key from the persistent key-value store.
     void deleteState(string key)
     {
-        foreach (_; db.query(
-            "DELETE FROM server_state WHERE key = ?",
-            key,
-        )) {}
+        synchronized (writeLock)
+            foreach (_; db.query(
+                "DELETE FROM server_state WHERE key = ?",
+                key,
+            )) {}
     }
 
     /// Which history the event IDs refer to. A front-end holding a cursor
@@ -592,16 +606,47 @@ class Database
 
         ptrdiff_t colon = tag.lastIndexOf(':');
         if (colon > 0)
-            foreach (_; db.query(
-                "DELETE FROM import_log WHERE source = ? AND import_id = ?",
-                tag[0 .. colon],
-                tag[colon + 1 .. $],
-            )) {}
+            synchronized (writeLock)
+                foreach (_; db.query(
+                    "DELETE FROM import_log WHERE source = ? AND import_id = ?",
+                    tag[0 .. colon],
+                    tag[colon + 1 .. $],
+                )) {}
         if (getState("import_pending") == tag)
             deleteState("import_pending");
 
+        if (total > 0)
+            reclaimFreePages();
+
         logInfo("Deleted %d imported event(s) from %s", total, tag);
         return total;
+    }
+
+    /// Finished imports, oldest first.
+    ImportRecord[] imports()
+    {
+        ImportRecord[] list;
+        foreach (row; db.query(
+            "SELECT import_id, source, account, MIN(range_from), MAX(range_to), SUM(rows), " ~
+            "MAX(imported_at) FROM import_log GROUP BY import_id ORDER BY import_id"))
+            list ~= ImportRecord(row[0].to!long, row[1], row[2],
+                TimeRange(row[3], row[4]), row[5].to!long, row[6]);
+        return list;
+    }
+
+    /// Undo a finished import. Returns the number of events deleted, or -1
+    /// when there is no such import.
+    long undoImport(long importId)
+    {
+        string source;
+        foreach (row; db.query(
+            "SELECT source FROM import_log WHERE import_id = ? LIMIT 1",
+            importId.to!string,
+        ))
+            source = row[0];
+        if (source.length == 0)
+            return -1;
+        return deleteImport(source ~ ":" ~ importId.to!string);
     }
 
     /// Close the database.
@@ -622,6 +667,46 @@ private:
         logWarn("Removing unfinished import %s", tag);
         if (deleteImport(tag) > 0)
             bumpEventsEpoch();
+    }
+
+    // Deleting rows frees pages inside the file, not on disk, and a full
+    // VACUUM of a database an import doubled would rewrite all of it.
+    // Incremental mode gives the pages back on demand; switching an existing
+    // file over takes that full VACUUM, once.
+    void enableIncrementalVacuum()
+    {
+        long mode;
+        foreach (row; db.query("PRAGMA auto_vacuum"))
+            mode = row[0].to!long;
+        if (mode == 2)
+            return;
+        logInfo("Enabling incremental vacuum (one-time, rewrites the database)...");
+        foreach (_; db.query("PRAGMA auto_vacuum = INCREMENTAL")) {}
+        db.exec("VACUUM");
+    }
+
+    // In chunks, so the WebSocket thread's inserts get the lock in between.
+    void reclaimFreePages()
+    {
+        enum string STEP = "PRAGMA incremental_vacuum(4096)";
+        long before = long.max;
+        while (true)
+        {
+            long free;
+            synchronized (writeLock)
+            {
+                foreach (_; db.query(STEP)) {}
+                foreach (row; db.query("PRAGMA freelist_count"))
+                    free = row[0].to!long;
+            }
+            // Not shrinking: the file is not in incremental mode.
+            if (free == 0 || free >= before)
+                break;
+            before = free;
+        }
+        // The deletes went through the WAL, which otherwise keeps its size.
+        synchronized (writeLock)
+            foreach (_; db.query("PRAGMA wal_checkpoint(TRUNCATE)")) {}
     }
 
     void initSchema()
@@ -1072,4 +1157,71 @@ unittest
     // Undo of the finished one takes its span along.
     assert(db.deleteImport(tag) == 1);
     assert(db.importedRanges().length == 0);
+}
+
+// Undo gives the space back to the disk, and an old file is switched over to
+// make that possible.
+unittest
+{
+    import std.array : replicate;
+    import std.file : remove, tempDir;
+    import std.path : buildPath;
+
+    string path = buildPath(tempDir(), "vrcd-importundo-test.db");
+
+    static void scrub(string file)
+    {
+        import std.file : exists;
+
+        foreach (string suffix; [ "", "-wal", "-shm" ])
+            if (exists(file ~ suffix))
+                remove(file ~ suffix);
+    }
+
+    static long pragma_(Sqlite db, string name)
+    {
+        foreach (row; db.query("PRAGMA " ~ name))
+            return row[0].to!long;
+        return -1;
+    }
+
+    // Made before incremental vacuum was a thing.
+    scrub(path);
+    scope(exit) scrub(path);
+    Sqlite legacy = new Sqlite(path);
+    legacy.exec("CREATE TABLE ws_events (id INTEGER PRIMARY KEY AUTOINCREMENT, " ~
+        "received_at TEXT NOT NULL, event_type TEXT NOT NULL, source TEXT, data TEXT)");
+    assert(pragma_(legacy, "auto_vacuum") == 0);
+    legacy = null;
+
+    Database db = new Database(path);
+    scope(exit) db.close();
+    assert(pragma_(db.db, "auto_vacuum") == 2);
+
+    string data = `{"type":"friend-online","content":{"pad":"` ~ "x".replicate(1000) ~ `"}}`;
+    ImportedEvent[] batch;
+    foreach (int i; 0 .. 3000)
+        batch ~= ImportedEvent(format!"2026-01-01T10:%02d:%02d.000Z"(i / 60 % 60, i % 60),
+            "friend-online", data);
+
+    long id;
+    string tag = db.beginImport("vrcx", id);
+    db.storeImported(tag, batch);
+    db.finishImport(id, "vrcx", "usr_me", [
+        TimeRange("2026-01-01T10:00:00.000Z", "2026-01-01T10:30:00.000Z"),
+        TimeRange("2026-01-01T10:30:00.000Z", "2026-01-01T11:00:00.000Z"),
+    ], [ 1800, 1200 ]);
+
+    ImportRecord[] list = db.imports();
+    assert(list.length == 1);
+    assert(list[0].id == id && list[0].source == "vrcx" && list[0].account == "usr_me");
+    assert(list[0].covered == TimeRange("2026-01-01T10:00:00.000Z", "2026-01-01T11:00:00.000Z"));
+    assert(list[0].rows == 3000);
+
+    long pages = pragma_(db.db, "page_count");
+    assert(db.undoImport(id + 1) == -1);
+    assert(db.undoImport(id) == 3000);
+    assert(db.imports().length == 0);
+    assert(pragma_(db.db, "freelist_count") == 0);
+    assert(pragma_(db.db, "page_count") < pages / 10);
 }
