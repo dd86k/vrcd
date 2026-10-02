@@ -22,6 +22,7 @@ Client features:
 - Strip VRChat and other metadata from VRChat photos.
 - VR overlay notifications (XSOverlay/WayVR, OVR Toolkit) and desktop notifications.
 - [Drop a Portal](https://dropaport.al/) integration.
+- Working "Show in VRChat" button in Linux.
 
 Server features:
 - Record incoming VRChat events.
@@ -31,6 +32,24 @@ Feel free to join the official [VRCD VRChat group](https://vrc.group/VRCD.7796) 
 
 Related projects:
 - [vrcd-server-container](https://github.com/ArcaneDisgea/vrcd-server-container) by ArcaneDisgea.
+
+## Roadmap
+
+May change at any time. Created near end of 0.3.
+
+0.3:
+- [ ] Import from VRCX
+
+0.4:
+- [ ] Reply to boops
+- [ ] client: Notification badge
+
+future:
+- [ ] Group management
+- [ ] Submit to Flathub
+- [ ] Handle `instance.announcement`
+- [ ] Handle `modified-image-update` (inventory item modified)
+- [ ] Notify filter system
 
 ## Client Screenshots
 
