@@ -28,7 +28,10 @@ Rules:
 - Friend state is refreshed every 30 minutes instead of every 2 hours, and
   after a long disconnect.
 - A sign-in prompt left unanswered no longer stops the server; it asks again.
-- Supports communitating over standard I/O (`--stdio`).
+- Supports communicating over standard I/O (`--stdio`).
+- Import friend history from a VRCX database (`--import-vrcx`). Only the time
+  vrcd was not recording is filled in, and an import can be undone
+  (`imports` command, `--undo-import`).
 - Fix a crash when a client or VRChat disconnects mid-transfer (Linux).
 
 ### Web
@@ -49,6 +52,10 @@ Rules:
 - APIv10: The server keeps the notification inbox, so notifications that
   arrived while no client was open still show up.
 - APIv11: `get_inventory` can filter by item type and flag.
+- APIv12: Events are ordered by time rather than by ID; `catch_up` takes an
+  `epoch`, and clients get `events_reset` when history was rewritten.
+- APIv13: Imports (`import_begin`, `import_events`, `import_end`,
+  `import_abort`, `get_imports`, `import_undo`).
 - `get_stats` includes the database path (`db_path`).
 
 ## v0.2.0

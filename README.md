@@ -38,7 +38,7 @@ Related projects:
 May change at any time. Created near end of 0.3.
 
 0.3:
-- [ ] Import from VRCX
+- [x] Import from VRCX
 
 0.4:
 - [ ] Reply to boops
