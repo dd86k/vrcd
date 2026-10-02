@@ -19,7 +19,9 @@ stringImportPaths "." ".."
 
 # notifications.d: Notification model that server and clients speak
 # badgeurl.d: Badge info/art URLs
-sourceFiles "../common/source/vrcd/notifications.d" "../common/source/vrcd/badgeurl.d"
+# timerange.d: Event timestamps, shared with the VRCX converter
+# vrcx.d: VRCX converter, for a server reading a VRCX file it shares a host with
+sourceFiles "../common/source/vrcd/notifications.d" "../common/source/vrcd/badgeurl.d" "../common/source/vrcd/timerange.d" "../common/source/vrcd/vrcx.d"
 
 # Using dynamic libcurl allows libcurl to be updated with the rest of the system
 configuration "application" {

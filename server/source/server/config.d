@@ -87,6 +87,10 @@ struct Config
     /// Whether --listen was given. In stdio mode it is what decides between
     /// the pipe alone and a pipe plus a listener other devices can reach.
     bool listenRequested;
+    /// VRCX database to import once signed in. CLI only.
+    string importVRCXPath;
+    /// Import to undo at startup. CLI only.
+    long undoImportId;
     /// Directory for the downloaded-image cache (gallery, icons, prints...).
     string imageCachePath;
     /// Image cache size cap in MiB. Oldest entries are evicted past this.

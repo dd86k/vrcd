@@ -115,6 +115,18 @@ void cmdRun(ref Config config)
     Database store = new Database(config.dbPath);
     logInfo("Database loaded from '%s'", config.dbPath);
 
+    if (config.undoImportId)
+    {
+        long undone = store.undoImport(config.undoImportId);
+        if (undone < 0)
+            logError("No import #%d to undo", config.undoImportId);
+        else
+        {
+            store.bumpEventsEpoch();
+            logInfo("Import #%d undone: %d event(s) deleted", config.undoImportId, undone);
+        }
+    }
+
     scope HTTPClient client = new HTTPClient();
     bool headless = isHeadless();
     AuthDelegator delegator;
@@ -284,6 +296,14 @@ void cmdRun(ref Config config)
     apiServer.setContentService(contentService);
     apiServer.setRateLimiter(rateLimiter);
     apiServer.setAPIMutex(vrcApiMutex);
+
+    if (config.importVRCXPath.length)
+    {
+        string importPath = config.importVRCXPath;
+        Thread importer = new Thread({ apiServer.importVRCX(importPath); });
+        importer.isDaemon = true;
+        importer.start();
+    }
 
     // Drop a Portal companion sidecar. Owns its own thread; the rest of
     // the server only ever calls enqueueVisit() and (via the API) triggerPair().
@@ -559,6 +579,19 @@ void cmdEvents(ref Config config)
     scope Database store = new Database(config.dbPath);
     foreach (row; store.queryRecentEvents(50))
         writefln("#%s [%s] %s: %s", row[0], row[1], row[2], row[3]);
+}
+
+void cmdImports(ref Config config)
+{
+    import std.stdio : writefln;
+    scope Database store = new Database(config.dbPath);
+    ImportRecord[] list = store.imports();
+    if (list.length == 0)
+        writefln("No imports");
+    foreach (ref ImportRecord rec; list)
+        writefln("#%d %s %s  %s .. %s  %d event(s), imported %s",
+            rec.id, rec.source, rec.account, rec.covered.from, rec.covered.to,
+            rec.rows, rec.importedAt);
 }
 
 template DVER(uint ver)
@@ -1026,6 +1059,13 @@ int main(string[] args)
             config.tlsOnly = true;
             cliSet |= Config.SET_TLS_ONLY;
         },
+        "import-vrcx", "Import a VRCX database's friend history once signed in", (string _, string val) {
+            config.importVRCXPath = val;
+        },
+        "undo-import", "Undo an import by ID at startup (see the 'imports' command)", (string _, string val) {
+            import std.conv : to;
+            config.undoImportId = val.to!long;
+        },
         "version",  "Show version page and exit", &cliVersion,
         "help-config", "Show effective config paths and exit", &helpConfig,
     );
@@ -1050,6 +1090,7 @@ int main(string[] args)
             "  run      Start the server (default)\n" ~
             "  auth     Interactive login to VRChat\n" ~
             "  events   Query stored events\n" ~
+            "  imports  List finished imports\n" ~
             "\n" ~
             "Options:",
             opts.options,
@@ -1115,7 +1156,6 @@ int main(string[] args)
     // and stalled sends are all reported from here, and losing those warnings
     // means a client silently stops receiving events with nothing in the log.
     logSetModuleLevel("server.api", config.verbose ? LogLevel.debugging : LogLevel.info);
-    
     // ddhttp.http has some useful and useless entries, don't disable it yet
     
     // Throws and prints by default
@@ -1133,6 +1173,9 @@ int main(string[] args)
                     break;
                 case "events":
                     cmdEvents(config);
+                    break;
+                case "imports":
+                    cmdImports(config);
                     break;
                 default:
                     logError("Unknown command: %s", command);

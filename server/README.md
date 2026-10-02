@@ -10,6 +10,7 @@ vrcd-server [command] [options]
     run       Start the server (default)
     auth      Interactive VRChat login
     events    Print recent stored events
+    imports   List finished imports
 
   Options:
     -b, --basedir   Base directory for all config/data files
@@ -20,6 +21,8 @@ vrcd-server [command] [options]
     -a, --auth      Path to credentials file
     -v, --verbose         Enable trace logging
         --prune-retain    Delete events older than AMOUNT UNIT (e.g. '3 months')
+        --import-vrcx     Import a VRCX database's friend history once signed in
+        --undo-import     Undo an import by ID at startup (see `imports`)
         --tls-cert        Path to PEM TLS certificate (enables TLS when paired with --tls-key)
         --tls-key         Path to PEM TLS private key
         --tls-ca          Path to CA certificate for client verification (mTLS)
@@ -32,6 +35,19 @@ vrcd-server [command] [options]
 Config/data paths default to:
 - **Linux:** `~/.config/vrcd` (config), `~/.local/share/vrcd` (data)
 - **Windows:** `%APPDATA%/vrcd`
+
+## Importing from VRCX
+
+```
+vrcd-server --import-vrcx path/to/VRCX.sqlite3   # import, then keep running
+vrcd-server imports                              # list imports
+vrcd-server --undo-import 3                      # undo import #3, then keep running
+```
+
+Imports the signed-in account's friend feed (locations, online/offline,
+status, avatar, bio, friend adds/removes), only for periods vrcd was not
+recording. Re-importing the same file adds nothing. Game logs, notes and VRCX
+settings are never read.
 
 ## Configuration
 

@@ -17,6 +17,7 @@ import ddlogger;
 import arsd.sqlite;
 
 import server.events;
+import vrcd.timerange : TimeRange, toISO;
 
 // Database structure
 //
@@ -74,14 +75,6 @@ struct CachedWorld
     long worldVersion;
     /// When this row was written, as a Unix timestamp. Zero when not found.
     long addedAt;
-}
-
-/// A half-open span of time, `[from, to)`, in the stored timestamp format.
-/// An empty `from` is the beginning of time.
-struct TimeRange
-{
-    string from;
-    string to;
 }
 
 /// One `ws_connection_log` row.
@@ -846,24 +839,6 @@ private:
 
         logInfo("Database schema ready");
     }
-}
-
-package string toISO(SysTime t)
-{
-    SysTime u = t.toUTC();
-    return format!"%04d-%02d-%02dT%02d:%02d:%02d.%03dZ"(
-        u.year, cast(int) u.month, u.day, u.hour, u.minute, u.second,
-        u.fracSecs.total!"msecs");
-}
-
-unittest
-{
-    import std.datetime.date : DateTime;
-    import core.time : msecs, hnsecs;
-
-    SysTime t = SysTime(DateTime(2026, 9, 26, 12, 34, 56), UTC());
-    assert(toISO(t) == "2026-09-26T12:34:56.000Z");
-    assert(toISO(t + msecs(5) + hnsecs(9)) == "2026-09-26T12:34:56.005Z");
 }
 
 // Bounded catch-up: the tail query hands back the *newest* page of what is

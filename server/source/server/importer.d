@@ -8,19 +8,13 @@ import std.algorithm.sorting : sort;
 import std.datetime.systime : SysTime;
 import core.time : Duration, dur;
 
-import server.database : TimeRange, ConnectionMark, toISO;
+import server.database : ConnectionMark;
+import vrcd.timerange : TimeRange, toISO;
 
 /// Where one recording could have started or stopped sooner than the log
 /// says: the log is written around the socket, not around the first and last
 /// frame through it.
 enum Duration RECORDING_MARGIN = dur!"seconds"(60);
-
-/// A timestamp in the stored format, or null when it is not one.
-string normalizeTime(string at)
-{
-    try return toISO(SysTime.fromISOExtString(at));
-    catch (Exception) return null;
-}
 
 /// `at` moved by `by`. `at` must already be in the stored format.
 string shiftTime(string at, Duration by)
@@ -107,21 +101,8 @@ TimeRange[] uncovered(TimeRange[] covered, string floor, string now)
     return gaps;
 }
 
-/// Index of the span holding `at`, or -1.
-ptrdiff_t findRange(const(TimeRange)[] spans, string at)
-{
-    foreach (size_t i, ref const(TimeRange) span; spans)
-        if (at >= span.from && at < span.to)
-            return i;
-    return -1;
-}
-
 unittest
 {
-    assert(normalizeTime("2026-09-26T12:34:56.1234567Z") == "2026-09-26T12:34:56.123Z");
-    assert(normalizeTime("2026-09-26T12:34:56Z") == "2026-09-26T12:34:56.000Z");
-    assert(normalizeTime("2026-09-26T14:34:56+02:00") == "2026-09-26T12:34:56.000Z");
-    assert(normalizeTime("yesterday") is null);
     assert(shiftTime("2026-09-26T00:00:30.000Z", -RECORDING_MARGIN) == "2026-09-25T23:59:30.000Z");
 }
 
@@ -167,7 +148,4 @@ unittest
     // Nothing recorded at all: everything before now.
     assert(uncovered(null, "", T5) == [ TimeRange("", T5) ]);
 
-    assert(findRange([ TimeRange("", T1), TimeRange(T2, T3) ], T2) == 1);
-    assert(findRange([ TimeRange("", T1), TimeRange(T2, T3) ], T1) == -1);
-    assert(findRange([ TimeRange("", T1) ], "2025-06-01T00:00:00.000Z") == 0);
 }

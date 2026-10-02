@@ -35,6 +35,8 @@ import server.worldcache;
 import server.config : DEFAULT_RESEED_INTERVAL;
 import server.vrchat.auth : postJSON, putJSON;
 import vrcd.notifications;
+import vrcd.timerange;
+import vrcd.vrcx;
 
 /// Protocol version reported in `auth_ok`. 1 = base, 2 = content API,
 /// 3 = moderation API, 4 = notification listing (`get_notifications`),
@@ -764,11 +766,245 @@ class APIServer
         scope(exit) importMutex.unlock();
         if (activeImport is null || activeImport.owner !is owner)
             return;
-        ImportSession session = activeImport;
-        activeImport = null;
-        logWarn("Import %s abandoned", session.tag);
-        if (store.deleteImport(session.tag) > 0)
+        logWarn("Import %s abandoned", activeImport.tag);
+        if (dropImport(activeImport) > 0)
             resetEvents();
+    }
+
+    //
+    // Imports: history from another tool, filling the spans vrcd was not
+    // recording. Whoever reads the other tool's data converts it; this
+    // decides what fits. Callers hold importMutex.
+    //
+
+    /// Plan and open an import: the spans it may fill are the ones vrcd did
+    /// not record and no earlier import covered, back to where pruning would
+    /// cut them. Null, with the reason in `error`, when refused. `owner` is
+    /// null for an import the server runs itself.
+    private ImportSession openImport(ClientHandler owner, string source, string account, out string error)
+    {
+        import std.datetime.systime : Clock;
+
+        bool known;
+        foreach (string s; IMPORT_SOURCES)
+            if (s == source)
+                known = true;
+        if (known == false)
+        {
+            error = "Unknown import source: " ~ source;
+            return null;
+        }
+
+        // Another account's history would land in this one's feed.
+        string self = friendsTracker.getSelfUserId();
+        if (self.length == 0)
+        {
+            error = "Not signed in to VRChat yet";
+            return null;
+        }
+        if (account != self)
+        {
+            error = "This server is signed in as another account";
+            return null;
+        }
+
+        if (activeImport)
+        {
+            error = "Another import is in progress";
+            return null;
+        }
+
+        string now = toISO(Clock.currTime());
+        TimeRange[] recorded = recordedRanges(store.connectionLog(), &store.lastLiveEventIn, now);
+        TimeRange[] imported = store.importedRanges();
+        string floor = pruneRetain.length ? store.timeFromNow(pruneRetain) : null;
+
+        ImportSession session = new ImportSession();
+        session.owner = owner;
+        session.source = source;
+        session.account = account;
+        session.accept = uncovered(recorded ~ imported, floor, now);
+        session.recorded = mergeRanges(recorded);
+        session.imported = mergeRanges(imported);
+        session.rows.length = session.accept.length;
+        session.first.length = session.accept.length;
+        session.last.length = session.accept.length;
+        session.tag = store.beginImport(source, session.id);
+        activeImport = session;
+
+        logInfo("Import %s planned: %d span(s) open", session.tag, session.accept.length);
+        return session;
+    }
+
+    /// Store what of one batch fits. Events outside the accepted spans, of
+    /// an unknown or ephemeral type, or malformed, are counted as rejected.
+    private ImportBatch feedImport(ImportSession session, JSONValue[] events)
+    {
+        ImportedEvent[] batch;
+        batch.reserve(events.length);
+        ImportBatch result;
+        foreach (ref JSONValue j; events)
+        {
+            if (j.type != JSONType.object)
+            {
+                ++result.rejected;
+                continue;
+            }
+            string at;
+            string eventType;
+            if (const(JSONValue)* v = "received_at" in j)
+                if (v.type == JSONType.string)
+                    at = normalizeTime(v.str);
+            if (const(JSONValue)* v = "event_type" in j)
+                if (v.type == JSONType.string)
+                    eventType = v.str;
+            JSONValue* content = "content" in j;
+            // Ephemeral types are never stored, so neither is history of them.
+            EventType et = toEventType(eventType);
+            ptrdiff_t span = at.length ? findRange(session.accept, at) : -1;
+            if (span < 0 || et == EventType.unknown || et == EventType.friendTraveling ||
+                content is null || content.type != JSONType.object)
+            {
+                ++result.rejected;
+                continue;
+            }
+
+            batch ~= ImportedEvent(at, eventType, JSONValue([
+                "type": JSONValue(eventType),
+                "content": *content,
+            ]).toString());
+            ++session.rows[span];
+            if (session.first[span].length == 0 || at < session.first[span])
+                session.first[span] = at;
+            if (at > session.last[span])
+                session.last[span] = at;
+        }
+
+        if (batch.length)
+            store.storeImported(session.tag, batch);
+        result.accepted = batch.length;
+        return result;
+    }
+
+    /// Record what was covered, and return the events stored; the caller
+    /// resets the clients' feeds when that is not zero. Each span is
+    /// the first to the last event the source had in it rather than the
+    /// whole gap: a later, newer copy of the same source can still fill in
+    /// past where this one ended.
+    private long closeImport(ImportSession session)
+    {
+        TimeRange[] spans;
+        long[] rows;
+        long total;
+        foreach (size_t i, long n; session.rows)
+        {
+            if (n == 0)
+                continue;
+            spans ~= TimeRange(session.first[i], shiftTime(session.last[i], dur!"msecs"(1)));
+            rows ~= n;
+            total += n;
+        }
+        store.finishImport(session.id, session.source, session.account, spans, rows);
+        activeImport = null;
+
+        logInfo("Import %s done: %d event(s)", session.tag, total);
+        return total;
+    }
+
+    /// Drop an import and what it stored. Returns as closeImport does.
+    private long dropImport(ImportSession session)
+    {
+        activeImport = null;
+        return store.deleteImport(session.tag);
+    }
+
+    /// Import a VRCX file this server can read itself, as the signed-in
+    /// account. Blocks for as long as the import takes.
+    void importVRCX(string path)
+    {
+        enum long PROGRESS_EVERY = 100_000;
+
+        string account = friendsTracker.getSelfUserId();
+        VRCXReader reader;
+        try reader = new VRCXReader(path, account);
+        catch (Exception e)
+        {
+            logError("VRCX import: %s", e.msg);
+            return;
+        }
+
+        ImportSession session;
+        {
+            importMutex.lock();
+            scope(exit) importMutex.unlock();
+            string error;
+            session = openImport(null, "vrcx", account, error);
+            if (session is null)
+            {
+                logError("VRCX import: %s", error);
+                return;
+            }
+        }
+
+        // Somebody expecting all of VRCX's history should hear before it
+        // runs that most of it may be left out on purpose.
+        logInfo("VRCX import from '%s': only periods vrcd was not recording are imported. " ~
+            "Skipped: %d recorded period(s)%s, %d earlier import(s).",
+            path, session.recorded.length,
+            session.recorded.length ? " since " ~ session.recorded[0].from : "",
+            session.imported.length);
+
+        JSONValue[] batch;
+        long outside;
+        long rejected;
+        long seen;
+
+        void flush()
+        {
+            importMutex.lock();
+            scope(exit) importMutex.unlock();
+            rejected += feedImport(session, batch).rejected;
+            batch.length = 0;
+        }
+
+        try
+        {
+            foreach (ref VRCXEvent ev; reader)
+            {
+                if (++seen % PROGRESS_EVERY == 0)
+                    logInfo("VRCX import: %d row(s) read", seen);
+                if (findRange(session.accept, ev.receivedAt) < 0)
+                {
+                    ++outside;
+                    continue;
+                }
+                batch ~= ev.toJSON();
+                if (batch.length == IMPORT_BATCH_MAX)
+                    flush();
+            }
+            if (batch.length)
+                flush();
+        }
+        catch (Exception e)
+        {
+            logError("VRCX import failed, undoing it: %s", e.msg);
+            importMutex.lock();
+            scope(exit) importMutex.unlock();
+            if (dropImport(session) > 0)
+                resetEvents();
+            return;
+        }
+
+        importMutex.lock();
+        scope(exit) importMutex.unlock();
+        long total = closeImport(session);
+        if (total > 0)
+            resetEvents();
+        logInfo("VRCX import %d: %d event(s) stored, %d in recorded or imported periods, " ~
+            "%d rejected, %d row(s) with no vrcd equivalent",
+            session.id, total, outside, rejected, reader.skipped);
+        if (total > 0)
+            logInfo("Undo with: --undo-import %d", session.id);
     }
 
     /// Start a new event epoch and tell every client to drop its feed and
@@ -997,7 +1233,13 @@ private enum int IMPORT_BATCH_MAX = 5000;
 /// Import sources accepted, and the prefix of the tag their events carry.
 private immutable string[] IMPORT_SOURCES = [ "vrcx" ];
 
-/// An import in progress. Only its owner's thread feeds it.
+/// An import in progress. Only its owner feeds it: a client's thread, or the server's own import.
+private struct ImportBatch
+{
+    long accepted;
+    long rejected;
+}
+
 private class ImportSession
 {
     ClientHandler owner;
@@ -1006,6 +1248,8 @@ private class ImportSession
     string account;
     string tag;
     TimeRange[] accept;
+    TimeRange[] recorded;
+    TimeRange[] imported;
     // Per accept span: events stored, and the earliest and latest of them.
     long[] rows;
     string[] first;
@@ -2921,7 +3165,7 @@ private class ClientHandler
 
     //
     // Imports: history from another tool, filling the spans vrcd was not
-    // recording. The client reads and converts; the server decides what fits.
+    // recording. The protocol side; the work is APIServer's.
     //
 
     void handleImport(string type, JSONValue msg)
@@ -2939,7 +3183,6 @@ private class ClientHandler
             handleGetImports();
             return;
         }
-
 
         long importId;
         if (const(JSONValue)* v = "import_id" in msg)
@@ -2960,14 +3203,37 @@ private class ClientHandler
         switch (type)
         {
         case "import_events":
-            handleImportEvents(session, msg);
+            JSONValue* jevents = "events" in msg;
+            if (jevents is null || jevents.type != JSONType.array)
+            {
+                sendImportError(session.id, "No events");
+                return;
+            }
+            if (jevents.array.length > IMPORT_BATCH_MAX)
+            {
+                sendImportError(session.id, "Batch too large (max " ~ IMPORT_BATCH_MAX.to!string ~ ")");
+                return;
+            }
+            ImportBatch result = server.feedImport(session, jevents.array);
+            sendLine(JSONValue([
+                "type": JSONValue("import_ack"),
+                "import_id": JSONValue(session.id),
+                "accepted": JSONValue(result.accepted),
+                "rejected": JSONValue(result.rejected),
+            ]).toString() ~ "\n");
             break;
         case "import_end":
-            handleImportEnd(session);
+            long total = server.closeImport(session);
+            sendLine(JSONValue([
+                "type": JSONValue("import_done"),
+                "import_id": JSONValue(session.id),
+                "rows": JSONValue(total),
+            ]).toString() ~ "\n");
+            if (total > 0)
+                server.resetEvents();
             break;
         default:
-            server.activeImport = null;
-            long deleted = server.store.deleteImport(session.tag);
+            long deleted = server.dropImport(session);
             sendLine(JSONValue([
                 "type": JSONValue("import_aborted"),
                 "import_id": JSONValue(session.id),
@@ -2977,163 +3243,23 @@ private class ClientHandler
         }
     }
 
-    /// Plan an import: the spans it may fill are the ones vrcd did not record
-    /// and no earlier import covered, back to where pruning would cut them.
     void handleImportBegin(JSONValue msg)
     {
-        string source = stringField(msg, "source");
-        string account = stringField(msg, "account");
-
-        bool known;
-        foreach (string s; IMPORT_SOURCES)
-            if (s == source)
-                known = true;
-        if (known == false)
+        string error;
+        ImportSession session = server.openImport(this,
+            stringField(msg, "source"), stringField(msg, "account"), error);
+        if (session is null)
         {
-            sendImportError(0, "Unknown import source: " ~ source);
+            sendImportError(0, error);
             return;
         }
-
-        // Another account's history would land in this one's feed.
-        string self = server.friendsTracker.getSelfUserId();
-        if (self.length == 0)
-        {
-            sendImportError(0, "Not signed in to VRChat yet");
-            return;
-        }
-        if (account != self)
-        {
-            sendImportError(0, "This server is signed in as another account");
-            return;
-        }
-
-        if (server.activeImport)
-        {
-            sendImportError(0, "Another import is in progress");
-            return;
-        }
-
-        import std.datetime.systime : Clock;
-
-        Database store = server.store;
-        string now = toISO(Clock.currTime());
-        TimeRange[] recorded = recordedRanges(store.connectionLog(), &store.lastLiveEventIn, now);
-        TimeRange[] imported = store.importedRanges();
-        string floor = server.pruneRetain.length ? store.timeFromNow(server.pruneRetain) : null;
-
-        ImportSession session = new ImportSession();
-        session.owner = this;
-        session.source = source;
-        session.account = account;
-        session.accept = uncovered(recorded ~ imported, floor, now);
-        session.rows.length = session.accept.length;
-        session.first.length = session.accept.length;
-        session.last.length = session.accept.length;
-        session.tag = store.beginImport(source, session.id);
-        server.activeImport = session;
-
         sendLine(JSONValue([
             "type": JSONValue("import_plan"),
             "import_id": JSONValue(session.id),
             "accept": rangesJSON(session.accept),
-            "recorded": rangesJSON(mergeRanges(recorded)),
-            "imported": rangesJSON(mergeRanges(imported)),
+            "recorded": rangesJSON(session.recorded),
+            "imported": rangesJSON(session.imported),
         ]).toString() ~ "\n");
-        logInfo("Import %s planned: %d span(s) open", session.tag, session.accept.length);
-    }
-
-    void handleImportEvents(ImportSession session, JSONValue msg)
-    {
-        JSONValue* jevents = "events" in msg;
-        if (jevents is null || jevents.type != JSONType.array)
-        {
-            sendImportError(session.id, "No events");
-            return;
-        }
-        if (jevents.array.length > IMPORT_BATCH_MAX)
-        {
-            sendImportError(session.id, "Batch too large (max " ~ IMPORT_BATCH_MAX.to!string ~ ")");
-            return;
-        }
-
-        ImportedEvent[] batch;
-        batch.reserve(jevents.array.length);
-        long rejected;
-        foreach (ref JSONValue j; jevents.array)
-        {
-            if (j.type != JSONType.object)
-            {
-                ++rejected;
-                continue;
-            }
-            string at;
-            string eventType;
-            if (const(JSONValue)* v = "received_at" in j)
-                if (v.type == JSONType.string)
-                    at = normalizeTime(v.str);
-            if (const(JSONValue)* v = "event_type" in j)
-                if (v.type == JSONType.string)
-                    eventType = v.str;
-            JSONValue* content = "content" in j;
-            // Ephemeral types are never stored, so neither is history of them.
-            EventType et = toEventType(eventType);
-            ptrdiff_t span = at.length ? findRange(session.accept, at) : -1;
-            if (span < 0 || et == EventType.unknown || et == EventType.friendTraveling ||
-                content is null || content.type != JSONType.object)
-            {
-                ++rejected;
-                continue;
-            }
-
-            batch ~= ImportedEvent(at, eventType, JSONValue([
-                "type": JSONValue(eventType),
-                "content": *content,
-            ]).toString());
-            ++session.rows[span];
-            if (session.first[span].length == 0 || at < session.first[span])
-                session.first[span] = at;
-            if (at > session.last[span])
-                session.last[span] = at;
-        }
-
-        if (batch.length)
-            server.store.storeImported(session.tag, batch);
-
-        sendLine(JSONValue([
-            "type": JSONValue("import_ack"),
-            "import_id": JSONValue(session.id),
-            "accepted": JSONValue(batch.length),
-            "rejected": JSONValue(rejected),
-        ]).toString() ~ "\n");
-    }
-
-    /// Record what was covered. Each span is the first to the last event the
-    /// source had in it rather than the whole gap: a later, newer copy of the
-    /// same source can still fill in past where this one ended.
-    void handleImportEnd(ImportSession session)
-    {
-        TimeRange[] spans;
-        long[] rows;
-        long total;
-        foreach (size_t i, long n; session.rows)
-        {
-            if (n == 0)
-                continue;
-            spans ~= TimeRange(session.first[i], shiftTime(session.last[i], dur!"msecs"(1)));
-            rows ~= n;
-            total += n;
-        }
-        server.store.finishImport(session.id, session.source, session.account, spans, rows);
-        server.activeImport = null;
-
-        sendLine(JSONValue([
-            "type": JSONValue("import_done"),
-            "import_id": JSONValue(session.id),
-            "rows": JSONValue(total),
-        ]).toString() ~ "\n");
-        logInfo("Import %s done: %d event(s)", session.tag, total);
-        if (total > 0)
-            server.resetEvents();
     }
 
     void handleGetImports()
@@ -3851,4 +3977,59 @@ unittest
     assert(store.getStats().eventCount == 0);
     assert(send(`{"type":"get_imports"}`)[0]["imports"].array.length == 0);
     assert(send(undo)[0]["type"].str == "import_error");
+}
+
+// A VRCX file the server reads itself goes through the same plan and checks
+// as one sent over the protocol, and lands as one finished import.
+unittest
+{
+    import std.file : exists, remove, tempDir;
+    import std.path : buildPath;
+    import arsd.sqlite : Sqlite;
+    import server.userimage : UserImage;
+
+    static void scrub(string file)
+    {
+        foreach (string suffix; [ "", "-wal", "-shm" ])
+            if (exists(file ~ suffix))
+                remove(file ~ suffix);
+    }
+
+    string path = buildPath(tempDir(), "vrcd-importvrcx-test.db");
+    string vrcx = buildPath(tempDir(), "vrcd-importvrcx-test.sqlite3");
+    scrub(path);
+    scrub(vrcx);
+    scope(exit) scrub(path);
+    scope(exit) scrub(vrcx);
+
+    Sqlite w = new Sqlite(vrcx);
+    string table = vrcxPrefix("usr_me") ~ "_feed_online_offline";
+    w.exec("CREATE TABLE " ~ table ~ " (id INTEGER PRIMARY KEY, created_at TEXT, user_id TEXT, " ~
+        "display_name TEXT, type TEXT, location TEXT, world_name TEXT, time INTEGER, group_name TEXT)");
+    w.exec("INSERT INTO " ~ table ~ " VALUES " ~
+        "(1, '2024-01-01T09:00:00.000Z', 'usr_a', 'Alice', 'Online', 'private', '', 0, ''), " ~
+        "(2, '2024-01-01T10:00:00.000Z', 'usr_a', 'Alice', 'Offline', '', '', 0, ''), " ~
+        "(3, '2024-01-01T11:00:00.000Z', 'usr_a', 'Alice', 'Renamed', '', '', 0, '')");
+    w = null;
+
+    Database store = new Database(path);
+    scope(exit) store.close();
+    APIServer server = new APIServer("127.0.0.1", 0, null, store);
+
+    // Not signed in: refused, nothing stored.
+    server.importVRCX(vrcx);
+    assert(store.imports().length == 0);
+
+    server.friendsTracker.setSelf("usr_me", "me", null, null, null, null, null, null, UserImage.init);
+    server.importVRCX(vrcx);
+    ImportRecord[] list = store.imports();
+    assert(list.length == 1);
+    assert(list[0].rows == 2);
+    assert(list[0].covered == TimeRange("2024-01-01T09:00:00.000Z", "2024-01-01T10:00:00.001Z"));
+    assert(server.activeImport is null);
+
+    // Again: already covered, so nothing new.
+    server.importVRCX(vrcx);
+    assert(store.imports().length == 1);
+    assert(store.getStats().eventCount == 2);
 }
