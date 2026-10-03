@@ -46,8 +46,8 @@ $ProgressPreference = 'SilentlyContinue'
 # hash off sqlite.org into this, it will never match). SDL publishes neither, so
 # theirs were recorded when the version was pinned, which still catches an asset
 # that changed under a tag that did not.
-$SDL3Version      = '3.4.16'
-$SDL3Sha256       = '4217944b4e51457af4a59c82d883f8443b3e65964b2acd8943484c492756c4b6'
+$SDL3Version      = '3.4.18'
+$SDL3Sha256       = '75c2c0fc74e7d1206aaedc22893a35887332f4f85f5c8b74fddc10d177985f2c'
 $SDL3TtfVersion   = '3.2.2'
 $SDL3TtfSha256    = '13455007029cf487c5aacaa6ff84406be78ffdbed08f933aba3668680ff245f8'
 $SDL3ImageVersion = '3.4.6'
