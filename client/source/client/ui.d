@@ -291,6 +291,33 @@ private void drawTabButton(mu_Context* ctx, AppState* state, string label, Tab t
         if (mu_button(ctx, label))
             activeTab = tab;
     }
+
+    // Same rule as the web front-end: the inbox counts pending entries, since
+    // the server's inbox only holds what is still there to answer.
+    if (tab == Tab.notifications && state.notifications.length > 0)
+        drawTabBadge(ctx, ctx.last_rect, state.notifications.length);
+}
+
+/// Count pill in the top-right corner of a tab button.
+private void drawTabBadge(mu_Context* ctx, mu_Rect tabRect, size_t count)
+{
+    import std.format : sformat;
+
+    // Stack buffer: this runs every frame, and the count is all it says.
+    char[8] buf = void;
+    const(char)[] text = count > 99 ? "99+" : sformat(buf, "%d", count);
+
+    int textW = ctx.text_width(ctx.style.font, text.ptr, cast(int) text.length);
+    int textH = ctx.text_height(ctx.style.font);
+    int h = textH + 4;
+    int w = textW + 12;
+    if (w < h)
+        w = h;
+    mu_Rect pill = mu_Rect(tabRect.x + tabRect.w - w - 4, tabRect.y + 4, w, h);
+    mu_draw_rect(ctx, pill, mu_Color(200, 50, 50, 255));
+    // Safe cast: mu_draw_text copies the text into the command queue.
+    mu_draw_text(ctx, ctx.style.font, cast(string) text,
+        mu_Vec2(pill.x + (w - textW) / 2, pill.y + 2), mu_Color(255, 255, 255, 255));
 }
 
 bool filterPopupOpen;
