@@ -3,10 +3,10 @@
 Changelog file for vrcd with newest tags first.
 
 Rules:
-- Separated by component: Client, Server, Web.
+- Separated by component: Client, Server, Web, Packaging, and API.
 - Keep things simple and easy to read, long technical topics best left in source.
-- Better to keep entries closest to the actual work done: "Server supports standard I/O"
-  is more true than "Client can start server" (37b843ed1d2d4bca6011a69dcb5e64fa581cf235).
+- Better to keep entries closest to the actual intent: "Server supports standard I/O"
+  is clearer than "Client can start server" (37b843ed1d2d4bca6011a69dcb5e64fa581cf235).
 
 ## v0.3.0
 
@@ -58,6 +58,8 @@ Rules:
   `epoch`, and clients get `events_reset` when history was rewritten.
 - APIv13: Imports (`import_begin`, `import_events`, `import_end`,
   `import_abort`, `get_imports`, `import_undo`).
+- `auth_cancelled`: Sent when a sign-in prompt expires unanswered, so clients
+  can take it down before the server asks again.
 - `get_stats` includes the database path (`db_path`).
 
 ## v0.2.0
