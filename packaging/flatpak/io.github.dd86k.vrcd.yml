@@ -81,7 +81,7 @@ modules:
       # deps pointing at the pre-extracted archives, then drop the git entries
       # from selections.json so there is no version conflict.
       - sed -i 's|dependency "ddlogger" repository=.*|dependency "ddlogger" path="../.dub/packages/ddlogger/4397d8e57a88bd6b3a3e5e4c846ba97ac3bfd364/ddlogger"|' client/dub.sdl
-      - sed -i 's|dependency "ddui" repository=.*|dependency "ddui" path="../.dub/packages/ddui/a70e43e45ceec730a34c5f49f6d3cdb43094b7ab/ddui"|' client/dub.sdl
+      - sed -i 's|dependency "ddui" repository=.*|dependency "ddui" path="../.dub/packages/ddui/c3f59eaed292e06a6fd1a1455e5907f66a6cc24a/ddui"|' client/dub.sdl
       - |
         cat > client/dub.selections.json <<'EOF'
         {
@@ -144,9 +144,9 @@ modules:
         strip-components: 1
 
       - type: archive
-        url: https://github.com/dd86k/ddui/archive/a70e43e45ceec730a34c5f49f6d3cdb43094b7ab.tar.gz
-        sha256: 07f2d4a7cbfa09efb040cd82316d3433d70786b59a70af5c6d999550bac624a8
-        dest: .dub/packages/ddui/a70e43e45ceec730a34c5f49f6d3cdb43094b7ab/ddui
+        url: https://github.com/dd86k/ddui/archive/c3f59eaed292e06a6fd1a1455e5907f66a6cc24a.tar.gz
+        sha256: a5c538ddbc5bd2f6ce3739b1c21e0fe432d69d5d2ce6de7dc8f817899317d46e
+        dest: .dub/packages/ddui/c3f59eaed292e06a6fd1a1455e5907f66a6cc24a/ddui
         strip-components: 1
 
   ## vrcd server, for "Use local server": the client looks beside itself
