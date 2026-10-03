@@ -9,7 +9,7 @@ import core.time : dur, Duration, MonoTime;
 
 import ddlogger;
 import ddcurl;
-import ddcurl.libcurl : CurlException;
+import ddcurl.libcurl : CurlException, CURLWS_PING;
 import ddcurl.websocket : WebSocketMessage, WebSocketStatus;
 
 import server.vrchat.vrcconfig : USER_AGENT;
@@ -37,6 +37,12 @@ private enum : ushort
 /// How long a connection has to stay up before it counts as a good one and
 /// the reconnect backoff is allowed to reset.
 private enum Duration STABLE_CONNECTION = dur!"seconds"(60);
+
+/// The pipeline drops us two minutes into any quiet stretch, libcurl's
+/// auto-PONG notwithstanding, so we PING well inside that.
+/// Doubles as the receive poll timeout, since a PING can only go out between
+/// receives.
+private enum Duration KEEPALIVE_INTERVAL = dur!"seconds"(15);
 
 /// Human-readable description for an RFC 6455 close code.
 /// A zero code means the peer closed without sending one.
@@ -156,10 +162,20 @@ private:
                 notifyStatus(true, "");
 
                 bool reconnectNow; // Skip backoff and reconnect immediately (e.g. after re-auth).
+                MonoTime lastPing = connectedAt;
 
                 while (running && connected)
                 {
                     WebSocketMessage msg = ws.receive();
+
+                    if (MonoTime.currTime - lastPing >= KEEPALIVE_INTERVAL)
+                    {
+                        ubyte[1] payload;
+                        ws.send(payload[0..0], CURLWS_PING);
+                        lastPing = MonoTime.currTime;
+                        logTrace("WS keepalive PING sent");
+                    }
+
                     final switch (msg.status) with (WebSocketStatus)
                     {
                     case data:
@@ -306,6 +322,8 @@ private:
 
     void connect()
     {
+        // TODO: VRChat web client connects to wss://vrchat.com/?authToken=authcookie_xxx
+        //       Test if it is compatible
         string url = "wss://pipeline.vrchat.cloud/?auth=" ~ authToken;
         logInfo("Connecting to VRChat WebSocket...");
         logDebugging("WS URL: wss://pipeline.vrchat.cloud/?auth=<redacted, %d chars>", authToken.length);
@@ -314,7 +332,7 @@ private:
         client.addHeader("User-Agent", USER_AGENT);
         client.setVerbose(false);
         ws = client.connect(url);
-        ws.setPollTimeout(30_000); // 30s poll timeout for receive.
+        ws.setPollTimeout(cast(int)KEEPALIVE_INTERVAL.total!"msecs");
         connected = true;
     }
 }
