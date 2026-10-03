@@ -163,9 +163,9 @@ modules:
       # Same git-to-path rewrite as the client, ddcurl's own included: every
       # reference to ddlogger has to land on the one copy or dub sees two.
       - sed -i 's|dependency "ddlogger" repository=.*|dependency "ddlogger" path="../.dub/packages/ddlogger/4397d8e57a88bd6b3a3e5e4c846ba97ac3bfd364/ddlogger"|' server/dub.sdl
-      - sed -i 's|dependency "ddcurl" repository=.*|dependency "ddcurl" path="../.dub/packages/ddcurl/14ce373e5a61ca98b6e6e8a7a8213abe7e888f8d/ddcurl"|' server/dub.sdl
-      - sed -i 's|dependency "ddlogger" repository=.*|dependency "ddlogger" path="../../../ddlogger/4397d8e57a88bd6b3a3e5e4c846ba97ac3bfd364/ddlogger"|' .dub/packages/ddcurl/14ce373e5a61ca98b6e6e8a7a8213abe7e888f8d/ddcurl/dub.sdl
-      - sed -i 's|dependency "ddloader" repository=.*|dependency "ddloader" path="../../../ddloader/c3eb54d31a17e63a7722f8449033ce13764b7636/ddloader"|' .dub/packages/ddcurl/14ce373e5a61ca98b6e6e8a7a8213abe7e888f8d/ddcurl/dub.sdl
+      - sed -i 's|dependency "ddcurl" repository=.*|dependency "ddcurl" path="../.dub/packages/ddcurl/f9598ff6c8f146966143bedcdd0c205fd477da99/ddcurl"|' server/dub.sdl
+      - sed -i 's|dependency "ddlogger" repository=.*|dependency "ddlogger" path="../../../ddlogger/4397d8e57a88bd6b3a3e5e4c846ba97ac3bfd364/ddlogger"|' .dub/packages/ddcurl/f9598ff6c8f146966143bedcdd0c205fd477da99/ddcurl/dub.sdl
+      - sed -i 's|dependency "ddloader" repository=.*|dependency "ddloader" path="../../../ddloader/c3eb54d31a17e63a7722f8449033ce13764b7636/ddloader"|' .dub/packages/ddcurl/f9598ff6c8f146966143bedcdd0c205fd477da99/ddcurl/dub.sdl
       # Kept rather than emptied: the server string-imports it for --version.
       - |
         cat > server/dub.selections.json <<'EOF'
@@ -203,9 +203,9 @@ modules:
         strip-components: 1
 
       - type: archive
-        url: https://github.com/dd86k/ddcurl/archive/14ce373e5a61ca98b6e6e8a7a8213abe7e888f8d.tar.gz
-        sha256: 109d639b04b13364536882ad53b2100a130c03e77e551af35fc8398433c20878
-        dest: .dub/packages/ddcurl/14ce373e5a61ca98b6e6e8a7a8213abe7e888f8d/ddcurl
+        url: https://github.com/dd86k/ddcurl/archive/f9598ff6c8f146966143bedcdd0c205fd477da99.tar.gz
+        sha256: 3b5e62408ae8e362e0ab6eeab739196b03634f06c4fda0726adc2b346903709c
+        dest: .dub/packages/ddcurl/f9598ff6c8f146966143bedcdd0c205fd477da99/ddcurl
         strip-components: 1
 
       - type: archive
