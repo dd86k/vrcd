@@ -38,10 +38,13 @@ private enum : ushort
 /// the reconnect backoff is allowed to reset.
 private enum Duration STABLE_CONNECTION = dur!"seconds"(60);
 
-/// The pipeline drops us two minutes into any quiet stretch, libcurl's
-/// auto-PONG notwithstanding, so we PING well inside that.
-/// Doubles as the receive poll timeout, since a PING can only go out between
-/// receives.
+/// The pipeline PINGs every 15s, yet drops us (code 52, no close frame) two
+/// minutes into any stretch without a data frame. libcurl swallows those PINGs:
+/// none ever surfaces from curl_ws_recv (no flags=10 frame, only a wake with
+/// no frame), and whatever it does about the PONG does not keep us connected.
+/// Our own PING does, so do not drop it on the grounds that the pipeline
+/// already PINGs. Doubles as the receive poll timeout, since a PING can only
+/// go out between receives.
 private enum Duration KEEPALIVE_INTERVAL = dur!"seconds"(15);
 
 /// Human-readable description for an RFC 6455 close code.

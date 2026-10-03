@@ -25,6 +25,7 @@ Rules:
 
 ### Server
 
+- Fix the VRChat connection dropping every two minutes while no events arrive.
 - Reconnects to VRChat faster (2 seconds instead of 30).
 - Friend state is refreshed every 30 minutes instead of every 2 hours, and
   after a long disconnect.
