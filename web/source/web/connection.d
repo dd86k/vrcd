@@ -1126,17 +1126,22 @@ class ServerLink
     }
 
     /// Answer a notification: `accept` or `hide` on a v1 one, `respond` or
-    /// `hide` on a v2 one. Safe to call from an HTTP thread; the reply
-    /// arrives asynchronously as a `notification_action_result`.
+    /// `hide` on a v2 one, `boop` on either kind of boop. Safe to call from an
+    /// HTTP thread; the reply arrives asynchronously as a
+    /// `notification_action_result`.
     ///
     /// Params:
     ///   notificationId = Notification to act on.
-    ///   action = "accept", "hide", or "respond".
+    ///   action = "accept", "hide", "respond", or "boop".
     ///   apiVersion = Which notification system it belongs to, 1 or 2.
     ///   responseType = Which of its responses was pressed ("respond" only).
     ///   responseData = That response's opaque payload, sent back with it.
+    ///   userId = Who to boop back ("boop" only).
+    ///   emojiId = What to boop with, `default_<name>` or a file ID.
+    ///   emojiVersion = The file's version, for a file emoji.
     void requestNotificationAction(string notificationId, string action,
-        int apiVersion = 1, string responseType = null, string responseData = null)
+        int apiVersion = 1, string responseType = null, string responseData = null,
+        string userId = null, string emojiId = null, long emojiVersion = 0)
     {
         // A fake notification has nowhere to go: VRChat has never heard of it,
         // and sending it down the link would only come back a 404. Answering
@@ -1160,6 +1165,9 @@ class ServerLink
             "api_version":     JSONValue(apiVersion),
             "response_type":   JSONValue(responseType),
             "response_data":   JSONValue(responseData),
+            "user_id":         JSONValue(userId),
+            "emoji_id":        JSONValue(emojiId),
+            "emoji_version":   JSONValue(emojiVersion),
         ])))
             return;
 

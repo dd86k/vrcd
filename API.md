@@ -58,6 +58,7 @@ Protocol versions:
 - `11` = filtered inventory listings (`get_inventory` takes `types`, `not_types` and `not_flags`; `inventory` echoes them)
 - `12` = events ordered by time (`catch_up` takes an `epoch`, `caught_up` carries it, `events_reset` when history was rewritten)
 - `13` = imports (`import_begin`, `import_events`, `import_end`, `import_abort`, `get_imports`, `import_undo`)
+- `14` = boop replies (`notification_action` takes `boop`)
 
 **Failure:**
 ```json
@@ -228,17 +229,23 @@ The two notification systems share no endpoints, so `api_version` decides which 
 | `accept`   | `PUT auth/user/notifications/{id}/accept`   | rejected: use `respond`        |
 | `hide`     | `PUT auth/user/notifications/{id}/hide`     | `DELETE notifications/{id}`    |
 | `respond`  | rejected: v1 notifications have no responses | `POST notifications/{id}/respond` |
+| `boop`     | `POST users/{user_id}/boop`, then hide      | same, then hide                |
 
 For `hide`, HTTP 404 is treated as success: the notification is already gone, which is the desired end state.
+
+A `boop` answers a boop with one of your own rather than posting the notification's `boop` response back, since what VRChat does with that response is undocumented. The notification is dismissed afterwards, because VRChat leaves an answered boop in the inbox; `success` reports the boop, and a failed dismiss only leaves the row behind. Requires `server_version >= 14`.
 
 | Field             | Type   | Description                                                        |
 |-------------------|--------|--------------------------------------------------------------------|
 | `type`            | string | `"notification_action"`                                            |
 | `notification_id` | string | Notification ID (`not_...`)                                        |
-| `action`          | string | One of `"accept"`, `"hide"`, `"respond"`                           |
+| `action`          | string | One of `"accept"`, `"hide"`, `"respond"`, `"boop"`                 |
 | `api_version`     | int    | Which system it belongs to, `1` or `2`. Absent means `1`           |
 | `response_type`   | string | On `respond`: which of the entry's `responses` was pressed         |
 | `response_data`   | string | On `respond`: that response's `data`, sent back verbatim           |
+| `user_id`         | string | On `boop`: who to boop, the notification's `sender_user_id`         |
+| `emoji_id`        | string | On `boop`: `default_<name>` for a built-in emoji, or a `file_...` ID. Absent is a plain boop |
+| `emoji_version`   | int    | On `boop`: the file's version, for a `file_...` emoji              |
 
 ### `set_status`
 

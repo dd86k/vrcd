@@ -857,7 +857,20 @@ private void eventLoop(mu_Context* uictx)
             if (conn && appState.connected)
             {
                 foreach (ref NotificationAction act; appState.pendingActions)
+                {
+                    // An injected test notification is unknown to VRChat, and
+                    // a test boop would go to a user ID that was made up.
+                    // Answered here, like a test moderation.
+                    if (act.notificationId.startsWith("test_"))
+                    {
+                        appState.removeNotification(act.notificationId);
+                        appState.addFeedEntry(0, "system", "",
+                            "Test notification (" ~ act.action ~ "), not sent",
+                            timeNow(), "", false, EventSource.system);
+                        continue;
+                    }
                     conn.sendNotificationAction(act);
+                }
             }
             appState.pendingActions.length = 0;
         }
@@ -1024,6 +1037,21 @@ private void eventLoop(mu_Context* uictx)
                     appState.invExclusiveLoading[sec] = true;
                     appState.invExclusiveError[sec] = null;
                 }
+                appState.invLoading[sec] = true;
+                appState.invStale[sec] = false;
+                appState.invError[sec] = null;
+            }
+        }
+
+        // The boop picker draws the account's emoji, which is the STUFF
+        // section of the same name whichever section that tab is showing.
+        if (appState.boopEmojiRequested)
+        {
+            appState.boopEmojiRequested = false;
+            int sec = cast(int) InvSection.emoji;
+            if (conn && appState.connected && appState.invLoading[sec] == false)
+            {
+                conn.requestFiles("emoji", 60, 0);
                 appState.invLoading[sec] = true;
                 appState.invStale[sec] = false;
                 appState.invError[sec] = null;

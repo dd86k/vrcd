@@ -156,10 +156,13 @@ enum Tab { feed, online, notifications, inventory, tools, profile, settings }
 struct NotificationAction
 {
     string notificationId; // VRChat notification ID (not_...)
-    string action;         // "accept", "hide", or "respond"
+    string action;         // "accept", "hide", "respond", or "boop"
     int apiVersion = 1;    // Which notification system answers it, 1 or 2
     string responseType;   // Which response was pressed ("respond" only)
     string responseData;   // That response's opaque payload
+    string userId;         // Who to boop back ("boop" only)
+    string emojiId;        // default_<name> or file_..., empty for a plain boop
+    long emojiVersion;
 }
 
 /// A notification entry (friend request, group invite, announcement, ...).
@@ -415,6 +418,15 @@ struct AppState
     // Notifications tab
     NotificationEntry[] notifications;
     NotificationAction[] pendingActions;
+
+    // Boop-back picker, a subpage of the notifications tab. An empty
+    // boopEmojiId is a plain boop.
+    bool boopOpen;
+    NotificationInfo boopTarget;
+    string boopEmojiId;
+    long boopEmojiVersion;
+    string boopEmojiLabel;
+    bool boopEmojiRequested;    // UI asks gui.d for the emoji files listing
 
     // Instance locations queued for a "Self-Invite" join, drained by gui.d.
     string[] pendingJoins;

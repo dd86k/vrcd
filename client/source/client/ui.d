@@ -20,7 +20,7 @@ import client.notifications : notifyEventLabels, feedEventLabels, feedFilterSect
     feedEventIndex, prettyEventType;
 import client.imagecache : imageKey, getIconId;
 import client.renderer : window_width, window_height;
-import client.connection : PROTOCOL_MODERATION, PROTOCOL_PROFILES;
+import client.connection : PROTOCOL_BOOP, PROTOCOL_MODERATION, PROTOCOL_PROFILES;
 import client.gui : wasClick, requestRepaint;
 import client.state;
 import client.stream : tlsAvailable;
@@ -59,8 +59,8 @@ private bool tabInSubpage(AppState* state, Tab tab)
         case tools:         return state.toolsPage != ToolsPage.main;
         // Somebody else's profile is the subpage; your own is the root.
         case profile:       return state.profileUserId.length > 0;
+        case notifications: return state.boopOpen;
         case online:
-        case notifications:
         case settings:      return false;
     }
 }
@@ -75,8 +75,8 @@ private void resetTabSubpage(AppState* state, Tab tab)
         case inventory:     state.invDetailOpen = false;     break;
         case tools:         state.toolsPage = ToolsPage.main; break;
         case profile:       state.profileUserId = null;      break;
+        case notifications: state.boopOpen = false;          break;
         case online:
-        case notifications:
         case settings:      break;
     }
     state.armedConfirm = ArmedConfirm.init;
@@ -2391,6 +2391,12 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
     enum int actionSize = 64;   // square, and big enough to hit in VR
     enum lineColor = mu_Color(50, 50, 60, 255);
 
+    if (state.boopOpen)
+    {
+        drawBoopPage(ctx, state, scrollDelta);
+        return;
+    }
+
     mu_begin_panel(ctx, "NotificationsPanel");
 
     applyScroll(ctx, scrollDelta);
@@ -2487,7 +2493,16 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
                 // this build's Dismiss on top of them.
                 bool ownDismiss = n.info.canDelete && hasOwnDismiss(n.info) == false;
 
-                int buttons = cast(int) n.info.responses.length;
+                // Answering a boop is sending one, so the picker takes the
+                // place of VRChat's own reply rather than sitting beside it.
+                bool canBoop = boopable(n.info, state);
+
+                int buttons = canBoop ? 1 : 0;
+                foreach (ref NotificationResponse response; n.info.responses)
+                {
+                    if (canBoop == false || isBoopResponse(response) == false)
+                        ++buttons;
+                }
                 if (ownAccept)
                     ++buttons;
                 if (ownDismiss)
@@ -2583,8 +2598,27 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
 
                     const(char)[] hoverLabel;
 
+                    if (canBoop)
+                    {
+                        if (iconButton(ctx, ActionIcon.reply,
+                            iconTint(ActionIcon.reply), "Boop back", hoverLabel))
+                        {
+                            state.boopOpen = true;
+                            state.boopTarget = n.info;
+                            state.boopEmojiId = null;
+                            state.boopEmojiVersion = 0;
+                            state.boopEmojiLabel = null;
+                            if (state.invLoaded[InvSection.emoji] == false
+                                || state.invStale[InvSection.emoji])
+                                state.boopEmojiRequested = true;
+                            requestRepaint();
+                        }
+                    }
+
                     foreach (ref NotificationResponse response; n.info.responses)
                     {
+                        if (canBoop && isBoopResponse(response))
+                            continue;
                         ActionIcon icon = responseIcon(response);
                         // Not response.text: VRChat writes that as a sentence
                         // ("Acknowledge and dismiss this notification"), which
@@ -2802,6 +2836,171 @@ private bool hasOwnDismiss(ref const(NotificationInfo) info)
 
 /// Ink for an icon that is neither a yes nor a no.
 private enum mu_Color actionPlainTint = mu_Color(205, 210, 220, 255);
+
+/// VRChat's built-in emoji. Not API data -- no listing, no artwork -- only
+/// names the game knows, which a boop takes as `default_<name>`. Mirrors
+/// `BOOP_EMOJI` in the web front-end.
+private immutable string[] BOOP_EMOJI = [
+    "Angry", "Blushing", "Crying", "Frown", "Hand Wave", "Hang Ten", "In Love",
+    "Jack O Lantern", "Kiss", "Laugh", "Skull", "Smile", "Spooky Ghost",
+    "Stoic", "Sunglasses", "Thinking", "Thumbs Down", "Thumbs Up",
+    "Tongue Out", "Wow", "Arrow Point", "Can't see", "Hourglass", "Keyboard",
+    "No Headphones", "No Mic", "Portal", "Shush", "Bats", "Cloud", "Fire",
+    "Snow Fall", "Snowball", "Splash", "Web", "Beer", "Candy", "Candy Cane",
+    "Candy Corn", "Champagne", "Drink", "Gingerbread", "Ice Cream",
+    "Pineapple", "Pizza", "Tomato", "Beachball", "Coal", "Confetti", "Gift",
+    "Gifts", "Life Ring", "Mistletoe", "Money", "Neon Shades", "Sun Lotion",
+    "Boo", "Broken Heart", "Exclamation", "Go", "Heart", "Music Note",
+    "Question", "Stop", "Zzz",
+];
+
+/// `default_` plus the name lowercased with spaces as underscores.
+private string boopEmojiId(string name) pure
+{
+    import std.string : replace, toLower;
+    return "default_" ~ name.toLower.replace(" ", "_");
+}
+
+private string[] boopEmojiIds() pure
+{
+    string[] ids;
+    foreach (string name; BOOP_EMOJI)
+        ids ~= boopEmojiId(name);
+    return ids;
+}
+
+/// Worked out once, since the picker draws every one of them each frame.
+private immutable string[] BOOP_EMOJI_IDS = boopEmojiIds();
+
+unittest
+{
+    assert(boopEmojiId("Thumbs Up") == "default_thumbs_up");
+    assert(boopEmojiId("Can't see") == "default_can't_see");
+}
+
+/// Whether a notification is a boop this build can answer with one: from a
+/// person, and to a server that knows how to send it. Below that the row
+/// keeps VRChat's own reply button.
+private bool boopable(ref const(NotificationInfo) info, AppState* state)
+{
+    import std.string : startsWith;
+    // A test boop is answered by the client, whatever the server speaks.
+    return info.notificationType == "boop"
+        && info.senderUserId.startsWith("usr_")
+        && (state.serverProtocol >= PROTOCOL_BOOP || info.id.startsWith("test_"));
+}
+
+private bool isBoopResponse(ref const(NotificationResponse) response)
+{
+    return response.type == "boop" || response.icon == "reply";
+}
+
+/// The boop-back picker, a subpage of the notifications tab. A press selects
+/// and only Boop sends, as with the status picker: a mis-tap in a grid of
+/// sixty-odd names would otherwise reach somebody.
+private void drawBoopPage(mu_Context* ctx, AppState* state, int scrollDelta)
+{
+    static immutable int[1] fullCol = [-1];
+    enum mu_Color selectedColor = mu_Color(90, 140, 220, 255);
+
+    mu_begin_panel(ctx, "BoopPanel");
+    applyScroll(ctx, scrollDelta);
+    mu_Container* panel = mu_get_current_container(ctx);
+    int bodyW = panel.body_.w;
+
+    NotificationInfo* target = &state.boopTarget;
+    string who = target.senderName.length > 0 ? target.senderName : target.senderUserId;
+
+    char[160] titleBuf = void;
+    mu_layout_row(ctx, 1, fullCol.ptr, 0);
+    mu_label(ctx, cast(string) sformat(titleBuf, "Boop %s back", who));
+
+    // Up top, so the button that sends is never scrolled away from.
+    char[96] sendBuf = void;
+    mu_layout_row(ctx, 1, fullCol.ptr, 64);
+    string sendLabel = state.boopEmojiLabel.length > 0
+        ? cast(string) sformat(sendBuf, "Boop: %s", state.boopEmojiLabel)
+        : "Boop";
+    if (clickButton(ctx, sendLabel) && state.connected)
+    {
+        NotificationAction act = NotificationAction(target.id, "boop",
+            target.apiVersion);
+        act.userId = target.senderUserId;
+        act.emojiId = state.boopEmojiId;
+        act.emojiVersion = state.boopEmojiVersion;
+        state.pendingActions ~= act;
+        foreach (ref NotificationEntry n; state.notifications)
+        {
+            if (n.info.id == target.id)
+                n.actionPending = true;
+        }
+        setStatusFlash(state, "  Booping...");
+        state.boopOpen = false;
+        requestRepaint();
+    }
+
+    int sec = cast(int) InvSection.emoji;
+    ContentFile[] mine = state.invFiles[sec];
+    if (mine.length > 0 || state.invLoading[sec])
+    {
+        groupHeading(ctx, "Your emoji");
+        if (mine.length == 0)
+        {
+            mu_layout_row(ctx, 1, fullCol.ptr, 0);
+            mu_label(ctx, "Loading...");
+        }
+        size_t cell;
+        foreach (ref ContentFile f; mine)
+        {
+            if (f.fileVersion <= 0)
+                continue;
+            gridRow(ctx, cell++, bodyW);
+            if (imageCell(ctx, state, panel, f.fileId, f.fileVersion, f.name))
+            {
+                state.boopEmojiId = f.fileId;
+                state.boopEmojiVersion = f.fileVersion;
+                state.boopEmojiLabel = f.name.length > 0 ? f.name : "emoji";
+                requestRepaint();
+            }
+            if (state.boopEmojiId == f.fileId)
+                mu_draw_box(ctx, ctx.last_rect, selectedColor);
+        }
+    }
+
+    groupHeading(ctx, "Built-in");
+
+    int columns = bodyW / 180;
+    if (columns < 2)
+        columns = 2;
+    if (columns > 8)
+        columns = 8;
+    int[8] cols;
+    int cellW = bodyW / columns - ctx.style.spacing;
+    foreach (int c; 0 .. columns)
+        cols[c] = cellW;
+    cols[columns - 1] = -1;
+
+    // Index 0 is the plain boop, which sends no emoji at all.
+    foreach (size_t i; 0 .. BOOP_EMOJI.length + 1)
+    {
+        if (i % columns == 0)
+            mu_layout_row(ctx, columns, cols.ptr, 56);
+
+        string name = i == 0 ? "Plain boop" : BOOP_EMOJI[i - 1];
+        string id = i == 0 ? null : BOOP_EMOJI_IDS[i - 1];
+        if (clickButton(ctx, name))
+        {
+            state.boopEmojiId = id;
+            state.boopEmojiVersion = 0;
+            state.boopEmojiLabel = i == 0 ? null : name;
+            requestRepaint();
+        }
+        if (state.boopEmojiId == id)
+            mu_draw_box(ctx, ctx.last_rect, selectedColor);
+    }
+
+    mu_end_panel(ctx);
+}
 
 /// Ink for an icon: yes is green, the two ways of saying no are red, and
 /// everything else is plain. Colour is doing the same work the words used
@@ -3598,30 +3797,51 @@ private void drawToolsTab(mu_Context* ctx, AppState* state, int scrollDelta)
     mu_layout_row(ctx, COLCOUNT, fullCol.ptr, 60);
     if (clickButton(ctx, "Inject Test Notification"))
     {
-        import std.datetime.systime : Clock;
-        import std.conv : to;
-        // Synthetic id with "test_" prefix so the server-bound action would
-        // be a no-op if accidentally dispatched, and unique per click so the
-        // dedup in addNotification doesn't swallow repeats.
-        string stamp = to!string(Clock.currTime.toUnixTime!long());
-        string id = "test_" ~ stamp;
-        NotificationInfo test;
-        test.id = id;
+        NotificationInfo test = testNotification();
+        // Block's arm-and-confirm is the hardest part of the inbox to get in
+        // front of, since a real friend request arrives when somebody sends one.
         test.notificationType = "friendRequest";
-        // An invented sender, so the row draws its Block button and the
-        // arm-and-confirm can be walked through -- that flow is the hardest
-        // part of the inbox to get in front of, since a real friend request
-        // arrives when somebody sends one. The "usr_test_" prefix keeps the
-        // moderation inside the client (see the drain in gui.d): there is
-        // nobody behind this ID for VRChat to be asked about.
-        test.senderUserId = "usr_test_" ~ stamp;
-        test.senderName = "TestUser";
         test.message = "Synthetic friend request";
-        test.receivedAtUnix = Clock.currTime.toUnixTime!long();
+        state.addNotification(test);
+    }
+    if (clickButton(ctx, "Inject Test Boop"))
+    {
+        // A v2 boop, so BOOP BACK replaces its reply response and the picker
+        // can be walked through without waiting on somebody to boop you.
+        NotificationInfo test = testNotification();
+        test.apiVersion = 2;
+        test.notificationType = "boop";
+        test.title = "TestUser booped you!";
+        test.responses = [
+            NotificationResponse("boop", "Boop back", "reply", ""),
+            NotificationResponse("delete", "Delete", "delete", ""),
+        ];
         state.addNotification(test);
     }
 
     mu_end_panel(ctx);
+}
+
+/// A synthetic notification for the Diagnostics buttons. The "test_" ID
+/// prefix is what gui.d answers locally instead of sending, and the stamp
+/// keeps the dedup in addNotification from swallowing repeats.
+private NotificationInfo testNotification()
+{
+    import std.datetime.systime : Clock;
+    import std.conv : to;
+
+    long now = Clock.currTime.toUnixTime!long();
+    string stamp = to!string(now);
+    NotificationInfo test;
+    test.id = "test_" ~ stamp;
+    // An invented sender, so the row draws its Block button and the
+    // arm-and-confirm can be walked through. The "usr_test_" prefix keeps the
+    // moderation inside the client (see the drain in gui.d): there is nobody
+    // behind this ID for VRChat to be asked about.
+    test.senderUserId = "usr_test_" ~ stamp;
+    test.senderName = "TestUser";
+    test.receivedAtUnix = now;
+    return test;
 }
 
 /// Strip metadata sub-page: drop PNGs, batch-strip iTXt chunks.

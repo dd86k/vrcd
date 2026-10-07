@@ -13,7 +13,7 @@ import core.sync.condition;
 import std.json;
 import std.conv : to;
 import std.socket;
-import std.string : strip, startsWith;
+import std.string : indexOf, strip, startsWith;
 
 import ddlogger;
 import ddcurl;
@@ -51,8 +51,9 @@ import vrcd.vrcx;
 /// `not_types` and `not_flags`; `inventory` echoes them),
 /// 12 = events ordered by time (`catch_up` takes an `epoch`, `caught_up`
 /// carries it, `events_reset` when history was rewritten),
-/// 13 = imports (`import_begin`, `import_events`, `import_end`, `import_abort`, `get_imports`, `import_undo`).
-private enum int PROTOCOL_VERSION = 13;
+/// 13 = imports (`import_begin`, `import_events`, `import_end`, `import_abort`, `get_imports`, `import_undo`),
+/// 14 = boop replies (`notification_action` takes `boop`).
+private enum int PROTOCOL_VERSION = 14;
 
 /// Shortest gap between two re-seed passes. A pass paginates the whole
 /// friends list, so this is what keeps a reconnect storm -- or somebody
@@ -2200,6 +2201,21 @@ private class ClientHandler
             if (v.type == JSONType.string)
                 responseData = v.str;
 
+        // A boop is answered with a boop of our own, sent to the person rather
+        // than posted back to the notification: VRCX does the same, and what
+        // VRChat makes of a `boop` response type is documented nowhere.
+        string userId, emojiId;
+        long emojiVersion;
+        if (const(JSONValue)* v = "user_id" in msg)
+            if (v.type == JSONType.string)
+                userId = v.str;
+        if (const(JSONValue)* v = "emoji_id" in msg)
+            if (v.type == JSONType.string)
+                emojiId = v.str;
+        if (const(JSONValue)* v = "emoji_version" in msg)
+            if (v.type == JSONType.integer)
+                emojiVersion = v.integer;
+
         if (notifId.length == 0 || action.length == 0)
         {
             sendError("Missing notification_id or action");
@@ -2216,6 +2232,17 @@ private class ClientHandler
         // endpoints: v1 hides with a PUT, v2 deletes, and only v2 responds.
         string path;
         string method = "PUT";
+        string hidePath, hideMethod;
+        if (apiVersion >= 2)
+        {
+            hidePath = "/notifications/" ~ notifId;
+            hideMethod = "DELETE";
+        }
+        else
+        {
+            hidePath = "/auth/user/notifications/" ~ notifId ~ "/hide";
+            hideMethod = "PUT";
+        }
         switch (action)
         {
             case "accept":
@@ -2227,13 +2254,19 @@ private class ClientHandler
                 path = "/auth/user/notifications/" ~ notifId ~ "/accept";
                 break;
             case "hide":
-                if (apiVersion >= 2)
+                path = hidePath;
+                method = hideMethod;
+                break;
+            case "boop":
+                // The sender ends up in a path, and a group notification puts
+                // a `grp_` ID where the person would be.
+                if (userId.startsWith("usr_") == false || userId.indexOf('/') >= 0)
                 {
-                    path = "/notifications/" ~ notifId;
-                    method = "DELETE";
+                    sendError("A boop needs a user_id");
+                    return;
                 }
-                else
-                    path = "/auth/user/notifications/" ~ notifId ~ "/hide";
+                path = "/users/" ~ userId ~ "/boop";
+                method = "POST";
                 break;
             case "respond":
                 if (apiVersion < 2)
@@ -2277,10 +2310,21 @@ private class ClientHandler
                     resp = server.httpClient.del(path);
                     break;
                 case "POST":
-                    JSONValue payload = JSONValue([
-                        "responseType": JSONValue(responseType),
-                        "responseData": JSONValue(responseData),
-                    ]);
+                    JSONValue payload;
+                    if (action == "boop")
+                    {
+                        // No emoji at all is a plain boop, which VRChat takes.
+                        payload = JSONValue.emptyObject;
+                        if (emojiId.length)
+                            payload["emojiId"] = JSONValue(emojiId);
+                        if (emojiVersion > 0)
+                            payload["emojiVersion"] = JSONValue(emojiVersion);
+                    }
+                    else
+                        payload = JSONValue([
+                            "responseType": JSONValue(responseType),
+                            "responseData": JSONValue(responseData),
+                        ]);
                     resp = server.httpClient.postJSON(path, payload.toString());
                     break;
                 default:
@@ -2300,6 +2344,22 @@ private class ClientHandler
             if (success == false && action == "hide" && resp.code == 404)
                 success = true;
 
+            // VRChat leaves an answered boop in the inbox, so it is dismissed
+            // here. Best effort: the boop went, which is what the result
+            // reports, and a row left behind is one dismiss away.
+            bool resolved = success;
+            if (success && action == "boop")
+            {
+                HTTPResponse hresp = hideMethod == "DELETE" ?
+                    server.httpClient.del(hidePath) :
+                    server.httpClient.putJSON(hidePath);
+                logDebugging("handleNotificationAction: VRC %s %s -> HTTP %d",
+                    hideMethod, hidePath, hresp.code);
+                if (server.rateLimiter)
+                    server.rateLimiter.update(hresp);
+                resolved = (hresp.code >= 200 && hresp.code < 300) || hresp.code == 404;
+            }
+
             JSONValue result = JSONValue([
                 "type": JSONValue("notification_action_result"),
                 "notification_id": JSONValue(notifId),
@@ -2314,7 +2374,7 @@ private class ClientHandler
             // hide/response echo arrives whenever it arrives, and the other
             // front-ends should stop offering buttons for an answered
             // notification immediately.
-            if (success && server.notificationsTracker.remove([ notifId ]))
+            if (resolved && server.notificationsTracker.remove([ notifId ]))
                 server.broadcastNotificationsSnapshot();
         }
         catch (Exception e)

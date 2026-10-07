@@ -309,7 +309,8 @@ int main(string[] args)
             // notification_action_result and reaches the page in the next
             // broadcast, which also drops the row.
             link.requestNotificationAction(notify.id, notify.action,
-                notify.apiVersion, notify.responseType, notify.responseData);
+                notify.apiVersion, notify.responseType, notify.responseData,
+                notify.userId, notify.emojiId, notify.emojiVersion);
             req.replyJSON(HTTPStatus.ok, `{"requested":true}`);
             return REQUEST_OK;
         })
@@ -695,10 +696,13 @@ private string joinLocation(ubyte[] payload)
 private struct NotifyRequest
 {
     string id;
-    string action;       /// "accept", "hide", or "respond".
+    string action;       /// "accept", "hide", "respond", or "boop".
     int apiVersion = 1;  /// Which notification system it belongs to.
     string responseType; /// Which button was pressed ("respond" only).
     string responseData; /// That button's opaque payload.
+    string userId;       /// Who to boop back ("boop" only).
+    string emojiId;      /// What to boop with; empty is a plain boop.
+    long emojiVersion;
 }
 
 /// Pull a notification answer out of a /api/notification request body.
@@ -736,6 +740,15 @@ private bool notificationAction(ubyte[] payload, out NotifyRequest notify)
     if (const(JSONValue) *v = "response_data" in body_)
         if (v.type == JSONType.string)
             notify.responseData = v.str;
+    if (const(JSONValue) *v = "user_id" in body_)
+        if (v.type == JSONType.string)
+            notify.userId = v.str;
+    if (const(JSONValue) *v = "emoji_id" in body_)
+        if (v.type == JSONType.string)
+            notify.emojiId = v.str;
+    if (const(JSONValue) *v = "emoji_version" in body_)
+        if (v.type == JSONType.integer)
+            notify.emojiVersion = v.integer;
 
     if (notify.id.length == 0)
         return false;
@@ -743,6 +756,8 @@ private bool notificationAction(ubyte[] payload, out NotifyRequest notify)
     // this only keeps a typo from becoming a round trip.
     if (notify.action == "respond")
         return notify.responseType.length > 0;
+    if (notify.action == "boop")
+        return notify.userId.length > 0;
     return notify.action == "accept" || notify.action == "hide";
 }
 

@@ -42,6 +42,10 @@ enum long PROTOCOL_PROFILES = 7;
 /// stickers and emoji are told apart from the props in the Items section.
 enum long PROTOCOL_INVENTORY_FILTER = 11;
 
+/// Minimum server protocol version for answering a boop with one
+/// (`notification_action` with `boop`).
+enum long PROTOCOL_BOOP = 14;
+
 /// How many events to ask a catch-up for.
 ///
 /// The feed keeps `FEED_CAPACITY` entries and back-fills the rest a page at a
@@ -342,9 +346,9 @@ class ServerConnection
     }
 
     /// Answer a notification: `accept` or `hide` on a v1 one, `respond` or
-    /// `hide` on a v2 one. The response fields are empty except on a
-    /// `respond`, where they name which of the notification's own buttons
-    /// was pressed.
+    /// `hide` on a v2 one, `boop` on either kind of boop. The response fields
+    /// are empty except on a `respond`, where they name which of the
+    /// notification's own buttons was pressed; the boop fields likewise.
     void sendNotificationAction(ref NotificationAction act)
     {
         logDebugging("sendNotificationAction: id=%s action=%s v%d response=%s",
@@ -356,6 +360,9 @@ class ServerConnection
             "api_version": JSONValue(act.apiVersion),
             "response_type": JSONValue(act.responseType),
             "response_data": JSONValue(act.responseData),
+            "user_id": JSONValue(act.userId),
+            "emoji_id": JSONValue(act.emojiId),
+            "emoji_version": JSONValue(act.emojiVersion),
         ]));
     }
 

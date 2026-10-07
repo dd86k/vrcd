@@ -14,9 +14,10 @@
 ///
 /// The catalogue covers every shape `notifyCard` can draw, because the point is
 /// to see the unusual ones: a v1 type from the table, a v1 type that answers by
-/// joining, a v1 type that cannot be answered at all, a v2 type carrying its own
-/// buttons, a v2 type carrying none, one VRChat says it will clear itself (so no
-/// buttons at all), and one of a type nobody has written code for.
+/// joining, a v1 type that cannot be answered at all, a boop (whose reply opens a
+/// picker), a v2 type carrying its own buttons, a v2 type carrying none, one
+/// VRChat says it will clear itself (so no buttons at all), and one of a type
+/// nobody has written code for.
 ///
 /// Off unless asked for: `--debug`, or `VRCD_WEB_DEBUG` in the environment.
 /// With it off none of this is reachable -- the route is not registered, the
@@ -183,6 +184,8 @@ immutable DebugFake[] DEBUG_FAKES = [
         "A v1 invite carrying a location, so the row offers JOIN WORLD."),
     DebugFake("request_invite", "INVITE REQUEST",
         "A v1 type that cannot be answered from here: dismiss and a note."),
+    DebugFake("boop", "BOOP",
+        "A v2 boop, whose reply opens the emoji picker instead of posting back."),
     DebugFake("group_invite", "GROUP INVITE",
         "A v2 notification drawing its buttons from its own responses."),
     DebugFake("group_announcement", "ANNOUNCEMENT",
@@ -241,6 +244,16 @@ NotificationInfo buildFakeNotification(string action, long seq)
     case "request_invite":
         info.notificationType = "requestInvite";
         info.message = "would like an invite";
+        break;
+
+    case "boop":
+        info.apiVersion = 2;
+        info.notificationType = "boop";
+        info.title = sender.displayName ~ " booped you!";
+        info.responses = [
+            NotificationResponse("boop", "Boop back", "reply", ""),
+            NotificationResponse("delete", "Delete", "delete", ""),
+        ];
         break;
 
     case "group_invite":
@@ -304,6 +317,19 @@ unittest
 
     // The one worth having comes first.
     assert(DEBUG_FAKES[0].action == "friend_request");
+}
+
+unittest
+{
+    // The page only offers BOOP BACK for a boop from a person, and swaps it
+    // in for VRChat's own reply response.
+    NotificationInfo boop = buildFakeNotification("boop", 1);
+    assert(boop.notificationType == "boop");
+    assert(boop.apiVersion == 2);
+    assert(startsWith(boop.senderUserId, "usr_"));
+    assert(boop.responses.length == 2);
+    assert(boop.responses[0].type == "boop");
+    assert(boop.responses[0].icon == "reply");
 }
 
 unittest

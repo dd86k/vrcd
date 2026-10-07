@@ -1,4 +1,4 @@
-/* vrcd front-end.
+card.appendChild(el("div", "why", "Loading..."));/* vrcd front-end.
  *
  * The page is a shell: a tab rail, a list column, and a detail pane. State
  * arrives as a full snapshot over the WebSocket and the whole shell redraws
@@ -140,7 +140,8 @@ function responseLabel(response) {
 
 /* What to say once one went through. Keyed by the action, not the response:
    which button of a group invite was pressed is the server's business. */
-var NOTIFY_DONE = { accept: "Accepted", hide: "Dismissed", respond: "Answered" };
+var NOTIFY_DONE = { accept: "Accepted", hide: "Dismissed", respond: "Answered",
+                   boop: "Booped back" };
 
 /* The picture on a v2 response's button, by response type. The type is the
    action - it is what gets posted back - so it picks the icon, the same way
@@ -885,6 +886,17 @@ function notifyCard(entry) {
        friend-request endpoint. So when there are responses they replace the
        table's buttons rather than joining them. */
     var actions = el("div", "actions");
+    if (boopable(entry)) {
+        var back = iconAct("act primary", "BOOP BACK", "i-reply",
+            function () { openBoop(entry, who); });
+        back.disabled = busy;
+        actions.appendChild(back);
+        // VRChat's own reply is the one this replaces, so it is not drawn
+        // beside it.
+        responses = responses.filter(function (response) {
+            return isBoopResponse(response) === false;
+        });
+    }
     if (responses.length) {
         responses.forEach(function (response) {
             actions.appendChild(notifyButton(entry, "respond",
@@ -1813,6 +1825,7 @@ function loadContent(section, mode) {
     }).then(function () {
         contentInFlight[section] = false;
         if (view.tab === "stuff") { renderList(); renderDetail(); }
+        if (section === "emoji") buildBoop();
         if (contentDirty[section]) loadContent(section, "");
     });
 }
@@ -4201,25 +4214,30 @@ function join(location, button) {
     });
 }
 
-function notifyAct(entry, action, button, response) {
+/* `extra` is merged into the request body, which is how a boop carries who it
+   goes to and what it is. */
+function notifyAct(entry, action, button, response, extra) {
     var id = entry.id;
     // Marked in the map rather than on the button: the next snapshot redraws
     // the card from scratch and would hand back an enabled button otherwise.
     pendingNotifications[id] = true;
     var restore = markSending(button);
 
+    var body = {
+        notification_id: id,
+        action: action,
+        // Which system this notification belongs to: the endpoints for the
+        // two do not overlap, so the server has to be told.
+        api_version: entry.api_version || 1,
+        response_type: response ? response.type : "",
+        response_data: response ? response.data : ""
+    };
+    for (var key in extra) body[key] = extra[key];
+
     fetch("/api/notification", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-            notification_id: id,
-            action: action,
-            // Which system this notification belongs to: the endpoints for
-            // the two do not overlap, so the server has to be told.
-            api_version: entry.api_version || 1,
-            response_type: response ? response.type : "",
-            response_data: response ? response.data : ""
-        })
+        body: JSON.stringify(body)
     }).then(function (r) {
         if (r.ok) return;
         delete pendingNotifications[id];
@@ -4230,6 +4248,141 @@ function notifyAct(entry, action, button, response) {
         showToast("Could not reach the vrcd web server", true);
         restore();
     });
+}
+
+/* ------------------------------------------------------------ boop back */
+
+/* VRChat's built-in emoji. They are not API data -- no listing, no artwork --
+   only names the game knows, which a boop takes as `default_<name>`, lowercased
+   with spaces as underscores. So they are drawn as words. Mirrors
+   `BOOP_EMOJI` in the SDL client. */
+var BOOP_EMOJI = [
+    "Angry", "Blushing", "Crying", "Frown", "Hand Wave", "Hang Ten", "In Love",
+    "Jack O Lantern", "Kiss", "Laugh", "Skull", "Smile", "Spooky Ghost",
+    "Stoic", "Sunglasses", "Thinking", "Thumbs Down", "Thumbs Up",
+    "Tongue Out", "Wow", "Arrow Point", "Can't see", "Hourglass", "Keyboard",
+    "No Headphones", "No Mic", "Portal", "Shush", "Bats", "Cloud", "Fire",
+    "Snow Fall", "Snowball", "Splash", "Web", "Beer", "Candy", "Candy Cane",
+    "Candy Corn", "Champagne", "Drink", "Gingerbread", "Ice Cream",
+    "Pineapple", "Pizza", "Tomato", "Beachball", "Coal", "Confetti", "Gift",
+    "Gifts", "Life Ring", "Mistletoe", "Money", "Neon Shades", "Sun Lotion",
+    "Boo", "Broken Heart", "Exclamation", "Go", "Heart", "Music Note",
+    "Question", "Stop", "Zzz"
+];
+
+function boopEmojiId(name) {
+    return "default_" + name.toLowerCase().replace(/ /g, "_");
+}
+
+/* Answering a boop means sending one, which vrcd-server learned at protocol
+   14; before that the row keeps VRChat's own reply button. A fake is answered
+   by the link whatever the server speaks. */
+function boopable(entry) {
+    if (entry.notification_type !== "boop") return false;
+    if ((entry.sender_user_id || "").indexOf("usr_") !== 0) return false;
+    return entry.debug === true || state.server_version >= 14;
+}
+
+function isBoopResponse(response) {
+    return response.type === "boop" || response.icon === "reply";
+}
+
+/* The picker, open over the inbox. `choice` is what BOOP will send: null for a
+   plain boop, else { id, version, label }. A press only selects, as on the
+   status picker -- a mis-tap in a grid of sixty-odd words would otherwise
+   reach somebody. */
+var boop = null;
+
+function openBoop(entry, who) {
+    boop = { entry: entry, who: who, choice: null };
+    // The account's own emoji live in the STUFF section of the same name, and
+    // are fetched once for both.
+    if (content.emoji.fetched === false) loadContent("emoji", "");
+    buildBoop();
+}
+
+function closeBoop() {
+    if (boop === null) return;
+    boop = null;
+    var box = document.getElementById("boop");
+    box.textContent = "";
+    box.classList.add("hidden");
+}
+
+function buildBoop() {
+    if (boop === null) return;
+    var box = document.getElementById("boop");
+    var scroll = box.firstChild ? box.firstChild.scrollTop : 0;
+    box.textContent = "";
+
+    var card = el("div", "modal-card boop-card");
+    var title = el("h2", null, "Boop " + boop.who + " back");
+    title.id = "boopTitle";
+    card.appendChild(title);
+
+    function pick(choice, node) {
+        var on = boop.choice === null ? choice === null
+            : choice !== null && choice.id === boop.choice.id;
+        if (on) node.classList.add("on");
+        node.onclick = function () { boop.choice = choice; buildBoop(); };
+        return node;
+    }
+
+    var held = content.emoji;
+    var mine = held.items.filter(function (file) { return file.version > 0; });
+    if (mine.length || held.fetched === false) {
+        card.appendChild(el("label", null, "Your emoji"));
+        if (mine.length) {
+            var grid = el("div", "boop-grid");
+            mine.forEach(function (file) {
+                var cell = el("button", "boop-pic");
+                cell.title = file.name || file.id;
+                cell.setAttribute("aria-label", cell.title);
+                cell.appendChild(thumb(file, "emoji", 128, false));
+                grid.appendChild(pick({ id: file.id, version: file.version,
+                    label: cell.title }, cell));
+            });
+            card.appendChild(grid);
+        } else {
+            card.appendChild(el("div", "why", held.error || "Loading..."));
+        }
+    }
+
+    card.appendChild(el("label", null, "Built-in"));
+    var words = el("div", "boop-words");
+    words.appendChild(pick(null, el("button", "chip", "Plain boop")));
+    BOOP_EMOJI.forEach(function (name) {
+        words.appendChild(pick({ id: boopEmojiId(name), version: 0, label: name },
+            el("button", "chip", name)));
+    });
+    card.appendChild(words);
+
+    var actions = el("div", "actions");
+    var send = el("button", "act primary",
+        boop.choice ? "BOOP: " + boop.choice.label.toUpperCase() : "BOOP");
+    send.disabled = state.connected === false;
+    send.onclick = function () {
+        var entry = boop.entry, choice = boop.choice;
+        closeBoop();
+        notifyAct(entry, "boop", null, null, {
+            user_id: entry.sender_user_id,
+            emoji_id: choice ? choice.id : "",
+            emoji_version: choice ? choice.version : 0
+        });
+        renderList();
+    };
+    actions.appendChild(send);
+
+    var cancel = el("button", "act", "CANCEL");
+    cancel.onclick = closeBoop;
+    actions.appendChild(cancel);
+    card.appendChild(actions);
+
+    box.appendChild(card);
+    box.classList.remove("hidden");
+    // Rebuilt on every press, so the grid would jump back to the top under the
+    // finger that just picked something near the bottom.
+    card.scrollTop = scroll;
 }
 
 /* --------------------------------------------------------- vrchat sign-in */
@@ -4696,13 +4849,15 @@ document.getElementById("search").oninput = function (ev) {
     renderList();
 };
 
-/* Escape leaves the viewer and the crop modal but not the sign-in one: the
-   server is blocked waiting on that answer, and a stray key is not one. The
-   viewer goes first, being the one that can be opened over the other. */
+/* Escape leaves the viewer, the crop modal and the boop picker but not the
+   sign-in one: the server is blocked waiting on that answer, and a stray key
+   is not one. The viewer goes first, being the one that can be opened over the
+   others. */
 document.addEventListener("keydown", function (ev) {
     if (ev.key !== "Escape") return;
     if (viewer)    closeViewer();
     else if (crop) closeCrop();
+    else if (boop) closeBoop();
 });
 
 window.addEventListener("resize", function () {

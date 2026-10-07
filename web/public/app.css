@@ -570,6 +570,23 @@ select.note-input { padding: 0 .6rem; }
     color: var(--dim); font-size: .8rem; text-align: center; margin-bottom: 1rem;
 }
 
+/* ---- boop picker -------------------------------------------------------
+   The built-in emoji have no artwork, so they wrap as chips rather than
+   scrolling sideways like the section switcher: sixty-odd words in one row is
+   a row nobody finds anything in. */
+
+.boop-card { width: min(34rem, 100%); }
+.boop-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(4.5rem, 1fr));
+    gap: .4rem; margin-bottom: 1rem;
+}
+.boop-pic {
+    padding: .25rem; background: var(--panel); cursor: pointer;
+    border: 2px solid var(--line); border-radius: 10px;
+}
+.boop-pic.on { border-color: var(--accent-hi); background: var(--accent); }
+.boop-words { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 1rem; }
+
 /* ---- image viewer ------------------------------------------------------
    A picture on its own over the page. Under the sign-in modal (z-index 25):
    vrcd-server is blocked waiting on that prompt, so it takes the top of the
