@@ -134,12 +134,10 @@ private bool wakeRequested;
 /// the log file records it, and somebody whose client "does nothing when I
 /// double-click it" has no reason to go looking for one.
 ///
-/// SDL's own box is the whole mechanism, and it needs no SDL_Init, so it
-/// covers every failure from SDL3 itself being loaded onwards -- including a
-/// missing SDL3_ttf or SDL3_image, which are the ones realistically absent
-/// since they are packaged separately from SDL3. SDL3 core missing is the one
-/// case with no window in it, and it stays a log line: there is no toolkit
-/// left to draw with.
+/// SDL's own box needs no SDL_Init, so it covers every failure from SDL3
+/// itself being loaded onwards. With SDL3 core missing, Windows still has
+/// user32's box; Linux has no toolkit left to draw with, and gets stderr,
+/// which errors always reach (see startvrcd).
 private void showCriticalMessage(string title, string message)
 {
     import std.string : toStringz;
@@ -147,7 +145,15 @@ private void showCriticalMessage(string title, string message)
     logCritical("%s: %s", title, message);
 
     if (sdlReady == false)
+    {
+        version (Windows)
+        {
+            import core.sys.windows.windows : MessageBoxW, MB_OK, MB_ICONERROR;
+            import std.utf : toUTF16z;
+            MessageBoxW(null, toUTF16z(message), toUTF16z(title), MB_OK | MB_ICONERROR);
+        }
         return;
+    }
 
     SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, toStringz(title), toStringz(message), null);
 }
