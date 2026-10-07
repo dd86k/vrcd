@@ -32,8 +32,7 @@ void setuplogging(LogLevel loglevel, string logpath = null)
 
     if (logpath is null)
     {
-        logpath = vrcdAppDataPath( format("vrcd_%04d%02d%02d.log",
-            time.year, time.month, time.day) );
+        logpath = vrcdAppDataPath( format("vrcd_%04d%02d%02d.log", time.year, time.month, time.day) );
     }
 
     string logdir  = dirName( logpath ); // slice, no allocation
@@ -45,7 +44,40 @@ void setuplogging(LogLevel loglevel, string logpath = null)
     fileAppender.setLogLevel(loglevel);
     logAddAppender(fileAppender);
 
-    logInfo("New launch at %s", time);
+    logInfo("New launch at %s, logging to %s", time, logpath);
+}
+
+// Windows: a GUI-subsystem process only has a stderr when it was redirected.
+bool hasStderr()
+{
+    version (Windows)
+    {
+        import core.sys.windows.windows : HANDLE, GetStdHandle, GetFileType,
+            STD_ERROR_HANDLE, INVALID_HANDLE_VALUE, FILE_TYPE_UNKNOWN;
+        HANDLE h = GetStdHandle(STD_ERROR_HANDLE);
+        return h && h != INVALID_HANDLE_VALUE && GetFileType(h) != FILE_TYPE_UNKNOWN;
+    }
+    else
+        return true;
+}
+
+// Windows: no console even when launched from one, so borrow the parent's.
+bool attachConsole()
+{
+    if (hasStderr())
+        return true;
+    version (Windows)
+    {
+        import core.sys.windows.windows : AttachConsole, ATTACH_PARENT_PROCESS;
+        if (AttachConsole(ATTACH_PARENT_PROCESS) == 0)
+            return false;
+        try stderr.reopen("CONOUT$", "w");
+        catch (Exception)
+            return false;
+        return true;
+    }
+    else
+        return false;
 }
 
 void printLine(string name, const(char)[] val)
@@ -169,14 +201,20 @@ int startvrcd(string[] args)
 
     // Set up logging.
     LogLevel logLevel = verbose ? LogLevel.trace : LogLevel.info;
+    // Errors reach stderr regardless of --verbose: the log file is no help to
+    // somebody who does not know where it is, nor when it is what failed.
+    ConsoleAppender console;
+    if (verbose ? attachConsole() : hasStderr())
+    {
+        console = new ConsoleAppender();
+        console.setLogLevel(verbose ? logLevel : LogLevel.error);
+        logAddAppender(console);
+    }
     try setuplogging(logLevel, logFilePath);
     catch (Exception ex)
     {
-        // Fallback to console logging
-        ConsoleAppender logAppender = new ConsoleAppender();
-        logAppender.setLogLevel(logLevel);
-        logAddAppender(logAppender);
-        
+        if (console)
+            console.setLogLevel(logLevel);
         logWarn("Failed to init file logs: %s", ex.msg);
     }
 
