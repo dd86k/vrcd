@@ -125,6 +125,9 @@ void requestRepaint()
 }
 private bool wakeRequested;
 
+// LDC links user32 by default, DMD does not.
+version (Windows) pragma(lib, "user32");
+
 /// Put a fatal startup error on screen as well as in the log.
 ///
 /// A failure before the window exists otherwise reaches nobody: the Windows
