@@ -8,6 +8,30 @@ Rules:
 - Better to keep entries closest to the actual intent: "Server supports standard I/O"
   is clearer than "Client can start server" (37b843ed1d2d4bca6011a69dcb5e64fa581cf235).
 
+## Upcoming
+
+### Client
+
+- A missing SDL3 is now reported: a message box on Windows, stderr on Linux.
+- Errors are printed to the console. `--verbose` prints everything there,
+  starting with where the log file is.
+- Notifications tab shows how many are pending.
+- Boops can be answered with a boop, optionally with an emoji (built-in or
+  uploaded).
+
+### Server
+
+- Can send a boop in reply to one.
+
+### Web
+
+- Boops can be answered with a boop, optionally with an emoji (built-in or
+  uploaded).
+
+### API
+
+- Protocol version 14: `notification_action` takes `boop`.
+
 ## v0.3.0
 
 ### Client
