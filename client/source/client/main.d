@@ -86,40 +86,6 @@ void printLine(string name, const(char)[] val)
     writefln("%*s %s", WIDTH, name ? name : "", val);
 }
 
-version (Windows)
-{
-    import core.runtime;
-    import core.sys.windows.windows;
-    import std.string;
-    
-    // NOTE: Windows subsystem
-    //       Because SUBSYSTEM:CONSOLE spawns a console, we otherwise have to call
-    //       FreeConsole() or hide it, which isn't wrong, but since it's supposed
-    //       to be a GUI app anyway, having SUBSYSTEM:WINDOWS makes it a little
-    //       more "proper"
-    //
-    //       Using the WinMain signature is a temporary solution until we can use
-    //       D main again
-    //
-    //       Using LDC 1.41 fails because PAGESIZE is undefined in core.thread.fiber,
-    //       outside my control
-    //
-    //       The following lflags will fail under LDC (tested with 1.40)
-    //       lflags "/SUBSYSTEM:WINDOWS" "/ENTRY:mainCRTStartup" platform="windows"
-    //       libcmt.lib: Unresolved symbol ?__scrt_common_main_seh@@YAHXZ
-    extern (Windows)
-    int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
-                LPSTR lpCmdLine, int nCmdShow)
-    {
-        Runtime.initialize(); // required, crashes otherwise
-        // NOTE: Runtime.args() doesn't work because we're defining our own entrypoint
-        string[] args = split( cast(string) fromStringz(lpCmdLine) );
-        int r = startvrcd("vrcd_client.exe" ~ args); // std.getopt depends argv[0]
-        Runtime.terminate();
-        return r;
-    }
-}
-else
 int main(string[] args)
 {
     version (Posix)
@@ -186,19 +152,6 @@ int startvrcd(string[] args)
         );
         return 0;
     }
-    
-    // HACK: Hide console window on Windows
-    //       - "/SUBSYSTEM:WINDOWS" is proper but leads to linker errors
-    // TODO: WinMain wrapper to startvrcd(string args[])
-    /*
-    version (Windows)
-    {
-        import core.sys.windows.windows : ShowWindow, GetConsoleWindow, SW_HIDE, FreeConsole, FALSE;
-        if (FreeConsole() == FALSE)
-            ShowWindow(GetConsoleWindow(), SW_HIDE); // Fallback
-    }
-    */
-
     // Set up logging.
     LogLevel logLevel = verbose ? LogLevel.trace : LogLevel.info;
     // Errors reach stderr regardless of --verbose: the log file is no help to

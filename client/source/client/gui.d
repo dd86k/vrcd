@@ -131,7 +131,7 @@ version (Windows) pragma(lib, "user32");
 /// Put a fatal startup error on screen as well as in the log.
 ///
 /// A failure before the window exists otherwise reaches nobody: the Windows
-/// build is a GUI-subsystem binary (defining WinMain is what makes it one), so
+/// build is a GUI-subsystem binary (see client/dub.sdl), so
 /// there is no console to print to, and on Linux it is normally started from a
 /// launcher or the AppImage, where stderr goes nowhere the user looks. Only
 /// the log file records it, and somebody whose client "does nothing when I
