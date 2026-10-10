@@ -14,8 +14,11 @@ import ddui;
 import std.string : fromStringz;
 
 __gshared SDL_Window* window;
+// Logical size: what ddui lays out in. The surface is in physical pixels,
+// uiScale apart, so the UI's hardcoded sizes hold on any display.
 __gshared int window_width  = 960;
 __gshared int window_height = 640;
+__gshared float uiScale = 1.0f;
 
 __gshared SDL_Renderer* sdlRenderer;
 __gshared SDL_Texture*  screenTexture;
@@ -33,6 +36,9 @@ private __gshared const(SDL_PixelFormatDetails)* pixelFormat;
 // into runs per-codepoint via TTF_FontHasGlyph and rendered per-font.
 __gshared TTF_Font*[] fonts;
 
+// Font size the fonts are currently rasterized at, i.e. points * uiScale.
+private __gshared float fontPixelSize = 0.0f;
+
 enum FONT_SIZE = 16;
 __gshared int currentFontSize = FONT_SIZE;
 
@@ -47,16 +53,77 @@ void initiate_renderer(bool hardwareAccel = false)
     if (sdlRenderer is null)
         logError("SDL_CreateRenderer failed: %s", fromStringz( SDL_GetError() ));
 
-    surface = SDL_CreateSurface(window_width, window_height, SDL_PIXELFORMAT_ARGB8888);
-    if (surface is null)
-        logError("SDL_CreateSurface failed: %s", fromStringz( SDL_GetError() ));
+    r_update_metrics();
+}
 
-    screenTexture = SDL_CreateTexture(sdlRenderer, SDL_PIXELFORMAT_ARGB8888,
-        SDL_TEXTUREACCESS_STREAMING, window_width, window_height);
-    if (screenTexture is null)
-        logError("SDL_CreateTexture failed: %s", fromStringz( SDL_GetError() ));
+/// Re-read the window's pixel size and display scale, and follow them with
+/// the logical size, the backing surface and the font rasterization size.
+/// Cheap when nothing moved, so it is safe to call every frame.
+void r_update_metrics()
+{
+    float scale = SDL_GetWindowDisplayScale(window);
+    if ((scale > 0.0f) == false)
+        scale = 1.0f;
+    uiScale = scale;
 
-    clip = mu_Rect(0, 0, window_width, window_height);
+    int pw = void, ph = void;
+    if (SDL_GetWindowSizeInPixels(window, &pw, &ph) == false)
+        SDL_GetWindowSize(window, &pw, &ph);
+    if (pw < 1) pw = 1;
+    if (ph < 1) ph = 1;
+    window_width  = cast(int)(pw / scale + 0.5f);
+    window_height = cast(int)(ph / scale + 0.5f);
+
+    if (surface is null || surface.w != pw || surface.h != ph)
+    {
+        if (surface) SDL_DestroySurface(surface);
+        if (screenTexture) SDL_DestroyTexture(screenTexture);
+        surface = SDL_CreateSurface(pw, ph, SDL_PIXELFORMAT_ARGB8888);
+        if (surface is null)
+            logError("SDL_CreateSurface failed: %s", fromStringz( SDL_GetError() ));
+        screenTexture = SDL_CreateTexture(sdlRenderer, SDL_PIXELFORMAT_ARGB8888,
+            SDL_TEXTUREACCESS_STREAMING, pw, ph);
+        if (screenTexture is null)
+            logError("SDL_CreateTexture failed: %s", fromStringz( SDL_GetError() ));
+    }
+    clip = mu_Rect(0, 0, pw, ph);
+
+    float wantFont = currentFontSize * scale;
+    if (fonts.length > 0 && wantFont != fontPixelSize)
+    {
+        foreach (TTF_Font* f; fonts)
+            TTF_SetFontSize(f, wantFont);
+        fontPixelSize = wantFont;
+    }
+}
+
+/// Convert a window coordinate (mouse events) to a logical one. Window
+/// coordinates are points on Wayland and macOS but pixels on Windows and X11,
+/// and the pixel density is what tells the two apart.
+int r_to_logical(float v)
+{
+    float f = v * SDL_GetWindowPixelDensity(window) / uiScale;
+    return f < 0 ? cast(int)(f - 0.5f) : cast(int)(f + 0.5f);
+}
+
+// Logical to pixel. Edges are scaled rather than sizes, so rects that touch
+// in logical units still touch after rounding.
+private int sc(int v)
+{
+    float f = v * uiScale;
+    return f < 0 ? cast(int)(f - 0.5f) : cast(int)(f + 0.5f);
+}
+
+private mu_Rect scaleRect(mu_Rect r)
+{
+    int x0 = sc(r.x), y0 = sc(r.y);
+    return mu_Rect(x0, y0, sc(r.x + r.w) - x0, sc(r.y + r.h) - y0);
+}
+
+// Pixel to logical, for text metrics handed back to ddui.
+private int unsc(int v)
+{
+    return cast(int)(v / uiScale + 0.5f);
 }
 
 void destroy_renderer()
@@ -92,6 +159,7 @@ void blend_pixel(uint* pixels, int pitch, int x, int y, mu_Color color)
 
 void r_draw_rect(mu_Rect rect, mu_Color color)
 {
+    rect = scaleRect(rect);
     // Intersect with clip rect
     int x0 = rect.x > clip.x ? rect.x : clip.x;
     int y0 = rect.y > clip.y ? rect.y : clip.y;
@@ -140,6 +208,7 @@ void r_draw_rect(mu_Rect rect, mu_Color color)
 void r_draw_text(const(char)[] text, mu_Vec2 pos, mu_Color color)
 {
     if (text.length == 0 || fonts.length == 0) return;
+    pos = mu_Vec2(sc(pos.x), sc(pos.y));
 
     SDL_Color fg = SDL_Color(color.r, color.g, color.b, color.a);
     SDL_Rect clipRect = SDL_Rect(clip.x, clip.y, clip.w, clip.h);
@@ -227,20 +296,25 @@ private bool isAscii(const(char)[] s)
 void r_draw_icon(int id, mu_Rect rect, mu_Color color)
 {
     mu_Rect src = atlas[id];
-    int ox = rect.x + (rect.w - src.w) / 2;
-    int oy = rect.y + (rect.h - src.h) / 2;
+    rect = scaleRect(rect);
+    int dw = sc(src.w), dh = sc(src.h);
+    if (dw < 1 || dh < 1) return;
+    int ox = rect.x + (rect.w - dw) / 2;
+    int oy = rect.y + (rect.h - dh) / 2;
 
     SDL_LockSurface(surface);
     uint* pixels = cast(uint*)surface.pixels;
     int pitch = surface.pitch / 4;
-    for (int sy = 0; sy < src.h; ++sy)
+    for (int dy = 0; dy < dh; ++dy)
     {
-        for (int sx = 0; sx < src.w; ++sx)
+        int sy = dy * src.h / dh;
+        for (int dx = 0; dx < dw; ++dx)
         {
+            int sx = dx * src.w / dw;
             ubyte alpha = atlas_texture[(src.y + sy) * ATLAS_WIDTH + src.x + sx];
             if (alpha == 0) continue;
             mu_Color c = mu_Color(color.r, color.g, color.b, cast(ubyte)((color.a * alpha) / 255));
-            blend_pixel(pixels, pitch, ox + sx, oy + sy, c);
+            blend_pixel(pixels, pitch, ox + dx, oy + dy, c);
         }
     }
     SDL_UnlockSurface(surface);
@@ -287,6 +361,7 @@ void r_draw_image(int id, mu_Rect rect)
         return;
 
     SDL_Surface* img = *entry;
+    rect = scaleRect(rect);
     if (img is null || img.w < 1 || img.h < 1 || rect.w < 1 || rect.h < 1)
         return;
 
@@ -330,7 +405,7 @@ int r_get_text_width(const(char) *text, int len)
     {
         int w;
         TTF_GetStringSize(fonts[0], str.ptr, str.length, &w, null);
-        return w;
+        return unsc(w);
     }
 
     // Slow path: same run-splitting walk as r_draw_text, sum per-run widths.
@@ -354,7 +429,7 @@ int r_get_text_width(const(char) *text, int len)
     }
     if (runFontIdx >= 0 && runStart < str.length)
         totalW += measureRun(str[runStart .. $], runFontIdx);
-    return totalW;
+    return unsc(totalW);
 }
 
 private int measureRun(const(char)[] run, int fontIdx)
@@ -367,26 +442,17 @@ private int measureRun(const(char)[] run, int fontIdx)
 int r_get_text_height()
 {
     if (fonts.length == 0) return 18;
-    return TTF_GetFontHeight(fonts[0]);
+    return unsc(TTF_GetFontHeight(fonts[0]));
 }
 
 void r_set_clip_rect(mu_Rect rect)
 {
-    clip = rect;
+    clip = scaleRect(rect);
 }
 
 void r_clear(mu_Color clr)
 {
-    SDL_GetWindowSize(window, &window_width, &window_height);
-    if (surface.w != window_width || surface.h != window_height)
-    {
-        SDL_DestroySurface(surface);
-        SDL_DestroyTexture(screenTexture);
-        surface = SDL_CreateSurface(window_width, window_height, SDL_PIXELFORMAT_ARGB8888);
-        screenTexture = SDL_CreateTexture(sdlRenderer, SDL_PIXELFORMAT_ARGB8888,
-            SDL_TEXTUREACCESS_STREAMING, window_width, window_height);
-    }
-    clip = mu_Rect(0, 0, window_width, window_height);
+    r_update_metrics();
     SDL_FillSurfaceRect(surface, null, SDL_MapRGB(pixelFormat, null, clr.r, clr.g, clr.b));
 }
 
@@ -487,7 +553,7 @@ bool initFont(const(char)[] customPath = null, int size = FONT_SIZE)
             char[] tmp = (cast(char[]) customPath) ~ '\0';
             pathPtr = tmp.ptr;
         }
-        primary = TTF_OpenFont(pathPtr, fontSize);
+        primary = TTF_OpenFont(pathPtr, fontSize * uiScale);
     }
 
     // Fall back to the primary candidate list.
@@ -495,7 +561,7 @@ bool initFont(const(char)[] customPath = null, int size = FONT_SIZE)
     {
         foreach (path; primaryFontPaths)
         {
-            primary = TTF_OpenFont(path.ptr, fontSize);
+            primary = TTF_OpenFont(path.ptr, fontSize * uiScale);
             if (primary) break;
         }
     }
@@ -508,11 +574,12 @@ bool initFont(const(char)[] customPath = null, int size = FONT_SIZE)
     // Open every coverage font we can find.
     foreach (path; coverageFontPaths)
     {
-        TTF_Font* f = TTF_OpenFont(path.ptr, fontSize);
+        TTF_Font* f = TTF_OpenFont(path.ptr, fontSize * uiScale);
         if (f) fonts ~= f;
     }
 
     currentFontSize = fontSize;
+    fontPixelSize = fontSize * uiScale;
     return true;
 }
 

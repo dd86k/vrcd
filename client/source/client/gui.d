@@ -320,10 +320,6 @@ int runGui(string host, ushort port, string secret, long sinceId,
     //       (which is unsupported on Wayland).
     //       It's a note here because it WAS used to do "software rendering", and
     //       here it meant the Xorg server was just holding the bag for us.
-    // NOTE: SDL2's SDL_HINT_VIDEO_HIGHDPI_DISABLED is gone in SDL3, where high
-    //       DPI is opted into per window with SDL_WINDOW_HIGH_PIXEL_DENSITY.
-    //       We don't ask for it, so the window stays in logical pixels and the
-    //       owned surface keeps matching it.
     // Match Wayland app_id / X11 WM_CLASS to the desktop file so launchers
     // (and Flatpak) associate the window with the correct icon and entry.
     // SDL3 splits that identity off SDL_HINT_APP_NAME, which is the
@@ -352,14 +348,24 @@ int runGui(string host, ushort port, string secret, long sinceId,
     // centering it is a separate step.
     window = SDL_CreateWindow("vrcd",
         window_width, window_height,
-        SDL_WINDOW_RESIZABLE);
+        SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (window is null)
     {
         showCriticalMessage("vrcd: cannot create window", cast(string) fromStringz( SDL_GetError() ).idup);
         SDL_Quit();
         return 1;
     }
-    SDL_SetWindowMinimumSize(window, 600, 400);
+    // Sizes above are logical. Where window coordinates are pixels (Windows,
+    // X11) they come out small on a scaled display, so they are scaled here;
+    // where they are points the content scale is 1 and this does nothing.
+    float contentScale = SDL_GetWindowDisplayScale(window) / SDL_GetWindowPixelDensity(window);
+    if ((contentScale > 0.0f) == false)
+        contentScale = 1.0f;
+    SDL_SetWindowMinimumSize(window, cast(int)(600 * contentScale), cast(int)(400 * contentScale));
+    if (contentScale != 1.0f)
+        SDL_SetWindowSize(window,
+            cast(int)(window_width * contentScale), cast(int)(window_height * contentScale));
+    SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
 
     // SDL3 starts with text input off. ddui's textboxes (server host, secret,
     // search fields) are fed from SDL_EVENT_TEXT_INPUT, so it has to be asked
@@ -460,16 +466,16 @@ private void eventLoop(mu_Context* uictx)
                 // SDL3 gives each window change its own event type instead of
                 // one SDL_WINDOWEVENT carrying a sub-event.
                 case SDL_EVENT_WINDOW_RESIZED:
-                    window_width  = e.window.data1;
-                    window_height = e.window.data2;
+                case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+                case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
+                    r_update_metrics();
                     break;
 
                 case SDL_EVENT_MOUSE_MOTION:
-                    // SDL3 reports pointer positions as floats (sub-pixel on
-                    // touch and high-density displays); ddui works in whole
-                    // pixels, so they are truncated on the way in.
-                    int motionX = cast(int) e.motion.x;
-                    int motionY = cast(int) e.motion.y;
+                    // SDL3 reports window coordinates as floats; ddui works in
+                    // whole logical units.
+                    int motionX = r_to_logical(e.motion.x);
+                    int motionY = r_to_logical(e.motion.y);
 
                     // Always pass motion to ddui for hover states.
                     mu_input_mousemove(uictx, motionX, motionY);
@@ -506,8 +512,8 @@ private void eventLoop(mu_Context* uictx)
                     break;
 
                 case SDL_EVENT_MOUSE_BUTTON_DOWN:
-                    int downX = cast(int) e.button.x;
-                    int downY = cast(int) e.button.y;
+                    int downX = r_to_logical(e.button.x);
+                    int downY = r_to_logical(e.button.y);
                     if (e.button.button == SDL_BUTTON_LEFT)
                     {
                         // Click-outside dismissal for the filter popup. The
@@ -549,8 +555,8 @@ private void eventLoop(mu_Context* uictx)
                     break;
 
                 case SDL_EVENT_MOUSE_BUTTON_UP:
-                    int upX = cast(int) e.button.x;
-                    int upY = cast(int) e.button.y;
+                    int upX = r_to_logical(e.button.x);
+                    int upY = r_to_logical(e.button.y);
                     if (e.button.button == SDL_BUTTON_LEFT)
                     {
                         if (dragState == DragState.pending)
