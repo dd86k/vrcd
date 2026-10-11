@@ -19,7 +19,7 @@ jobs:
     name: Test (Linux)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # libsqlite3-dev is needed under every configuration: arsd-official:sqlite
       # links against it. libcurl and SDL3 are loaded at run time by the default
@@ -35,7 +35,7 @@ jobs:
 
       # dub.selections.json pins every dependency, so it is the cache key: the
       # git dependencies are clones that would otherwise be re-fetched per run.
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.dub
           key: dub-${{ runner.os }}-${{ hashFiles('dub.selections.json') }}
@@ -60,7 +60,7 @@ jobs:
     name: Test (Windows)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # DMD rather than LDC: LDC 1.41 on Windows fails to link with an
       # undefined PAGESIZE in core.thread.fiber (see README).
@@ -68,7 +68,7 @@ jobs:
         with:
           compiler: dmd-latest
 
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/AppData/Local/dub
           key: dub-${{ runner.os }}-${{ hashFiles('dub.selections.json') }}
@@ -90,13 +90,13 @@ jobs:
     name: Build pipehelper (Windows)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: dlang-community/setup-dlang@a6f7969b8b5dc3ff448c30f2c6749150795814f3 # v2
         with:
           compiler: dmd-latest
 
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/AppData/Local/dub
           key: dub-${{ runner.os }}-${{ hashFiles('dub.selections.json') }}
@@ -109,7 +109,7 @@ jobs:
       # game's Proton prefix). Downloading it on its own is for a .deb install,
       # where it goes next to vrcd_client or in ~/.config/vrcd. The AppImage
       # carries its own copy.
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: vrcd-pipehelper-windows-x86_64
           path: pipehelper/vrcd-pipehelper.exe
@@ -119,7 +119,7 @@ jobs:
     name: Package (Windows)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # DMD for the same reason test-windows uses it: LDC fails to link with an
       # undefined PAGESIZE in core.thread.fiber (see README).
@@ -127,7 +127,7 @@ jobs:
         with:
           compiler: dmd-latest
 
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/AppData/Local/dub
           key: dub-${{ runner.os }}-package-${{ hashFiles('dub.selections.json') }}
@@ -136,7 +136,7 @@ jobs:
       # bump changes the hash and re-downloads, anything else reuses the zips.
       # sqlite3.lib is rebuilt regardless, being MSVC output rather than a
       # download, and the runner already has the C++ tools the script looks for.
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: packaging/deps/cache
           key: windeps-${{ hashFiles('packaging/fetch-deps-windows.ps1') }}
@@ -151,13 +151,13 @@ jobs:
 
       # Separate artifacts, as on Linux: somebody who wants the client has no
       # use for the server sitting in the same download.
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: vrcd-client-windows-x86_64
           path: vrcd-client-*-windows-x86_64.zip
           if-no-files-found: error
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: vrcd-server-windows-x86_64
           path: vrcd-server-*-windows-x86_64.zip
@@ -173,7 +173,7 @@ jobs:
     runs-on: ubuntu-26.04
     needs: build-pipehelper
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # The AppImage builds the client under -c static, which links SDL3 at
       # build time and so needs the development packages. The .deb builds it
@@ -189,7 +189,7 @@ jobs:
         with:
           compiler: ldc-latest
 
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.dub
           key: dub-${{ runner.os }}-package-${{ hashFiles('dub.selections.json') }}
@@ -203,7 +203,7 @@ jobs:
           sudo mv linuxdeploy-x86_64.AppImage appimagetool-x86_64.AppImage /usr/local/bin/
 
       # The Windows build of the pipe helper, for "Open in VRChat" on Linux.
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: vrcd-pipehelper-windows-x86_64
           path: pipehelper
@@ -221,7 +221,7 @@ jobs:
       # One artifact per thing somebody would install, as on Windows: the
       # AppImage is the whole client on its own, and the two .debs are a client
       # and a server that are rarely wanted on the same machine.
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: vrcd-client-appimage-x86_64
           path: '*.AppImage'
@@ -229,13 +229,13 @@ jobs:
 
       # amd64 in the file name, x86_64 in the artifact name: dpkg's word for the
       # architecture and everything else's.
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: vrcd-client-deb-x86_64
           path: vrcd-client_*.deb
           if-no-files-found: error
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: vrcd-server-deb-x86_64
           path: vrcd-server_*.deb
@@ -270,7 +270,7 @@ jobs:
       - name: Install Node compatibility libraries
         run: apk add --no-cache libstdc++ libc6-compat tar
 
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # LDC comes from Alpine rather than setup-dlang, which ships glibc
       # builds. The same script installs the toolchain on a developer's Alpine
@@ -278,7 +278,7 @@ jobs:
       - name: Install toolchain
         run: ./packaging/install-deps-alpine.sh
 
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.dub
           key: dub-alpine-${{ hashFiles('dub.selections.json') }}
@@ -297,7 +297,7 @@ jobs:
       - name: Stage artifact
         run: cp server/vrcd_server "vrcd-server-$(cat VERSION)-linux-musl-x86_64"
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: vrcd-server-musl-x86_64
           path: vrcd-server-*-linux-musl-x86_64
@@ -311,7 +311,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: artifacts
           merge-multiple: true
