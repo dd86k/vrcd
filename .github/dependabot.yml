@@ -1,0 +1,14 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    # One PR for all action bumps instead of one per action.
+    groups:
+      actions:
+        patterns: [ "*" ]
+    # Pinned to the v2 branch head: its newest tag (v2.0.0) is older, so
+    # Dependabot would "update" backwards. Bump by hand.
+    ignore:
+      - dependency-name: dlang-community/setup-dlang
