@@ -463,75 +463,145 @@ void r_present()
     SDL_RenderPresent(sdlRenderer);
 }
 
-// Primary font candidates, first one that opens becomes fonts[0] and
-// defines the UI metrics (ascent, height). Ordered by visual preference,
-// not by Unicode coverage.
+// Primary font candidates, first one found becomes fonts[0] and defines the
+// UI metrics (ascent, height). Ordered by visual preference, not by Unicode
+// coverage. Names only: where a distribution files them varies too much to
+// list, so they are looked up in fontIndex.
 version(Windows)
 {
-    private static immutable string[] primaryFontPaths = [
-        `C:\Windows\Fonts\segoeui.ttf`,
-        `C:\Windows\Fonts\arial.ttf`,
-        `C:\Windows\Fonts\tahoma.ttf`,
+    private static immutable string[] primaryFontNames = [
+        "segoeui.ttf",
+        "arial.ttf",
+        "tahoma.ttf",
     ];
 }
 else
 {
-    private static immutable string[] primaryFontPaths = [
-        // Liberation Sans,  preferred primary (looks nicer than Noto Sans)
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        "/usr/share/fonts/TTF/LiberationSans-Regular.ttf",
-        "/usr/share/fonts/liberation-fonts/LiberationSans-Regular.ttf",   // freedesktop SDK
-        // Noto Sans
-        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-        "/usr/share/fonts/noto/NotoSans-Regular.ttf",
-        // DejaVu
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/TTF/DejaVuSans.ttf",
-        "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
-        "/usr/share/fonts/dejavu/DejaVuSans.ttf",                          // freedesktop SDK
-        // FreeSans
-        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
-        "/usr/share/fonts/gnu-free/FreeSans.ttf",                          // freedesktop SDK
+    private static immutable string[] primaryFontNames = [
+        "LiberationSans-Regular.ttf",   // looks nicer than Noto Sans
+        "NotoSans-Regular.ttf",
+        "DejaVuSans.ttf",
+        "FreeSans.ttf",
     ];
 }
 
-// Coverage fonts, every one that exists is opened and appended after the
-// primary. Each entry covers a script the primary likely doesn't provide
-// (Thai, Arabic, CJK, etc.). Missing files are silently skipped.
+// Coverage fonts, every one found is opened and appended after the primary.
+// Each covers a script the primary likely doesn't provide.
 version(Windows)
 {
-    private static immutable string[] coverageFontPaths = [
-        `C:\Windows\Fonts\tahoma.ttf`,      // Thai, Arabic, Hebrew
-        `C:\Windows\Fonts\msyh.ttc`,        // Microsoft YaHei,  Simplified Chinese
-        `C:\Windows\Fonts\msjh.ttc`,        // Microsoft JhengHei,  Traditional Chinese
-        `C:\Windows\Fonts\meiryo.ttc`,      // Meiryo,  Japanese
-        `C:\Windows\Fonts\malgun.ttf`,      // Malgun Gothic,  Korean
-        `C:\Windows\Fonts\seguiemj.ttf`,    // Segoe UI Emoji
+    private static immutable string[] coverageFontNames = [
+        "tahoma.ttf",       // Thai, Arabic, Hebrew
+        "msyh.ttc",         // Microsoft YaHei,  Simplified Chinese
+        "msjh.ttc",         // Microsoft JhengHei,  Traditional Chinese
+        "meiryo.ttc",       // Meiryo,  Japanese
+        "malgun.ttf",       // Malgun Gothic,  Korean
+        "seguiemj.ttf",     // Segoe UI Emoji
     ];
 }
 else
 {
-    private static immutable string[] coverageFontPaths = [
-        // Thai
-        "/usr/share/fonts/truetype/noto/NotoSansThai-Regular.ttf",
-        "/usr/share/fonts/noto/NotoSansThai-Regular.ttf",
-        // Arabic
-        "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
-        "/usr/share/fonts/noto/NotoSansArabic-Regular.ttf",
-        // Hebrew
-        "/usr/share/fonts/truetype/noto/NotoSansHebrew-Regular.ttf",
-        "/usr/share/fonts/noto/NotoSansHebrew-Regular.ttf",
-        // Devanagari
-        "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",
-        "/usr/share/fonts/noto/NotoSansDevanagari-Regular.ttf",
-        // CJK (single OTC covers JP/KR/SC/TC)
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
+    private static immutable string[] coverageFontNames = [
+        "NotoSansThai-Regular.ttf",
+        "NotoSansArabic-Regular.ttf",
+        "NotoSansHebrew-Regular.ttf",
+        "NotoSansDevanagari-Regular.ttf",
+        "NotoSansCJK-Regular.ttc",      // single OTC covers JP/KR/SC/TC
         // GNU Unifont,  last-resort BMP coverage (looks bitmappy but renders)
-        "/usr/share/fonts/truetype/unifont/unifont.ttf",
-        "/usr/share/fonts/misc/unifont.ttf",
+        "unifont.ttf",
+        "unifont.otf",
     ];
+}
+
+// Directories searched (recursively) for the names above, in priority order:
+// system and per-user font directories, then a fonts folder beside the binary
+// or in the working directory for hosts that have none of them installed.
+private string[] fontSearchDirs()
+{
+    import std.path : buildPath, dirName;
+    import std.process : environment;
+    import std.file : thisExePath;
+    import std.array : split;
+
+    string[] dirs;
+    version(Windows)
+    {
+        dirs ~= buildPath(environment.get("WINDIR", `C:\Windows`), "Fonts");
+        string localAppData = environment.get("LOCALAPPDATA");
+        if (localAppData.length)
+            dirs ~= buildPath(localAppData, "Microsoft", "Windows", "Fonts");
+    }
+    else
+    {
+        string dataDirs = environment.get("XDG_DATA_DIRS");
+        if (dataDirs.length == 0)
+            dataDirs = "/usr/local/share:/usr/share";
+        foreach (string d; dataDirs.split(':'))
+            if (d.length)
+                dirs ~= buildPath(d, "fonts");
+
+        string home = environment.get("HOME");
+        string dataHome = environment.get("XDG_DATA_HOME");
+        if (dataHome.length)
+            dirs ~= buildPath(dataHome, "fonts");
+        else if (home.length)
+            dirs ~= buildPath(home, ".local", "share", "fonts");
+        if (home.length)
+            dirs ~= buildPath(home, ".fonts");
+    }
+
+    try dirs ~= buildPath(dirName(thisExePath()), "fonts");
+    catch (Exception) {}
+    dirs ~= "fonts";
+    return dirs;
+}
+
+// Lowercased file name to full path, first directory to hold a name wins.
+// Built once: walking /usr/share/fonts is not free, and a font reload from
+// the Settings tab should not repeat it.
+private __gshared string[string] fontIndex;
+private __gshared bool fontIndexBuilt;
+
+private void buildFontIndex()
+{
+    import std.file : dirEntries, DirEntry, SpanMode, exists, isDir;
+    import std.path : baseName;
+    import std.uni : toLower;
+
+    fontIndexBuilt = true;
+    foreach (string dir; fontSearchDirs())
+    {
+        try
+        {
+            if (exists(dir) == false || isDir(dir) == false)
+                continue;
+            foreach (DirEntry e; dirEntries(dir, SpanMode.breadth, true))
+            {
+                if (e.isFile == false)
+                    continue;
+                string key = toLower(baseName(e.name));
+                if (key !in fontIndex)
+                    fontIndex[key] = e.name;
+            }
+        }
+        catch (Exception ex)
+        {
+            // An unreadable subdirectory ends that walk, not the search.
+            logWarn("Font search in %s stopped: %s", dir, ex.msg);
+        }
+    }
+    logTrace("Font index: %u files", cast(uint) fontIndex.length);
+}
+
+private TTF_Font* openIndexedFont(string name, float ptsize)
+{
+    import std.string : toStringz;
+    import std.uni : toLower;
+
+    if (fontIndexBuilt == false)
+        buildFontIndex();
+    if (string *path = toLower(name) in fontIndex)
+        return TTF_OpenFont(toStringz(*path), ptsize);
+    return null;
 }
 
 bool initFont(const(char)[] customPath = null, int size = FONT_SIZE)
@@ -559,9 +629,9 @@ bool initFont(const(char)[] customPath = null, int size = FONT_SIZE)
     // Fall back to the primary candidate list.
     if (primary is null)
     {
-        foreach (path; primaryFontPaths)
+        foreach (string name; primaryFontNames)
         {
-            primary = TTF_OpenFont(path.ptr, fontSize * uiScale);
+            primary = openIndexedFont(name, fontSize * uiScale);
             if (primary) break;
         }
     }
@@ -572,9 +642,9 @@ bool initFont(const(char)[] customPath = null, int size = FONT_SIZE)
     fonts ~= primary;
 
     // Open every coverage font we can find.
-    foreach (path; coverageFontPaths)
+    foreach (string name; coverageFontNames)
     {
-        TTF_Font* f = TTF_OpenFont(path.ptr, fontSize * uiScale);
+        TTF_Font* f = openIndexedFont(name, fontSize * uiScale);
         if (f) fonts ~= f;
     }
 

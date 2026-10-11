@@ -381,11 +381,13 @@ int runGui(string host, ushort port, string secret, long sinceId,
         version (Windows)
             static immutable string msg =
                 "No usable system font.\n" ~
-                "Check C:\\Windows\\Fonts for Segoe UI.";
+                "Check C:\\Windows\\Fonts for Segoe UI.\n" ~
+                "Or put one in a fonts folder beside vrcd.";
         else
             static immutable string msg =
                 "No usable system font.\n" ~
-                "Install a TTF font (e.g. fonts-liberation).";
+                "Install a TTF font (e.g. fonts-liberation).\n" ~
+                "Or put one in a fonts folder beside vrcd.";
         showCriticalMessage("vrcd: No font found", msg);
         return 2;
     }
