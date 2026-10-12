@@ -5,7 +5,7 @@
 module client.state;
 
 import core.sync.mutex;
-import core.time : MonoTime;
+import core.time : Duration, MonoTime, dur;
 
 import client.notifications : notifyEventLabels, feedEventLabels;
 import vrcd.notifications : NotificationInfo, NotificationResponse,
@@ -217,6 +217,8 @@ enum InvSection { gallery, icons, stickers, emoji, prints, items }
 
 /// Number of InvSection members.
 enum INV_SECTIONS = 6;
+
+enum Duration OPENING_MIN_SHOWN = dur!"seconds"(1);
 
 /// Files-API tag for a section, or null for prints/items.
 string invSectionTag(InvSection section)
@@ -434,6 +436,24 @@ struct AppState
     // Instance locations queued for an "Open in VRChat" join (Linux: async
     // IPC into the running Proton container), drained by gui.d.
     string[] pendingOpens;
+
+    // "Open in VRChat" in flight, drawn in that instance's button. Held for
+    // a minimum so a launch that returns at once is still acknowledged.
+    string openingLocation;
+    MonoTime openingSince;
+    bool openingPending;        // Linux IPC helper still running
+
+    bool isOpening(string location) const
+    {
+        return openingLocation == location && isOpening();
+    }
+
+    bool isOpening() const
+    {
+        if (openingLocation.length == 0)
+            return false;
+        return openingPending || MonoTime.currTime - openingSince < OPENING_MIN_SHOWN;
+    }
 
     // Current VRChat instance (from local log watcher).
     string currentLocation; // e.g. "wrld_xxx:12345~region(us)"

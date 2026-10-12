@@ -444,11 +444,11 @@ private void eventLoop(mu_Context* uictx)
 
     while (running)
     {
-        // When momentum is active, use a short timeout so we keep
-        // animating.  Otherwise block until an event arrives (zero CPU).
+        // When momentum or an activity indicator is live, use a short timeout
+        // so we keep animating. Otherwise block until an event arrives (zero CPU).
         bool hasMomentum = (momentumVY > MOMENTUM_MIN || momentumVY < -MOMENTUM_MIN);
         bool gotEvent;
-        if (hasMomentum)
+        if (hasMomentum || appState.isOpening())
             gotEvent = SDL_WaitEventTimeout(&e, 16);   // ~60 fps
         else
             gotEvent = SDL_WaitEvent(&e);
@@ -912,6 +912,12 @@ private void eventLoop(mu_Context* uictx)
         {
             foreach (string loc; appState.pendingOpens)
             {
+                // A running join keeps its indicator; this press only gets "busy".
+                if (appState.openingPending == false)
+                {
+                    appState.openingLocation = loc;
+                    appState.openingSince = MonoTime.currTime;
+                }
                 version (Windows)
                 {
                     openVRChatInstance(loc);
@@ -929,6 +935,7 @@ private void eventLoop(mu_Context* uictx)
                     final switch (startVRChatIPCJoin(loc)) with (IPCJoinStart)
                     {
                     case started:
+                        appState.openingPending = true;
                         break;
                     case busy:
                         appState.addFeedEntry(0, "error", "",
@@ -954,10 +961,12 @@ private void eventLoop(mu_Context* uictx)
             case idle, running:
                 break;
             case success:
+                appState.openingPending = false;
                 appState.addFeedEntry(0, "info", "",
                     "Join request sent to VRChat", timeNow(), "", false, EventSource.system);
                 break;
             case failed:
+                appState.openingPending = false;
                 appState.pendingJoins ~= ipcLoc;
                 appState.addFeedEntry(0, "info", "",
                     "VRChat IPC join failed, self-inviting instead", timeNow(), "", false, EventSource.system);

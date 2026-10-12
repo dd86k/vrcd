@@ -1084,6 +1084,31 @@ private bool clickButton(mu_Context* ctx, string label)
     return false;
 }
 
+/// An inert button with a bar sweeping along its foot, standing in for one
+/// whose action is under way. Pressing it does nothing, so the action cannot
+/// be queued twice.
+private void activityButton(mu_Context* ctx, string label, MonoTime since)
+{
+    enum long PERIOD_MS = 1200;
+    enum int BAR_H = 4;
+
+    mu_Rect r = mu_layout_next(ctx);
+    mu_draw_frame(ctx, r, MU_COLOR_BUTTON);
+    mu_draw_control_text(ctx, label, r, MU_COLOR_TEXT, MU_OPT_ALIGNCENTER);
+
+    // The segment enters from the left edge and leaves past the right one.
+    int seg = r.w / 4;
+    long phase = (MonoTime.currTime - since).total!"msecs" % PERIOD_MS;
+    int x0 = r.x - seg + cast(int)(phase * (r.w + seg) / PERIOD_MS);
+    int x1 = x0 + seg;
+    if (x0 < r.x)
+        x0 = r.x;
+    if (x1 > r.x + r.w)
+        x1 = r.x + r.w;
+    if (x1 > x0)
+        mu_draw_rect(ctx, mu_Rect(x0, r.y + r.h - BAR_H, x1 - x0, BAR_H), mu_Color(100, 150, 230, 255));
+}
+
 /// Two-tap destructive button that never places Confirm where the first
 /// tap landed: arming turns the button itself into Cancel, and Confirm
 /// appears below it offset to the right, so an accidental double tap
@@ -1425,7 +1450,9 @@ private void drawOnlineTab(mu_Context* ctx, AppState* state, int scrollDelta)
                     int half = mu_get_current_container(ctx).body_.w / 2;
                     int[2] joinCols = [half, -1];
                     mu_layout_row(ctx, 2, joinCols.ptr, 40);
-                    if (clickButton(ctx, "Open in VRChat"))
+                    if (state.isOpening(joinLoc))
+                        activityButton(ctx, "Opening...", state.openingSince);
+                    else if (clickButton(ctx, "Open in VRChat"))
                         state.pendingOpens ~= joinLoc;
                     if (clickButton(ctx, "Self-Invite"))
                         state.pendingJoins ~= joinLoc;
