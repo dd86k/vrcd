@@ -57,6 +57,12 @@ class LogWatcher
     private TrackedPlayer[] currentPlayers;
     private TrackedPlayer localUser;
 
+    // VRChat logs a join for everyone already in the room before our own, and a
+    // leave for everyone still in it after OnLeftRoom. Neither is somebody
+    // arriving or going, so join/leave events are held while this is set:
+    // from OnLeftRoom (or startup) until our own OnPlayerJoined.
+    private bool roomLoading = true;
+
     // While true, parseLine updates state but suppresses all outward-facing
     // side effects (events, metadata writes). Used during initial backfill
     // so we rebuild state from an existing log file without replaying old
@@ -290,6 +296,14 @@ class LogWatcher
         if (line[34] != '[')
             return;
 
+        if (indexOf(line, "[Behaviour] OnLeftRoom") >= 0)
+        {
+            logDebugging("LogWatcher: left room");
+            roomLoading = true;
+            currentPlayers = null;
+            return;
+        }
+
         // Event: Entering Room, which gives us the human-readable world name.
         // This fires immediately before the "Joining wrld_..." line.
         static immutable string enterMarker = "[Behaviour] Entering Room: ";
@@ -358,6 +372,8 @@ class LogWatcher
                 logDebugging("LogWatcher: player joined '%s' (id=%s) now=%d players",
                     displayName, userId, currentPlayers.length + 1);
                 addPlayer(displayName, userId);
+                if (isLocalUser(displayName, userId))
+                    roomLoading = false;
                 pushEvent(LogEvent.playerJoined, displayName);
             }
             return;
@@ -569,6 +585,13 @@ class LogWatcher
         currentPlayers ~= TrackedPlayer(displayName.idup, userId.idup);
     }
 
+    private bool isLocalUser(string displayName, string userId)
+    {
+        if (userId.length > 0 && localUser.userId.length > 0)
+            return userId == localUser.userId;
+        return localUser.displayName.length > 0 && displayName == localUser.displayName;
+    }
+
     /// Remove a player from the local instance roster by display name.
     private void removePlayer(string displayName)
     {
@@ -683,6 +706,11 @@ class LogWatcher
 
         // I think we know when we do something
         if (localUser.displayName && displayName == localUser.displayName)
+            return;
+
+        // Without a known local user the hold would never lift, so it only
+        // applies once "User Authenticated" has been seen.
+        if (roomLoading && localUser.displayName.length > 0)
             return;
 
         JSONValue msg;
@@ -936,3 +964,34 @@ unittest
     assert(LogWatcher.isScreenshotLogPath("C:\\a\tb.png") == false); // embedded tab
 }
 
+
+unittest
+{
+    // Sequence from a real world change: the leave burst follows OnLeftRoom
+    // with us in the middle, and the room's occupants are logged before us.
+    static immutable string[] lines = [
+        "2026.10.12 13:57:35 Debug      -  User Authenticated: dd86k (usr_self)",
+        "2026.10.12 14:01:24 Debug      -  [Behaviour] OnPlayerJoined Dranenk (usr_a)",
+        "2026.10.12 14:01:24 Debug      -  [Behaviour] OnPlayerJoined dd86k (usr_self)",
+        "2026.10.12 14:09:04 Debug      -  [Behaviour] OnLeftRoom",
+        "2026.10.12 14:09:04 Debug      -  [Behaviour] OnPlayerLeft Dranenk (usr_a)",
+        "2026.10.12 14:09:04 Debug      -  [Behaviour] OnPlayerLeft dd86k (usr_self)",
+        "2026.10.12 14:09:04 Debug      -  [Behaviour] Joining wrld_x:1~group(grp_x)",
+        "2026.10.12 14:09:25 Debug      -  [Behaviour] OnPlayerJoined Bossun21 (usr_b)",
+        "2026.10.12 14:09:25 Debug      -  [Behaviour] OnPlayerJoined dd86k (usr_self)",
+        "2026.10.12 14:09:25 Debug      -  [Behaviour] OnPlayerJoined Dranenk (usr_a)",
+    ];
+    // Expected roomLoading after each line.
+    static immutable bool[] loading = [
+        true, true, false, true, true, true, true, true, false, false
+    ];
+
+    LogWatcher w = new LogWatcher(null, 0);
+    w.silent = true;
+    foreach (size_t i, string line; lines)
+    {
+        w.parseLine(line);
+        assert(w.roomLoading == loading[i], lines[i]);
+    }
+    assert(w.currentPlayers.length == 3);
+}
