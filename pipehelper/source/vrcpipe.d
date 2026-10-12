@@ -40,7 +40,7 @@ PipeSendStatus sendLaunchUri(const(char)[] uri)
     foreach (attempt; 0 .. 2)
     {
         pipe = CreateFileA(pipeName, GENERIC_READ | GENERIC_WRITE,
-            0, null, OPEN_EXISTING, 0, null);
+            0, null, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, null);
         if (pipe != INVALID_HANDLE_VALUE)
             break;
 
@@ -56,15 +56,41 @@ PipeSendStatus sendLaunchUri(const(char)[] uri)
         return PipeSendStatus.error;
     scope(exit) CloseHandle(pipe);
 
+    OVERLAPPED ov;
+    ov.hEvent = CreateEventA(null, TRUE, FALSE, null);
+    if (ov.hEvent == null)
+        return PipeSendStatus.error;
+    scope(exit) CloseHandle(ov.hEvent);
+
     DWORD written;
-    if (WriteFile(pipe, uri.ptr, cast(DWORD) uri.length, &written, null) == FALSE ||
-        written != uri.length)
+    BOOL started = WriteFile(pipe, uri.ptr, cast(DWORD) uri.length, null, &ov);
+    if (finishIo(pipe, &ov, started, &written) == false || written != uri.length)
         return PipeSendStatus.error;
 
     ubyte ack;
     DWORD got;
-    if (ReadFile(pipe, &ack, 1, &got, null) == FALSE || got != 1)
+    started = ReadFile(pipe, &ack, 1, null, &ov);
+    if (finishIo(pipe, &ov, started, &got) == false || got != 1)
         return PipeSendStatus.error;
 
     return ack == 1 ? PipeSendStatus.accepted : PipeSendStatus.rejected;
+}
+
+// A VRChat that connected but never answers would otherwise hold the caller
+// forever. Kept under the 15s the Linux client gives the helper process.
+private enum DWORD IO_TIMEOUT_MS = 10_000;
+
+// Wait out an overlapped read or write, cancelling it past IO_TIMEOUT_MS.
+private bool finishIo(HANDLE pipe, OVERLAPPED* ov, BOOL started, DWORD* count)
+{
+    if (started == FALSE && GetLastError() != ERROR_IO_PENDING)
+        return false;
+    if (WaitForSingleObject(ov.hEvent, IO_TIMEOUT_MS) != WAIT_OBJECT_0)
+    {
+        CancelIo(pipe); // same thread that issued it
+        // The cancel lands asynchronously; ov must outlive it.
+        GetOverlappedResult(pipe, ov, count, TRUE);
+        return false;
+    }
+    return GetOverlappedResult(pipe, ov, count, FALSE) != FALSE;
 }

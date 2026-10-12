@@ -29,18 +29,16 @@ private string vrchatLaunchUri(string location)
     return "vrchat://launch?ref=vrcd&id=" ~ location;
 }
 
-/// Launch VRChat into an instance via its launch URI ("Open in VRChat").
+/// Cold-boot VRChat straight into an instance via its launch URI. Only
+/// correct when the game is not running; a running client is reached with
+/// startVRChatIPCJoin instead.
 ///
-/// Windows: a running client is reached directly over its launch-URI named
-/// pipe (seamless in-client transition); otherwise the natively registered
-/// `vrchat://` scheme handles it, cold-booting the game into the instance.
+/// Windows: the natively registered `vrchat://` scheme handles it.
 ///
 /// Linux: the host has no `vrchat://` scheme handler under Proton
 /// (xdg-open/gio report "location not supported"), so the URI is handed to
-/// Steam, which cold-boots VRChat with it. Only correct when the game is
-/// not running: a second launch gets its own pressure-vessel container and
-/// wineserver, so the URI never reaches the running client. For that case
-/// use startVRChatIPCJoin instead.
+/// Steam. A second launch gets its own pressure-vessel container and
+/// wineserver, so a URI sent this way never reaches a running client.
 void openVRChatInstance(string location)
 {
     import std.process : spawnProcess;
@@ -54,23 +52,6 @@ void openVRChatInstance(string location)
 
     version (Windows)
     {
-        import vrcpipe;
-
-        final switch (sendLaunchUri(uri)) with (PipeSendStatus)
-        {
-        case accepted:
-            logInfo("VRChat accepted launch URI over pipe");
-            return;
-        case rejected:
-            logWarn("VRChat rejected launch URI over pipe");
-            break;
-        case error:
-            logWarn("VRChat launch pipe I/O error");
-            break;
-        case notFound: // Not running: the scheme launch boots the game.
-            break;
-        }
-
         try spawnProcess(["explorer", uri]);
         catch (Exception ex) { logError("explorer: %s", ex.msg); }
     }
@@ -79,6 +60,104 @@ void openVRChatInstance(string location)
         // VRChat's Steam app ID is 438100.
         try spawnProcess(["steam", "-applaunch", "438100", uri]);
         catch (Exception ex) { logError("steam: %s", ex.msg); }
+    }
+}
+
+/// Result of starting an IPC join attempt.
+enum IPCJoinStart
+{
+    started,     /// Attempt under way; poll pollVRChatIPCJoin for the outcome.
+    busy,        /// Another join attempt is still in flight.
+    unavailable, /// Nothing to send it with; use a fallback path.
+}
+
+/// Outcome of polling the in-flight IPC join.
+enum IPCJoinPoll
+{
+    idle,     /// Nothing in flight.
+    running,  /// Still waiting on VRChat.
+    success,  /// VRChat accepted the URI; the user is transitioning.
+    launched, /// VRChat was not running and is booting into the instance.
+    failed,   /// VRChat refused or never answered; `location` is set for fallback.
+}
+
+version (Windows)
+{
+    import core.atomic : atomicLoad, atomicStore;
+    import vrcpipe : PipeSendStatus, sendLaunchUri;
+
+    // VRChat can be slow to answer the pipe, so the send runs off the UI
+    // thread. vrcpipe bounds every wait: the worker always finishes and is
+    // never abandoned.
+    private final class IPCJob
+    {
+        string location;
+        PipeSendStatus status;  // published by `done`
+        shared bool done;
+    }
+
+    // Main thread only; the worker touches nothing but its own job.
+    private __gshared IPCJob ipcJob;
+
+    /// Ask the running VRChat client to join an instance over its launch-URI
+    /// named pipe, from a worker thread.
+    IPCJoinStart startVRChatIPCJoin(string location)
+    {
+        import core.thread : Thread;
+
+        if (ipcJob)
+            return IPCJoinStart.busy;
+
+        IPCJob job = new IPCJob;
+        job.location = location;
+        string uri = vrchatLaunchUri(location);
+        logInfo("IPC join: sending '%s'", uri);
+        try
+        {
+            Thread worker = new Thread({
+                job.status = sendLaunchUri(uri);
+                atomicStore(job.done, true);
+            });
+            worker.isDaemon = true;
+            worker.start();
+        }
+        catch (Exception ex)
+        {
+            logError("IPC join: %s", ex.msg);
+            return IPCJoinStart.unavailable;
+        }
+        ipcJob = job;
+        return IPCJoinStart.started;
+    }
+
+    /// Poll the in-flight IPC join attempt. Call once per frame; on `success`,
+    /// `launched` and `failed`, `location` receives the requested location.
+    IPCJoinPoll pollVRChatIPCJoin(out string location)
+    {
+        if (ipcJob is null)
+            return IPCJoinPoll.idle;
+        if (atomicLoad(ipcJob.done) == false)
+            return IPCJoinPoll.running;
+
+        location = ipcJob.location;
+        PipeSendStatus status = ipcJob.status;
+        ipcJob = null;
+
+        final switch (status) with (PipeSendStatus)
+        {
+        case accepted:
+            logInfo("IPC join: VRChat accepted '%s'", location);
+            return IPCJoinPoll.success;
+        case notFound:
+            openVRChatInstance(location);
+            return IPCJoinPoll.launched;
+        case rejected:
+            logWarn("IPC join: VRChat rejected '%s'", location);
+            return IPCJoinPoll.failed;
+        case error:
+            logWarn("IPC join: pipe I/O error or timeout");
+            return IPCJoinPoll.failed;
+        }
     }
 }
 
@@ -237,14 +316,6 @@ bool isVRChatRunning()
     return findVRChatProcess().pid != 0;
 }
 
-/// Result of starting an IPC join attempt.
-enum IPCJoinStart
-{
-    started,     /// Helper spawned; poll pollVRChatIPCJoin for the outcome.
-    busy,        /// Another join attempt is still in flight.
-    unavailable, /// Missing launch-client or helper; use a fallback path.
-}
-
 /// Ask the running VRChat client to join an instance, over its launch-URI
 /// named pipe.
 ///
@@ -313,15 +384,6 @@ IPCJoinStart startVRChatIPCJoin(string location)
     ipcJoinLocation = location;
     ipcJoinStart = MonoTime.currTime;
     return IPCJoinStart.started;
-}
-
-/// Outcome of polling the in-flight IPC join.
-enum IPCJoinPoll
-{
-    idle,    /// Nothing in flight.
-    running, /// Still waiting on the helper.
-    success, /// VRChat accepted the URI; the user is transitioning.
-    failed,  /// Helper or injection failed; `location` is set for fallback.
 }
 
 /// Poll the in-flight IPC join attempt. Call once per frame; on `success`

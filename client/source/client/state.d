@@ -441,7 +441,7 @@ struct AppState
     // a minimum so a launch that returns at once is still acknowledged.
     string openingLocation;
     MonoTime openingSince;
-    bool openingPending;        // Linux IPC helper still running
+    bool openingPending;        // IPC join still running
 
     bool isOpening(string location) const
     {
