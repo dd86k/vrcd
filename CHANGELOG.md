@@ -18,6 +18,11 @@ Rules:
 - Notifications tab shows how many are pending.
 - Boops can be answered with a boop, optionally with an emoji (built-in or
   uploaded).
+- Supports high-DPI displays.
+- The "Open in VRChat" button shows an activity indicator.
+- On Windows, the "Open in VRChat" button no longer blocks the UI.
+- No more join/leave notifications for the people already in a room you enter
+  or leave.
 
 ### Server
 
