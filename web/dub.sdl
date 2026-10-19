@@ -5,7 +5,7 @@ authors "dd86k <dd@dax.moe>"
 copyright "Copyright © 2026, dd86k <dd@dax.moe>"
 license "BSD-3-Clause-Clear"
 
-dependency "ddlogger" repository="git+https://github.com/dd86k/ddlogger.git" version="4397d8e57a88bd6b3a3e5e4c846ba97ac3bfd364"
+dependency "ddlogger" repository="git+https://github.com/dd86k/ddlogger.git" version="dcab663a80d496c1d3c7fee4c406ed7f763e5fdb"
 dependency "ddhttpd" repository="git+https://github.com/dd86k/ddhttpd.git" version="6a30431d2d737f66ef7bb5fa4a78d149ac0c5d91"
 
 # ".." for VERSION
