@@ -6,7 +6,7 @@ copyright "Copyright © 2026, dd86k <dd@dax.moe>"
 license "BSD-3-Clause-Clear"
 
 dependency "bindbc-sdl" version="==2.4.2"
-dependency "ddlogger" repository="git+https://github.com/dd86k/ddlogger.git" version="4397d8e57a88bd6b3a3e5e4c846ba97ac3bfd364"
+dependency "ddlogger" repository="git+https://github.com/dd86k/ddlogger.git" version="dcab663a80d496c1d3c7fee4c406ed7f763e5fdb"
 dependency "ddui" repository="git+https://github.com/dd86k/ddui.git" version="b89172370942af639af8625a3f5a3978166f47a4"
 
 # Needed when adding configurations
