@@ -10,11 +10,6 @@ It features a server-client architecture, to avoid having multiple connections t
 > 
 > Otherwise, get ready to frequently pull, upgrade dependencies, and build!
 
-> [!WARNING]
-> The client requires an active running vrcd server and packages do not come with the server.
->
-> There are plans to fix this.
-
 Client features:
 - Relatively light client using software rendering; Hardware option available.
 - VR friendly UI.
@@ -35,14 +30,11 @@ Related projects:
 
 ## Roadmap
 
-May change at any time. Created near end of 0.3.
+May change at any time.
 
-0.3:
-- [x] Import from VRCX
-
-0.4:
-- [ ] Reply to boops
-- [ ] client: Notification badge
+0.4: Released!
+- [x] Reply to boops
+- [x] client: Notification badge
 
 future:
 - [ ] Group management
