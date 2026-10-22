@@ -1,4 +1,4 @@
-card.appendChild(el("div", "why", "Loading..."));/* vrcd front-end.
+/* vrcd front-end.
  *
  * The page is a shell: a tab rail, a list column, and a detail pane. State
  * arrives as a full snapshot over the WebSocket and the whole shell redraws
