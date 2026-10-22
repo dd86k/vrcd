@@ -56,6 +56,16 @@ jobs:
           dub build :client -a x86 -b syntax
           dub build :web -a x86 -b syntax
 
+      # The front-end is plain files the D build never reads; no-undef is what
+      # catches a stray statement naming something that only exists elsewhere.
+      - name: Check web scripts
+        run: >
+          npx --yes eslint@8.57.1 --no-eslintrc
+          --env browser,serviceworker,es2022
+          --parser-options ecmaVersion:latest
+          --rule 'no-undef: error'
+          web/public/*.js
+
   test-windows:
     name: Test (Windows)
     runs-on: windows-latest
