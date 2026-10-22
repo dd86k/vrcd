@@ -8,6 +8,12 @@ Rules:
 - Better to keep entries closest to the actual intent: "Server supports standard I/O"
   is clearer than "Client can start server" (37b843ed1d2d4bca6011a69dcb5e64fa581cf235).
 
+## v0.4.1
+
+### Web
+
+- Fixed the page failing to load (`card is not defined`).
+
 ## v0.4.0
 
 ### Client
