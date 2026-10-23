@@ -59,6 +59,7 @@ Protocol versions:
 - `12` = events ordered by time (`catch_up` takes an `epoch`, `caught_up` carries it, `events_reset` when history was rewritten)
 - `13` = imports (`import_begin`, `import_events`, `import_end`, `import_abort`, `get_imports`, `import_undo`)
 - `14` = boop replies (`notification_action` takes `boop`)
+- `15` = notification promotion (`get_promotions`, `set_promotions`, `promotions`)
 
 **Failure:**
 ```json
@@ -231,6 +232,8 @@ The two notification systems share no endpoints, so `api_version` decides which 
 | `respond`  | rejected: v1 notifications have no responses | `POST notifications/{id}/respond` |
 | `boop`     | `POST users/{user_id}/boop`, then hide      | same, then hide                |
 
+A promoted entry (`user_notification_...`) is vrcd's own: `hide` removes it without calling VRChat, and every other action fails.
+
 For `hide`, HTTP 404 is treated as success: the notification is already gone, which is the desired end state.
 
 A `boop` answers a boop with one of your own rather than posting the notification's `boop` response back, since what VRChat does with that response is undocumented. The notification is dismissed afterwards, because VRChat leaves an answered boop in the inbox; `success` reports the boop, and a failed dismiss only leaves the row behind. Requires `server_version >= 14`.
@@ -246,6 +249,36 @@ A `boop` answers a boop with one of your own rather than posting the notificatio
 | `user_id`         | string | On `boop`: who to boop, the notification's `sender_user_id`         |
 | `emoji_id`        | string | On `boop`: `default_<name>` for a built-in emoji, or a `file_...` ID. Absent is a plain boop |
 | `emoji_version`   | int    | On `boop`: the file's version, for a `file_...` emoji              |
+
+### `get_promotions`
+
+Request the promotion rules. Server replies with `promotions`. Requires `server_version >= 15`.
+
+```json
+{"type": "get_promotions"}
+```
+
+### `set_promotions`
+
+Replace the whole rule set. On success the server stores it and broadcasts `promotions` to every client; on failure only the requester gets `promotions` with `error` and the rules as they were. Requires `server_version >= 15`.
+
+A rule turns a matching event into an inbox entry (see `notifications`) and an ephemeral `notification-promoted` event. Rules see only events that survived noise suppression, and synthetics (`avatar-change`, `profile-change`). The first matching enabled rule wins, so one event makes at most one entry.
+
+| Field      | Type   | Description                                                                 |
+|------------|--------|-----------------------------------------------------------------------------|
+| `id`       | string | Unique within the set, chosen by the front-end                              |
+| `name`     | string | Entry title. Empty uses the event's feed label                              |
+| `enabled`  | bool   | Absent means `true`                                                         |
+| `events`   | array  | Event types, e.g. `"friend-delete"`. Notification events are rejected       |
+| `users`    | array  | `usr_...` IDs the event must be about. Empty or absent matches anyone       |
+| `cooldown` | int    | Seconds the rule stays quiet for the same user after firing. `0` is none    |
+
+```json
+{"type": "set_promotions", "rules": [
+  {"id": "r1", "name": "Unfriended", "events": ["friend-delete"]},
+  {"id": "r2", "events": ["friend-online"], "users": ["usr_..."], "cooldown": 300}
+]}
+```
 
 ### `set_status`
 
@@ -698,6 +731,16 @@ Mute/block snapshot. Sent as the reply to `get_moderations` and broadcast to all
 | `blocked` | array  | Blocked users: `{user_id, display_name}`           |
 | `error`   | string | On failure, sent *instead of* the lists (rate limit, VRChat error) |
 
+### `promotions`
+
+The promotion rules, in the shape `set_promotions` takes. Sent as the reply to `get_promotions`, broadcast after a successful `set_promotions`, and sent to the requester alone with `error` when one was rejected.
+
+| Field   | Type   | Description                              |
+|---------|--------|------------------------------------------|
+| `type`  | string | `"promotions"`                           |
+| `rules` | array  | The rules the server is running          |
+| `error` | string | Why a `set_promotions` was rejected      |
+
 ### `moderate_result`
 
 Reply to a `moderate_user` request, sent only to the requesting client. On success, a `moderations` broadcast for all clients follows.
@@ -724,6 +767,8 @@ Pending notification snapshot. Sent only as the reply to `get_notifications`; th
 | `type`          | string | `"notifications"`                                                  |
 | `notifications` | array  | Entries, **oldest first** (see below)                              |
 | `error`         | string | On failure, sent alongside an empty list (rate limit, VRChat error) |
+
+Entries promoted by a rule (see `set_promotions`) are merged in by time. They carry an `id` of `user_notification_...`, `notification_type` `"vrcd.promoted"`, `api_version` `1` and no `responses`, so a front-end that knows nothing of them draws a row with a dismiss. They are kept in memory only, at most 50, and a re-seed from VRChat does not remove them.
 
 Each entry:
 

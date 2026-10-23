@@ -443,6 +443,7 @@ void cmdRun(ref Config config)
             long eventId = store.storeEvent(event);
             logTrace("[#%d %s] %s", eventId, event.typeRaw, event.content.toString());
             apiServer.broadcast(event, eventId);
+            apiServer.processPromotions(event);
         }
 
         // Ephemeral broadcast: id=0 signals "not persisted, do not advance
@@ -458,6 +459,7 @@ void cmdRun(ref Config config)
             long synId = store.storeEvent(syn);
             logInfo("[#%d %s] %s", synId, syn.typeRaw, syn.content.toString());
             apiServer.broadcast(syn, synId);
+            apiServer.processPromotions(syn);
         }
 
         // The inbox lives server-side: fold the event in and push the new

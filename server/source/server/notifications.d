@@ -27,6 +27,10 @@ import vrcd.notifications;
 class NotificationsTracker
 {
     private NotificationInfo[] inbox;
+    // Promoted entries live apart from VRChat's, since a re-seed replaces
+    // the inbox with VRChat's listing and that has never heard of them.
+    private NotificationInfo[] promoted;
+    private long promotedSeq;
     private bool seeded;
     private Mutex mtx;
 
@@ -107,6 +111,20 @@ class NotificationsTracker
         }
     }
 
+    /// Append a promoted entry, assigning its ID. The oldest go first past the
+    /// cap: these are reminders, not requests waiting on an answer.
+    NotificationInfo addPromoted(NotificationInfo delegate(long seq) build)
+    {
+        synchronized (mtx)
+        {
+            NotificationInfo info = build(++promotedSeq);
+            promoted ~= info;
+            if (promoted.length > PROMOTED_MAX)
+                promoted = promoted[$ - PROMOTED_MAX .. $].dup;
+            return info;
+        }
+    }
+
     /// Take entries out by ID (an answer observed on the wire, or one made
     /// through us). Returns whether any were present.
     bool remove(string[] ids)
@@ -116,38 +134,30 @@ class NotificationsTracker
 
         synchronized (mtx)
         {
-            NotificationInfo[] kept;
-            kept.reserve(inbox.length);
-            foreach (ref NotificationInfo entry; inbox)
-            {
-                bool hit;
-                foreach (string id; ids)
-                {
-                    if (entry.id == id)
-                    {
-                        hit = true;
-                        break;
-                    }
-                }
-                if (hit == false)
-                    kept ~= entry;
-            }
-
-            bool changed = kept.length != inbox.length;
-            inbox = kept;
-            return changed;
+            size_t before = inbox.length + promoted.length;
+            inbox = without(inbox, ids);
+            promoted = without(promoted, ids);
+            return inbox.length + promoted.length != before;
         }
     }
 
-    /// Build the `notifications` snapshot message.
+    /// Build the `notifications` snapshot message. Promoted entries are
+    /// merged in by time, so the front-ends draw one list in one order.
     JSONValue buildNotificationsMessage()
     {
         synchronized (mtx)
         {
             JSONValue[] items;
-            items.reserve(inbox.length);
-            foreach (ref NotificationInfo info; inbox)
-                items ~= buildNotificationJSON(info);
+            items.reserve(inbox.length + promoted.length);
+            size_t i, p;
+            while (i < inbox.length || p < promoted.length)
+            {
+                if (p == promoted.length || (i < inbox.length
+                    && inbox[i].receivedAtUnix <= promoted[p].receivedAtUnix))
+                    items ~= buildNotificationJSON(inbox[i++]);
+                else
+                    items ~= buildNotificationJSON(promoted[p++]);
+            }
 
             return JSONValue([
                 "type": JSONValue("notifications"),
@@ -155,6 +165,21 @@ class NotificationsTracker
             ]);
         }
     }
+}
+
+/// Promoted entries kept at most; past this the inbox stops being an inbox.
+private enum size_t PROMOTED_MAX = 50;
+
+private NotificationInfo[] without(NotificationInfo[] list, string[] ids)
+{
+    import std.algorithm.searching : canFind;
+
+    NotificationInfo[] kept;
+    kept.reserve(list.length);
+    foreach (ref NotificationInfo entry; list)
+        if (canFind(ids, entry.id) == false)
+            kept ~= entry;
+    return kept;
 }
 
 /// Entries VRChat gave no timestamp sort as 0, so they lead; that keeps them
@@ -215,6 +240,37 @@ unittest
     assert(t.applyEvent("hide-notification", hide, null, ""));
     assert(t.applyEvent("hide-notification", hide, null, "") == false);
     assert(t.remove([ "not_b" ]));
+    snap = t.buildNotificationsMessage();
+    assert(snap["notifications"].array.length == 1);
+}
+
+unittest
+{
+    NotificationsTracker t = new NotificationsTracker();
+
+    NotificationInfo mkInfo(string id, long stamp)
+    {
+        NotificationInfo info;
+        info.id = id;
+        info.receivedAtUnix = stamp;
+        return info;
+    }
+
+    t.replaceAll([ mkInfo("not_a", 100), mkInfo("not_c", 300) ]);
+    NotificationInfo added = t.addPromoted((long seq) =>
+        mkInfo("user_notification_" ~ (seq == 1 ? "1" : "?"), 200));
+    assert(added.id == "user_notification_1");
+
+    // Merged in by time, and a re-seed does not take it away.
+    JSONValue snap = t.buildNotificationsMessage();
+    assert(snap["notifications"].array.length == 3);
+    assert(snap["notifications"][1]["id"].str == "user_notification_1");
+    t.replaceAll([ mkInfo("not_a", 100) ]);
+    snap = t.buildNotificationsMessage();
+    assert(snap["notifications"][1]["id"].str == "user_notification_1");
+
+    assert(t.remove([ "user_notification_1" ]));
+    assert(t.remove([ "user_notification_1" ]) == false);
     snap = t.buildNotificationsMessage();
     assert(snap["notifications"].array.length == 1);
 }

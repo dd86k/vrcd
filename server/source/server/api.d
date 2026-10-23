@@ -26,6 +26,7 @@ import server.friends;
 import server.instancecache;
 import server.moderations;
 import server.notifications;
+import server.promotions;
 import server.ratelimit;
 import server.database;
 import server.importer;
@@ -52,8 +53,12 @@ import vrcd.vrcx;
 /// 12 = events ordered by time (`catch_up` takes an `epoch`, `caught_up`
 /// carries it, `events_reset` when history was rewritten),
 /// 13 = imports (`import_begin`, `import_events`, `import_end`, `import_abort`, `get_imports`, `import_undo`),
-/// 14 = boop replies (`notification_action` takes `boop`).
-private enum int PROTOCOL_VERSION = 14;
+/// 14 = boop replies (`notification_action` takes `boop`),
+/// 15 = notification promotion (`get_promotions`, `set_promotions`, `promotions`).
+private enum int PROTOCOL_VERSION = 15;
+
+/// `server_state` key holding the promotion rules as a JSON array.
+private enum string PROMOTION_RULES_KEY = "promotion_rules";
 
 /// Shortest gap between two re-seed passes. A pass paginates the whole
 /// friends list, so this is what keeps a reconnect storm -- or somebody
@@ -91,6 +96,7 @@ class APIServer
     private FriendsTracker friendsTracker;
     private ModerationsTracker moderationsTracker;
     private NotificationsTracker notificationsTracker;
+    private PromotionRules promotionRules;
     private WorldCache worldCache;
     private InstanceCache instanceCache;
     private UserProfileCache userProfiles;
@@ -140,6 +146,9 @@ class APIServer
         this.friendsTracker = new FriendsTracker();
         this.moderationsTracker = new ModerationsTracker();
         this.notificationsTracker = new NotificationsTracker();
+        this.promotionRules = new PromotionRules();
+        if (store)
+            promotionRules.load(store.getState(PROMOTION_RULES_KEY));
         this.userProfiles = new UserProfileCache();
         this.badgeImages = new BadgeImageService();
         this.reseedSignalMutex = new Mutex();
@@ -489,6 +498,48 @@ class APIServer
         if (notificationsTracker.applyEvent(event.typeRaw, msg, sender,
             event.receivedAt.toUTC().toISOExtString()))
             broadcastNotificationsSnapshot();
+    }
+
+    /// Run an event past the promotion rules and, on a match, put it in the
+    /// inbox. Fed only events that survived noise suppression, so a rule
+    /// never fires on a frame the log itself thought said nothing.
+    ///
+    /// An ephemeral `notification-promoted` event goes out alongside the
+    /// snapshot, because the front-ends toast on events and an inbox diff
+    /// would make each of them work out what arrived.
+    void processPromotions(ref const(VRCEvent) event)
+    {
+        const(PromotionRule)* rule = promotionRules.match(event, MonoTime.currTime);
+        if (rule is null)
+            return;
+
+        NotificationInfo info = notificationsTracker.addPromoted(
+            (long seq) => buildPromotedNotification(*rule, event, seq));
+        logInfo("promoted %s to %s (rule %s)", event.typeRaw, info.id, rule.id);
+
+        JSONValue content = buildNotificationJSON(info);
+        VRCEvent promoted = VRCEvent(EventType.unknown, "notification-promoted",
+            content, event.receivedAt,
+            JSONValue([
+                "type":    JSONValue("notification-promoted"),
+                "content": JSONValue(content.toString()),
+            ]).toString());
+        broadcast(promoted, 0);
+        broadcastNotificationsSnapshot();
+    }
+
+    /// Send the promotion rules to every authenticated client, so an edit
+    /// from one front-end shows on the others.
+    void broadcastPromotions()
+    {
+        string line = promotionRules.buildPromotionsMessage().toString() ~ "\n";
+
+        clientsMutex.lock();
+        scope(exit) clientsMutex.unlock();
+
+        foreach (client; clients)
+            if (client.authenticated)
+                client.sendLine(line);
     }
 
     /// Seed or re-seed the server-side inbox from VRChat's two listings: v1
@@ -1490,6 +1541,22 @@ private class ClientHandler
                     }
                     handleGetNotifications();
                     break;
+                case "get_promotions":
+                    if (authenticated == false)
+                    {
+                        sendError("Not authenticated");
+                        return;
+                    }
+                    sendLine(server.promotionRules.buildPromotionsMessage().toString() ~ "\n");
+                    break;
+                case "set_promotions":
+                    if (authenticated == false)
+                    {
+                        sendError("Not authenticated");
+                        return;
+                    }
+                    handleSetPromotions(msg);
+                    break;
                 case "notification_action":
                     if (authenticated == false)
                     {
@@ -2222,6 +2289,25 @@ private class ClientHandler
             return;
         }
 
+        // A promoted entry is ours, not VRChat's: dismissing it is the only
+        // action it has, and the answer is local.
+        if (notifId.startsWith(PROMOTED_ID_PREFIX))
+        {
+            bool removed = action == "hide" && server.notificationsTracker.remove([ notifId ]);
+            JSONValue result = JSONValue([
+                "type": JSONValue("notification_action_result"),
+                "notification_id": JSONValue(notifId),
+                "action": JSONValue(action),
+                "success": JSONValue(removed),
+            ]);
+            if (removed == false)
+                result["error"] = JSONValue(action == "hide" ? "Already dismissed" : "Only dismiss applies");
+            sendLine(result.toString() ~ "\n");
+            if (removed)
+                server.broadcastNotificationsSnapshot();
+            return;
+        }
+
         if (server.httpClient is null || server.apiMutex is null)
         {
             sendError("Server HTTP client not configured");
@@ -2913,6 +2999,28 @@ private class ClientHandler
         {
             finish(false, e.msg);
         }
+    }
+
+    /// Replace the promotion rules and re-broadcast them. Rejected as a whole
+    /// on any invalid rule, reported in the `promotions` reply.
+    void handleSetPromotions(JSONValue msg)
+    {
+        JSONValue jrules;
+        if (const(JSONValue)* v = "rules" in msg)
+            jrules = *v;
+
+        if (string error = server.promotionRules.replace(jrules))
+        {
+            JSONValue reply = server.promotionRules.buildPromotionsMessage();
+            reply["error"] = JSONValue(error);
+            sendLine(reply.toString() ~ "\n");
+            return;
+        }
+
+        if (server.store)
+            server.store.setState(PROMOTION_RULES_KEY,
+                server.promotionRules.buildRulesJSON().toString());
+        server.broadcastPromotions();
     }
 
     /// Reply to `get_moderations`: refetch the mute/block lists from VRChat
