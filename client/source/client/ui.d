@@ -4491,7 +4491,7 @@ private void drawPromotionRulesPage(mu_Context* ctx, AppState* state, int scroll
     bool canEdit = unavailable is null;
 
     mu_layout_row(ctx, 1, fullCol.ptr, 0);
-    mu_label(ctx, "Events a rule picks become notifications, toasted like any other.");
+    mu_label(ctx, "Turns chosen events into notifications, processed server-side.");
 
     if (canEdit && state.promotionRules.length < RULES_MAX)
     {

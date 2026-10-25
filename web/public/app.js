@@ -252,8 +252,7 @@ var TOOL_HINTS = {
            "mute made in-game shows up after a refresh.",
     blocked: "People you have blocked. VRChat reports no changes to this, so " +
              "a block made in-game shows up after a refresh.",
-    rules: "Events a rule picks become notifications in the inbox. vrcd-server " +
-           "runs them, so they fire while no page is open.",
+    rules: "Turns chosen events into notifications, processed server-side.",
     debug: "Only here because this vrcd-web was started with --debug or " +
            "VRCD_WEB_DEBUG. Nothing below touches VRChat: the rows are made " +
            "here and answered here."
