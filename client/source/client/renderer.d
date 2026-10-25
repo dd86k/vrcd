@@ -46,6 +46,42 @@ private __gshared SDL_Surface*[string] emojiCache;
 /// Entries kept before emojiCache is cleared.
 private enum EMOJI_CACHE_MAX = 512;
 
+// Text runs and scaled images are cached as drawn and dropped once a few
+// frames pass without them, so the cache holds about what is on screen.
+
+/// Cached surface and the frame it was last drawn in.
+private struct CacheEntry
+{
+    SDL_Surface* surface;
+    uint frame;
+}
+
+/// Text cache key. Lookups pass a borrowed slice, stored keys own theirs.
+private struct TextKey
+{
+    const(char)[] text;
+    uint rgba;
+}
+
+/// Image cache key: registered image and the size it is drawn at.
+private struct ImageKey
+{
+    int id;
+    int w, h;
+}
+
+private __gshared CacheEntry[TextKey] textCache;
+private __gshared CacheEntry[ImageKey] imageCache;
+
+/// Frame number, bumped by r_clear.
+private __gshared uint frameNo;
+
+/// Frames an entry may go undrawn before it is dropped.
+private enum CACHE_IDLE_FRAMES = 30;
+
+/// Text entries past which everything not drawn this frame is dropped.
+private enum TEXT_CACHE_MAX = 4096;
+
 // Font size the fonts are currently rasterized at, i.e. points * uiScale.
 private __gshared float fontPixelSize = 0.0f;
 
@@ -106,6 +142,8 @@ void r_update_metrics()
             TTF_SetFontSize(f, wantFont);
         fontPixelSize = wantFont;
         clearEmojiCache();
+        clearCache(textCache);
+        clearCache(imageCache);
     }
 }
 
@@ -258,13 +296,22 @@ void r_draw_text(const(char)[] text, mu_Vec2 pos, mu_Color color)
 /// Draw run with the primary and its fallbacks at x, y, returning its width.
 private int drawTextRun(const(char)[] run, int x, int y, SDL_Color fg)
 {
-    SDL_Surface* s = TTF_RenderText_Blended(fonts[0], run.ptr, run.length, fg);
+    uint rgba = (fg.r << 24) | (fg.g << 16) | (fg.b << 8) | fg.a;
+    SDL_Surface* s;
+    if (CacheEntry* hit = TextKey(run, rgba) in textCache)
+    {
+        hit.frame = frameNo;
+        s = hit.surface;
+    }
+    else
+    {
+        s = TTF_RenderText_Blended(fonts[0], run.ptr, run.length, fg);
+        textCache[TextKey(run.idup, rgba)] = CacheEntry(s, frameNo);
+    }
     if (s is null) return 0;
     SDL_Rect dst = SDL_Rect(x, y, s.w, s.h);
     SDL_BlitSurface(s, null, surface, &dst);
-    int w = s.w;
-    SDL_DestroySurface(s);
-    return w;
+    return s.w;
 }
 
 /// End of the run starting at start, setting emoji when it goes to emojiFont.
@@ -317,16 +364,16 @@ private SDL_Surface* emojiSurface(const(char)[] run)
     {
         int h = TTF_GetFontHeight(fonts[0]);
         int w = cast(int)(cast(long)s.w * h / s.h);
-        s = shrinkSurface(s, w > 0 ? w : 1, h > 0 ? h : 1);
+        s = resizeSurface(s, w > 0 ? w : 1, h > 0 ? h : 1);
     }
     emojiCache[run.idup] = s;
     return s;
 }
 
-/// s shrunk to w by h, freeing s. Halved first so the linear filter averages
-/// every source pixel instead of sampling a few. Premultiplied so transparent
-/// pixels do not darken the edges.
-private SDL_Surface* shrinkSurface(SDL_Surface* s, int w, int h)
+/// s resized to w by h, freeing s. Halved first when shrinking so the linear
+/// filter averages every source pixel instead of sampling a few. Premultiplied
+/// so transparent pixels do not darken the edges.
+private SDL_Surface* resizeSurface(SDL_Surface* s, int w, int h)
 {
     SDL_PremultiplySurfaceAlpha(s, false);
     while (s.w >= w * 2 && s.h >= h * 2)
@@ -348,6 +395,41 @@ private SDL_Surface* shrinkSurface(SDL_Surface* s, int w, int h)
     }
     SDL_SetSurfaceBlendMode(s, SDL_BLENDMODE_BLEND_PREMULTIPLIED);
     return s;
+}
+
+/// Drop the entries of cache for which pred(key, entry) holds, freeing them.
+private void dropWhere(alias pred, K)(ref CacheEntry[K] cache)
+{
+    // Reused across calls, a sweep runs every frame.
+    static K[] stale;
+    stale.length = 0;
+    stale.assumeSafeAppend();
+    foreach (ref const(K) k, ref CacheEntry e; cache)
+        if (pred(k, e))
+            stale ~= k;
+    foreach (ref K k; stale)
+    {
+        if (SDL_Surface* s = cache[k].surface)
+            SDL_DestroySurface(s);
+        cache.remove(k);
+    }
+}
+
+/// Free every entry of cache.
+private void clearCache(K)(ref CacheEntry[K] cache)
+{
+    foreach (ref CacheEntry e; cache)
+        if (e.surface) SDL_DestroySurface(e.surface);
+    cache.clear();
+}
+
+/// Drop cache entries not drawn lately, or not drawn this frame when the text
+/// cache is over TEXT_CACHE_MAX.
+private void sweepCaches()
+{
+    uint idle = textCache.length > TEXT_CACHE_MAX ? 0 : CACHE_IDLE_FRAMES;
+    dropWhere!((k, e) => frameNo - e.frame > idle)(textCache);
+    dropWhere!((k, e) => frameNo - e.frame > CACHE_IDLE_FRAMES)(imageCache);
 }
 
 /// Free every cached emoji run.
@@ -418,6 +500,7 @@ int r_register_image(SDL_Surface* img)
 void r_unregister_image(int id)
 {
     registeredImages.remove(id);
+    dropWhere!((k, e) => k.id == id)(imageCache);
 }
 
 /// Whether this icon-command id addresses a registered image.
@@ -455,9 +538,22 @@ void r_draw_image(int id, mu_Rect rect)
 
     SDL_Rect clipRect = SDL_Rect(clip.x, clip.y, clip.w, clip.h);
     SDL_SetSurfaceClipRect(surface, &clipRect);
-    // SDL3 makes the filter explicit where SDL2's scaled blit was always
-    // nearest. Kept nearest so thumbnails look as they did.
-    SDL_BlitSurfaceScaled(img, null, surface, &dst, SDL_SCALEMODE_NEAREST);
+    SDL_Surface* scaled;
+    if (CacheEntry* hit = ImageKey(id, dw, dh) in imageCache)
+    {
+        hit.frame = frameNo;
+        scaled = hit.surface;
+    }
+    else
+    {
+        // Scaled once per size, so the smooth filter costs nothing per frame.
+        scaled = SDL_DuplicateSurface(img);
+        if (scaled)
+            scaled = resizeSurface(scaled, dw, dh);
+        imageCache[ImageKey(id, dw, dh)] = CacheEntry(scaled, frameNo);
+    }
+    if (scaled)
+        SDL_BlitSurface(scaled, null, surface, &dst);
     SDL_SetSurfaceClipRect(surface, null);
 }
 
@@ -517,6 +613,7 @@ void r_set_clip_rect(mu_Rect rect)
 
 void r_clear(mu_Color clr)
 {
+    frameNo++;
     r_update_metrics();
     SDL_FillSurfaceRect(surface, null, SDL_MapRGB(pixelFormat, null, clr.r, clr.g, clr.b));
 }
@@ -526,6 +623,7 @@ void r_present()
     SDL_UpdateTexture(screenTexture, null, surface.pixels, surface.pitch);
     SDL_RenderTexture(sdlRenderer, screenTexture, null, null);
     SDL_RenderPresent(sdlRenderer);
+    sweepCaches();
 }
 
 // Primary font candidates, first one found becomes fonts[0] and defines the
@@ -783,6 +881,7 @@ private void attachFallback(TTF_Font* f, string name)
 void destroyFont()
 {
     clearEmojiCache();
+    clearCache(textCache);
     if (emojiFont)
     {
         TTF_CloseFont(emojiFont);
