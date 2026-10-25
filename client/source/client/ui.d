@@ -15,12 +15,16 @@ import std.json : JSONValue;
 import ddui;
 import vrcd.events : prettyPlatform, prettyNotifType, shortAvatarId;
 import vrcd.notifications : NotificationInfo, NotificationResponse, prettyResponseLabel;
+import vrcd.promotions : PromotableGroup, RULES_MAX, RULE_NAME_MAX, RULE_USERS_MAX,
+    WATCH_RULE_COOLDOWN, WATCH_RULE_EVENT, WATCH_RULE_ID, WATCH_RULE_NAME,
+    cooldownPresets, promotableEvents;
 
 import client.notifications : notifyEventLabels, feedEventLabels, feedFilterSections,
     feedEventIndex, prettyEventType;
 import client.imagecache : imageKey, getIconId;
 import client.renderer : window_width, window_height;
-import client.connection : PROTOCOL_BOOP, PROTOCOL_MODERATION, PROTOCOL_PROFILES;
+import client.connection : PROTOCOL_BOOP, PROTOCOL_MODERATION, PROTOCOL_PROFILES,
+    PROTOCOL_PROMOTIONS;
 import client.gui : wasClick, requestRepaint;
 import client.state;
 import client.stream : tlsAvailable;
@@ -101,6 +105,17 @@ private void goBack(AppState* state)
         // origin, and then clearing the target is the whole way back.
         if (home != Tab.profile)
             activeTab = home;
+        requestRepaint();
+        return;
+    }
+    // The rule pages nest, and Back out of the friend picker landing on TOOLS
+    // would throw the rule being edited away with it.
+    if (activeTab == Tab.tools && (state.toolsPage == ToolsPage.promotionEdit
+        || state.toolsPage == ToolsPage.promotionPickUser))
+    {
+        state.toolsPage = state.toolsPage == ToolsPage.promotionPickUser
+            ? ToolsPage.promotionEdit : ToolsPage.promotionRules;
+        state.armedConfirm = ArmedConfirm.init;
         requestRepaint();
         return;
     }
@@ -2219,6 +2234,23 @@ private void drawProfileActions(mu_Context* ctx, AppState* state, ref ProfileVie
         }
     }
 
+    // Only friends: VRChat sends no online events about anybody else.
+    if (view.hasSnapshot && state.serverProtocol >= PROTOCOL_PROMOTIONS
+        && state.promotionsLoaded)
+    {
+        spacer(ctx);
+        sectionHeader(ctx, "Notify");
+        mu_layout_row(ctx, 1, fullCol.ptr, 60);
+        bool watched = state.isWatched(userId);
+        if (state.promotionsSaving)
+            activityButton(ctx, "Saving...", ruleSaveSince);
+        else if (toggleButton(ctx, "Notify When Online", watched))
+        {
+            toggleWatched(state, userId);
+            ruleSaveSince = MonoTime.currTime;
+        }
+    }
+
     if (state.serverProtocol < PROTOCOL_MODERATION)
         return;
 
@@ -2461,6 +2493,9 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
             char[32] relBuf = void;
             const(char)[] relDate = formatRelative(n.info.receivedAtUnix, relBuf[]);
             string label = prettyNotifType(n.info.notificationType);
+            // A promoted row's type is "a rule fired"; which rule says more.
+            if (n.info.notificationType == "vrcd.promoted" && n.info.title.length > 0)
+                label = n.info.title;
             char[96] headBuf = void;
             const(char)[] head = relDate.length > 0
                 ? sformat(headBuf[], "%s . %s", label, relDate)
@@ -2511,8 +2546,10 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
                 // answer. Offered only for a notification from an actual
                 // person -- a v2 group notification carries a grp_ ID in
                 // the same field -- and only when the server is new enough
-                // to moderate and does not already have them blocked.
+                // to moderate and does not already have them blocked. A
+                // promoted row names who it is about, not who sent it.
                 bool canBlock = state.serverProtocol >= PROTOCOL_MODERATION
+                    && n.info.notificationType != "vrcd.promoted"
                     && n.info.senderUserId.startsWith("usr_")
                     && state.isBlocked(n.info.senderUserId) == false;
 
@@ -2765,6 +2802,8 @@ private mu_Color notifAccent(string notifType)
             return mu_Color(220, 70, 70, 255);      // red, something ending
         case "boop", "message":
             return mu_Color(220, 170, 60, 255);     // amber, someone talking
+        case "vrcd.promoted":
+            return mu_Color(60, 190, 190, 255);     // teal, asked for by a rule
         default:
             break;
     }
@@ -3718,6 +3757,9 @@ private void drawToolsTab(mu_Context* ctx, AppState* state, int scrollDelta)
         case ToolsPage.friendList:    drawFriendListPage(ctx, state, scrollDelta);    return;
         case ToolsPage.muteList:      drawModerationListPage(ctx, state, scrollDelta, true);  return;
         case ToolsPage.blockList:     drawModerationListPage(ctx, state, scrollDelta, false); return;
+        case ToolsPage.promotionRules:    drawPromotionRulesPage(ctx, state, scrollDelta);    return;
+        case ToolsPage.promotionEdit:     drawPromotionEditPage(ctx, state, scrollDelta);     return;
+        case ToolsPage.promotionPickUser: drawPromotionPickUserPage(ctx, state, scrollDelta); return;
     }
 
     static immutable int[1] fullCol  = [-1];
@@ -3747,6 +3789,13 @@ private void drawToolsTab(mu_Context* ctx, AppState* state, int scrollDelta)
         if (state.moderationsLoaded == false)
             state.refreshModerationsRequested = true;
     }
+
+    spacer(ctx);
+    sectionHeader(ctx, "Notifications");
+
+    mu_layout_row(ctx, COLCOUNT, fullCol.ptr, 60);
+    if (clickButton(ctx, "Notification Rules"))
+        state.toolsPage = ToolsPage.promotionRules;
 
     spacer(ctx);
     sectionHeader(ctx, "Pictures");
@@ -4235,6 +4284,552 @@ private void drawModerationListPage(mu_Context* ctx, AppState* state, int scroll
     {
         mu_layout_row(ctx, 1, fullCol.ptr, 0);
         mu_label(ctx, "Working...");
+    }
+
+    mu_end_panel(ctx);
+}
+
+/// Editor buffers. Module state like the feed search box: they belong to
+/// whichever rule is open, and only one can be.
+private char[RULE_NAME_MAX + 1] ruleNameBuf = '\0';
+private char[64] rulePickBuf = '\0';
+/// "Specific friends" is a choice of its own rather than "users is not
+/// empty": a rule with nobody picked yet would otherwise read as Anyone, and
+/// an empty user list is exactly what the server takes Anyone to mean.
+private bool ruleForSomeone;
+private MonoTime ruleSaveSince;
+
+private enum mu_Color toggleOnBg   = mu_Color(40, 70, 120, 255);
+private enum mu_Color toggleOnEdge = mu_Color(90, 140, 220, 255);
+
+/// A button standing for a choice that is in or out: the feed filter's
+/// checkbox, at a size a headset can hit.
+private bool toggleButton(mu_Context* ctx, string label, bool on)
+{
+    mu_Rect r = mu_layout_next(ctx);
+    bool mouseOver = mu_mouse_over(ctx, r) != 0;
+
+    if (on)
+    {
+        mu_draw_rect(ctx, r, toggleOnBg);
+        mu_draw_box(ctx, r, toggleOnEdge);
+    }
+    else
+        mu_draw_frame(ctx, r, MU_COLOR_BUTTON + (mouseOver && ctx.mouse_down == 0 ? 1 : 0));
+    mu_draw_control_text(ctx, label, r, MU_COLOR_TEXT, MU_OPT_ALIGNCENTER);
+
+    if (wasClick && mouseOver)
+    {
+        wasClick = false;
+        return true;
+    }
+    return false;
+}
+
+/// Columns for a grid of equal buttons at least `minW` wide. Returns how many.
+private int buttonGridCols(mu_Context* ctx, ref int[8] cols, int minW)
+{
+    int bodyW = mu_get_current_container(ctx).body_.w;
+    int columns = bodyW / minW;
+    if (columns < 1)
+        columns = 1;
+    if (columns > cast(int) cols.length)
+        columns = cast(int) cols.length;
+    int cellW = bodyW / columns - ctx.style.spacing;
+    foreach (int c; 0 .. columns)
+        cols[c] = cellW;
+    cols[columns - 1] = -1;
+    return columns;
+}
+
+/// Why the rules cannot be edited right now, or null when they can.
+private string promotionsUnavailable(AppState* state)
+{
+    if (state.connected == false)
+        return "Not connected.";
+    if (state.serverProtocol < PROTOCOL_PROMOTIONS)
+        return "Server too old for notification rules (needs protocol 15).";
+    if (state.promotionsLoaded == false)
+        return "Loading...";
+    return null;
+}
+
+/// What a rule is called in a list. An unnamed one goes by its first event,
+/// which is also what the server titles its notifications with.
+private string ruleTitle(ref const(PromotionRule) rule)
+{
+    if (rule.name.length > 0)
+        return rule.name;
+    return rule.events.length > 0 ? prettyEventType(rule.events[0]) : rule.id;
+}
+
+private string ruleUserName(AppState* state, string userId)
+{
+    FriendInfo* f = state.findFriend(userId);
+    return f && f.displayName.length > 0 ? f.displayName : userId;
+}
+
+private const(char)[] cooldownLabel(long seconds, char[] buf)
+{
+    if (seconds <= 0)
+        return "Off";
+    if (seconds % 3600 == 0)
+        return sformat(buf, "%dh", seconds / 3600);
+    if (seconds % 60 == 0)
+        return sformat(buf, "%dm", seconds / 60);
+    return sformat(buf, "%ds", seconds);
+}
+
+/// One line saying what a rule does, so a rule needs no name to be read.
+private const(char)[] ruleSummary(AppState* state, ref const(PromotionRule) rule, char[] buf)
+{
+    char[32] num = void;
+    size_t n;
+    foreach (size_t i, string e; rule.events)
+    {
+        if (i > 0)
+            n += copyInto(buf[n .. $], ", ");
+        n += copyInto(buf[n .. $], prettyEventType(e));
+    }
+    n += copyInto(buf[n .. $], " . ");
+    if (rule.users.length == 0)
+        n += copyInto(buf[n .. $], "anyone");
+    else if (rule.users.length == 1)
+        n += copyInto(buf[n .. $], ruleUserName(state, rule.users[0]));
+    else
+        n += copyInto(buf[n .. $], sformat(num, "%d people", rule.users.length));
+    if (rule.cooldown > 0)
+    {
+        n += copyInto(buf[n .. $], " . quiet ");
+        n += copyInto(buf[n .. $], cooldownLabel(rule.cooldown, num));
+    }
+    return buf[0 .. n];
+}
+
+private void openRuleEditor(AppState* state, ref const(PromotionRule) rule, bool isNew)
+{
+    state.ruleDraft = PromotionRule(rule.id, rule.name, rule.enabled,
+        rule.events.dup, rule.users.dup, rule.cooldown);
+    state.ruleDraftIsNew = isNew;
+    state.promotionsError = null;
+    state.armedConfirm = ArmedConfirm.init;
+    state.toolsPage = ToolsPage.promotionEdit;
+    setTextboxFrom(ruleNameBuf[], rule.name);
+    ruleForSomeone = rule.users.length > 0;
+    requestRepaint();
+}
+
+private PromotionRule newRule()
+{
+    import std.datetime.systime : Clock;
+    import std.conv : to;
+
+    PromotionRule rule;
+    // Unique enough for a set of at most a hundred, made by one person.
+    rule.id = "rule_" ~ Clock.currStdTime.to!string(36);
+    return rule;
+}
+
+/// Add or take somebody out of the shared "Notify When Online" rule. Taking
+/// the last one out deletes the rule: kept with nobody in it, it would match
+/// anyone, which is the opposite of what the last tap asked for.
+private void toggleWatched(AppState* state, string userId)
+{
+    import std.algorithm.searching : canFind;
+
+    PromotionRule rule;
+    bool found;
+    foreach (ref PromotionRule r; state.promotionRules)
+    {
+        if (r.id != WATCH_RULE_ID)
+            continue;
+        rule = r;
+        found = true;
+        break;
+    }
+    if (found == false)
+    {
+        rule.id = WATCH_RULE_ID;
+        rule.name = WATCH_RULE_NAME;
+        rule.events = [ WATCH_RULE_EVENT ];
+        rule.cooldown = WATCH_RULE_COOLDOWN;
+    }
+
+    if (rule.enabled && canFind(rule.users, userId))
+    {
+        string[] kept;
+        foreach (string u; rule.users)
+            if (u != userId)
+                kept ~= u;
+        if (kept.length == 0)
+        {
+            state.queuePromotions(state.promotionsWithout(WATCH_RULE_ID));
+            return;
+        }
+        rule.users = kept;
+    }
+    else
+    {
+        if (canFind(rule.users, userId) == false)
+            rule.users = rule.users ~ userId;
+        rule.enabled = true;
+    }
+    state.queuePromotions(state.promotionsWith(rule));
+}
+
+/// TOOLS > Notification Rules: the server's rules, each a row with an
+/// on/off toggle that sends at once (one tap, and one tap undoes it) and a
+/// delete that arms first.
+private void drawPromotionRulesPage(mu_Context* ctx, AppState* state, int scrollDelta)
+{
+    static immutable int[1] fullCol = [-1];
+
+    mu_begin_panel(ctx, "PromotionRulesPanel");
+    applyScroll(ctx, scrollDelta);
+
+    string unavailable = promotionsUnavailable(state);
+    bool canEdit = unavailable is null;
+
+    mu_layout_row(ctx, 1, fullCol.ptr, 0);
+    mu_label(ctx, "Events a rule picks become notifications, toasted like any other.");
+
+    if (canEdit && state.promotionRules.length < RULES_MAX)
+    {
+        mu_layout_row(ctx, 1, fullCol.ptr, 60);
+        if (clickButton(ctx, "New Rule"))
+        {
+            PromotionRule rule = newRule();
+            openRuleEditor(state, rule, true);
+        }
+    }
+
+    if (unavailable)
+    {
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        mu_label(ctx, unavailable);
+    }
+    if (state.promotionsError.length > 0)
+    {
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        mu_label(ctx, state.promotionsError);
+    }
+    if (state.promotionsLoaded && state.promotionRules.length == 0)
+    {
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        mu_label(ctx, "No rules yet.");
+    }
+
+    foreach (size_t i, ref PromotionRule rule; state.promotionRules)
+        drawPromotionRuleRow(ctx, state, rule, canEdit, i);
+
+    if (state.promotionsSaving)
+    {
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        mu_label(ctx, "Saving...");
+    }
+
+    mu_end_panel(ctx);
+}
+
+private void drawPromotionRuleRow(mu_Context* ctx, AppState* state,
+    ref PromotionRule rule, bool canEdit, size_t index)
+{
+    static immutable int[1] fullCol = [-1];
+    int padX = ctx.style.padding;
+
+    if (canEdit && state.armedConfirm.kind == "rule-delete"
+        && state.armedConfirm.id == rule.id)
+    {
+        // Same shape as an armed Block: Cancel lands where the finger was,
+        // Confirm sits bottom-left, away from it.
+        static immutable int[2] armedCols = [-260, -1];
+        char[128] buffer = void;
+        mu_layout_row(ctx, 2, armedCols.ptr, 56);
+        mu_Rect promptCell = manageRowBand(ctx, index, manageArmedBg,
+            56 + ctx.style.spacing);
+        mu_draw_control_text(ctx,
+            cast(string) joinPieces(buffer, [ "Delete", ruleTitle(rule) ], " "),
+            mu_Rect(promptCell.x + padX, promptCell.y, promptCell.w - padX, promptCell.h),
+            MU_COLOR_TEXT, 0);
+        if (clickButton(ctx, "Cancel"))
+            state.armedConfirm = ArmedConfirm.init;
+
+        static immutable int[2] confirmCols = [220, -1];
+        mu_layout_row(ctx, 2, confirmCols.ptr, 56);
+        if (clickButton(ctx, "Confirm Delete"))
+        {
+            state.armedConfirm = ArmedConfirm.init;
+            if (state.promotionsSaving == false)
+                state.queuePromotions(state.promotionsWithout(rule.id));
+        }
+        mu_layout_next(ctx); // right spacer
+        return;
+    }
+
+    // Two lines: the rule, then what it does.
+    int textH = ctx.text_height(ctx.style.font);
+    int rowH = textH * 2 + 16 > 56 ? textH * 2 + 16 : 56;
+
+    static immutable int[4] cols = [-340, 100, 110, -1];
+    if (canEdit)
+        mu_layout_row(ctx, 4, cols.ptr, rowH);
+    else
+        mu_layout_row(ctx, 1, fullCol.ptr, rowH);
+    mu_Rect cell = manageRowBand(ctx, index);
+    int half = cell.h / 2;
+
+    char[256] summaryBuf = void;
+    mu_draw_control_text(ctx, ruleTitle(rule),
+        mu_Rect(cell.x + padX, cell.y + 4, cell.w - padX, half - 4), MU_COLOR_TEXT, 0);
+    mu_Color saved = ctx.style.colors[MU_COLOR_TEXT];
+    ctx.style.colors[MU_COLOR_TEXT] = rule.enabled ? notifMetaColor : mu_Color(100, 100, 110, 255);
+    mu_draw_control_text(ctx, cast(string) ruleSummary(state, rule, summaryBuf),
+        mu_Rect(cell.x + padX, cell.y + half, cell.w - padX, half - 4), MU_COLOR_TEXT, 0);
+    ctx.style.colors[MU_COLOR_TEXT] = saved;
+
+    if (canEdit == false)
+        return;
+
+    if (toggleButton(ctx, rule.enabled ? "On" : "Off", rule.enabled)
+        && state.promotionsSaving == false)
+    {
+        PromotionRule flipped = rule;
+        flipped.enabled = rule.enabled == false;
+        state.queuePromotions(state.promotionsWith(flipped));
+    }
+    if (clickButton(ctx, "Edit"))
+        openRuleEditor(state, rule, false);
+    if (clickButton(ctx, "Delete"))
+        state.armedConfirm = ArmedConfirm("rule-delete", rule.id);
+}
+
+/// Why the draft cannot be saved yet, or null.
+private string ruleDraftProblem(ref const(PromotionRule) draft)
+{
+    if (draft.events.length == 0)
+        return "Pick at least one event.";
+    if (ruleForSomeone && draft.users.length == 0)
+        return "Add at least one friend, or pick Anyone.";
+    return null;
+}
+
+private void toggleIn(ref string[] list, string value)
+{
+    string[] kept;
+    foreach (string v; list)
+        if (v != value)
+            kept ~= v;
+    list = kept.length == list.length ? list ~ value : kept;
+}
+
+/// TOOLS > Notification Rules > a rule. Staged like the status picker:
+/// nothing reaches the server until Save. Built to need no typing past the
+/// optional name, since typing is what a headset is worst at.
+private void drawPromotionEditPage(mu_Context* ctx, AppState* state, int scrollDelta)
+{
+    import std.algorithm.searching : canFind;
+    import std.string : strip;
+
+    static immutable int[1] fullCol = [-1];
+    static immutable int[2] labelFieldCols = [200, -1];
+    static immutable int[2] saveCols = [-220, -1];
+
+    mu_begin_panel(ctx, "PromotionEditPanel");
+    applyScroll(ctx, scrollDelta);
+
+    PromotionRule* draft = &state.ruleDraft;
+    string unavailable = promotionsUnavailable(state);
+    string problem = ruleDraftProblem(*draft);
+
+    // Up top, so the button that sends is never scrolled away from.
+    mu_layout_row(ctx, 2, saveCols.ptr, 60);
+    if (state.promotionsSaving)
+        activityButton(ctx, "Saving...", ruleSaveSince);
+    else if (clickButton(ctx, state.ruleDraftIsNew ? "Create Rule" : "Save Rule")
+        && unavailable is null && problem is null)
+    {
+        PromotionRule rule = *draft;
+        const(char)* nul = cast(const(char)*) memchr(ruleNameBuf.ptr, '\0', ruleNameBuf.length);
+        size_t nameLen = nul ? nul - ruleNameBuf.ptr : ruleNameBuf.length;
+        rule.name = strip(ruleNameBuf[0 .. nameLen]).idup;
+        if (ruleForSomeone == false)
+            rule.users = null;
+        state.queuePromotions(state.promotionsWith(rule));
+        ruleSaveSince = MonoTime.currTime;
+    }
+    if (clickButton(ctx, "Cancel"))
+    {
+        state.toolsPage = ToolsPage.promotionRules;
+        state.promotionsError = null;
+        requestRepaint();
+    }
+
+    foreach (string line; [ unavailable, problem, state.promotionsError ])
+    {
+        if (line.length == 0)
+            continue;
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        mu_label(ctx, line);
+    }
+
+    spacer(ctx, 10);
+    mu_layout_row(ctx, 2, labelFieldCols.ptr, 40);
+    mu_label(ctx, "Name (optional)");
+    mu_textbox(ctx, ruleNameBuf.ptr, cast(int) ruleNameBuf.length);
+
+    int[8] cols;
+    int columns = buttonGridCols(ctx, cols, 220);
+
+    spacer(ctx);
+    sectionHeader(ctx, "When");
+    foreach (ref const(PromotableGroup) group; promotableEvents)
+    {
+        groupHeading(ctx, group.title);
+        foreach (size_t i, string e; group.rawTypes)
+        {
+            if (i % columns == 0)
+                mu_layout_row(ctx, columns, cols.ptr, 56);
+            if (toggleButton(ctx, prettyEventType(e), canFind(draft.events, e)))
+                toggleIn(draft.events, e);
+        }
+    }
+
+    // Events another front-end picked that this one does not offer, listed
+    // so they can at least be taken out.
+    size_t others;
+    foreach (string e; draft.events)
+    {
+        bool offered;
+        foreach (ref const(PromotableGroup) group; promotableEvents)
+            offered = offered || canFind(group.rawTypes, e);
+        if (offered)
+            continue;
+        if (others == 0)
+            groupHeading(ctx, "Other");
+        if (others++ % columns == 0)
+            mu_layout_row(ctx, columns, cols.ptr, 56);
+        if (toggleButton(ctx, prettyEventType(e), true))
+        {
+            toggleIn(draft.events, e);
+            break; // the array under this loop just changed
+        }
+    }
+
+    spacer(ctx);
+    sectionHeader(ctx, "Who");
+    int halfW = mu_get_current_container(ctx).body_.w / 2 - ctx.style.spacing;
+    int[2] whoRow = [halfW, -1];
+    mu_layout_row(ctx, 2, whoRow.ptr, 60);
+    if (toggleButton(ctx, "Anyone", ruleForSomeone == false))
+        ruleForSomeone = false;
+    if (toggleButton(ctx, "Specific friends", ruleForSomeone))
+        ruleForSomeone = true;
+
+    if (ruleForSomeone)
+    {
+        static immutable int[2] userCols = [-160, -1];
+        int padX = ctx.style.padding;
+        foreach (size_t i, string userId; draft.users)
+        {
+            mu_layout_row(ctx, 2, userCols.ptr, 56);
+            mu_Rect nameCell = manageRowBand(ctx, i);
+            mu_draw_control_text(ctx, ruleUserName(state, userId),
+                mu_Rect(nameCell.x + padX, nameCell.y, nameCell.w - padX, nameCell.h),
+                MU_COLOR_TEXT, 0);
+            if (clickButton(ctx, "Remove"))
+            {
+                toggleIn(draft.users, userId);
+                break;
+            }
+        }
+        if (draft.users.length < RULE_USERS_MAX)
+        {
+            mu_layout_row(ctx, 1, fullCol.ptr, 60);
+            if (clickButton(ctx, "Add Friend"))
+            {
+                rulePickBuf[] = '\0';
+                state.toolsPage = ToolsPage.promotionPickUser;
+                requestRepaint();
+            }
+        }
+    }
+
+    spacer(ctx);
+    sectionHeader(ctx, "Quiet period");
+    mu_layout_row(ctx, 1, fullCol.ptr, 0);
+    mu_label(ctx, "After firing, stay quiet this long for the same person.");
+    char[16] cdBuf = void;
+    bool preset = canFind(cooldownPresets, draft.cooldown);
+    size_t cell;
+    foreach (long seconds; cooldownPresets)
+    {
+        if (cell++ % columns == 0)
+            mu_layout_row(ctx, columns, cols.ptr, 56);
+        if (toggleButton(ctx, cast(string) cooldownLabel(seconds, cdBuf), draft.cooldown == seconds))
+            draft.cooldown = seconds;
+    }
+    // A value set elsewhere stays pickable rather than silently replaced.
+    if (preset == false)
+    {
+        if (cell % columns == 0)
+            mu_layout_row(ctx, columns, cols.ptr, 56);
+        toggleButton(ctx, cast(string) cooldownLabel(draft.cooldown, cdBuf), true);
+    }
+
+    mu_end_panel(ctx);
+}
+
+/// TOOLS > Notification Rules > a rule > Add Friend: the roster, narrowed by
+/// a search box. A press adds and goes straight back to the rule.
+private void drawPromotionPickUserPage(mu_Context* ctx, AppState* state, int scrollDelta)
+{
+    import std.algorithm.searching : canFind;
+    import std.uni : toLower;
+
+    static immutable int[1] fullCol = [-1];
+
+    mu_begin_panel(ctx, "PromotionPickPanel");
+    applyScroll(ctx, scrollDelta);
+
+    mu_layout_row(ctx, 1, fullCol.ptr, 0);
+    mu_label(ctx, "Search");
+    mu_layout_row(ctx, 1, fullCol.ptr, 40);
+    mu_textbox(ctx, rulePickBuf.ptr, cast(int) rulePickBuf.length);
+
+    const(char)* nul = cast(const(char)*) memchr(rulePickBuf.ptr, '\0', rulePickBuf.length);
+    const(char)[] query = rulePickBuf[0 .. nul ? nul - rulePickBuf.ptr : rulePickBuf.length];
+
+    int padX = ctx.style.padding;
+    size_t shown;
+    foreach (ref FriendInfo f; state.allFriends)
+    {
+        if (canFind(state.ruleDraft.users, f.userId))
+            continue;
+        if (query.length > 0 && canFind!((dchar a, dchar b) => toLower(a) == toLower(b))(
+            f.displayName, query) == false)
+            continue;
+
+        mu_layout_row(ctx, 1, fullCol.ptr, 56);
+        mu_Rect cell = manageRowBand(ctx, shown++);
+        bool mouseOver = mu_mouse_over(ctx, cell) != 0;
+        if (mouseOver && ctx.mouse_down == 0)
+            mu_draw_rect(ctx, cell, mu_Color(50, 60, 80, 255));
+        mu_draw_control_text(ctx, f.displayName,
+            mu_Rect(cell.x + padX, cell.y, cell.w - padX, cell.h), MU_COLOR_TEXT, 0);
+        if (wasClick && mouseOver)
+        {
+            wasClick = false;
+            state.ruleDraft.users ~= f.userId;
+            state.toolsPage = ToolsPage.promotionEdit;
+            requestRepaint();
+            break;
+        }
+    }
+
+    if (shown == 0)
+    {
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        mu_label(ctx, state.allFriends.length == 0 ? "No friend data yet." : "Nobody matches.");
     }
 
     mu_end_panel(ctx);

@@ -46,6 +46,10 @@ enum long PROTOCOL_INVENTORY_FILTER = 11;
 /// (`notification_action` with `boop`).
 enum long PROTOCOL_BOOP = 14;
 
+/// Minimum server protocol version for notification promotion rules
+/// (`get_promotions`, `set_promotions`).
+enum long PROTOCOL_PROMOTIONS = 15;
+
 /// How many events to ask a catch-up for.
 ///
 /// The feed keeps `FEED_CAPACITY` entries and back-fills the rest a page at a
@@ -318,6 +322,28 @@ class ServerConnection
         logDebugging("requestNotifications");
         sendMessage(JSONValue([
             "type": JSONValue("get_notifications"),
+        ]));
+    }
+
+    /// Request the promotion rules. Server replies with `promotions`.
+    /// Requires PROTOCOL_PROMOTIONS.
+    void requestPromotions()
+    {
+        logDebugging("requestPromotions");
+        sendMessage(JSONValue([
+            "type": JSONValue("get_promotions"),
+        ]));
+    }
+
+    /// Replace the whole rule set. The server broadcasts `promotions` to
+    /// every front-end on success, and answers only this one, with `error`
+    /// set, on a refusal. Requires PROTOCOL_PROMOTIONS.
+    void sendSetPromotions(JSONValue rules)
+    {
+        logDebugging("sendSetPromotions: %d rule(s)", rules.array.length);
+        sendMessage(JSONValue([
+            "type": JSONValue("set_promotions"),
+            "rules": rules,
         ]));
     }
 
@@ -690,6 +716,8 @@ class ServerConnection
                 requestModerations();
             if (serverVersion >= PROTOCOL_NOTIFICATIONS)
                 requestNotifications();
+            if (serverVersion >= PROTOCOL_PROMOTIONS)
+                requestPromotions();
             // Database counters. Present since the first protocol version, so
             // no gate; refreshed from the keepalive in the receive loop.
             requestStats();

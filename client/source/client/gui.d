@@ -22,6 +22,7 @@ import ddlogger;
 import ddui;
 import vrcd.friends : FriendRoster, parseFriendsMessage;
 import vrcd.events : extractEventFields;
+import vrcd.promotions : buildRulesJSON, parsePromotionsMessage;
 import vrcd.notifications : NotificationInfo, NotificationChange,
     applyNotificationEvent, parseNotificationsMessage;
 
@@ -713,6 +714,7 @@ private void eventLoop(mu_Context* uictx)
                         // Same for moderation round-trips.
                         appState.moderationsLoading = false;
                         appState.moderationActionInFlight = false;
+                        appState.promotionsSaving = false;
                         appState.serverProtocol = 0;
                         // Profiles already fetched stay readable; a request
                         // whose reply died with the socket does not.
@@ -1168,6 +1170,17 @@ private void eventLoop(mu_Context* uictx)
             appState.pendingContentActions.length = 0;
         }
 
+        // Send a queued promotion rule set.
+        if (appState.promotionsSendRequested)
+        {
+            appState.promotionsSendRequested = false;
+            if (conn && appState.connected && conn.serverVersion >= PROTOCOL_PROMOTIONS)
+                conn.sendSetPromotions(buildRulesJSON(appState.pendingPromotions));
+            else
+                appState.promotionsSaving = false;
+            appState.pendingPromotions = null;
+        }
+
         // Drain queued moderation/friendship actions.
         if (appState.pendingModerationActions.length > 0)
         {
@@ -1601,6 +1614,10 @@ private void drainNetworkMessages()
 
             case "notifications":
                 applyNotificationsSnapshot(msg);
+                break;
+
+            case "promotions":
+                applyPromotionsMessage(msg);
                 break;
 
             case "moderate_result", "unfriend_result":
@@ -2372,6 +2389,31 @@ private void applyNotificationsSnapshot(JSONValue msg)
     NotificationInfo[] list = parseNotificationsMessage(msg);
     appState.replaceNotifications(list);
     logInfo("Inbox seeded with %d notification(s)", list.length);
+}
+
+/// Apply a `promotions` message: the rule set broadcast after any change,
+/// or the reply to a refused `set_promotions`, which carries `error` and the
+/// set the server kept.
+private void applyPromotionsMessage(JSONValue msg)
+{
+    bool wasSaving = appState.promotionsSaving;
+    appState.promotionsSaving = false;
+    appState.promotionRules = parsePromotionsMessage(msg);
+    appState.promotionsLoaded = true;
+
+    if (const(JSONValue)* v = "error" in msg)
+    {
+        appState.promotionsError = v.str;
+        return;
+    }
+    appState.promotionsError = null;
+
+    // Only our own save closes the editor: a broadcast for another
+    // front-end's edit arriving mid-edit must not throw the draft away.
+    if (wasSaving && appState.toolsPage == ToolsPage.promotionEdit)
+        appState.toolsPage = ToolsPage.promotionRules;
+    // Rows may have moved under an armed confirmation; disarm.
+    appState.armedConfirm = ArmedConfirm.init;
 }
 
 /// Apply a `moderations` snapshot: mute and block lists.

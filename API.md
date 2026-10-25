@@ -280,6 +280,8 @@ A rule turns a matching event into an inbox entry (see `notifications`) and an e
 ]}
 ```
 
+The rule with `id` `"watch-online"` is the one a friend's "Notify When Online" toggle adds to and removes from, so every front-end edits the same rule. Nothing on the server treats it specially.
+
 ### `set_status`
 
 Set the logged-in user's status and/or custom status message. The server issues a `PUT users/{selfUserId}` to VRChat, updates its self entry from the response, broadcasts a fresh `self` snapshot to all authenticated clients, and replies to the requester with `set_status_result`.

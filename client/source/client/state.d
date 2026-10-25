@@ -120,6 +120,9 @@ public import vrcd.friends : FriendInfo, InstanceGroup;
 public import client.profiles : BadgeInfo, ProfileCache, ProfileLookup,
     ProfileState, ProfileView, UserProfile;
 
+/// Rules live on the server; the state holds the last set it broadcast.
+public import vrcd.promotions : PromotionRule;
+
 /// A muted or blocked user from the server `moderations` snapshot.
 /// Player moderations are not limited to friends, so entries carry their
 /// own display names instead of referencing FriendInfo.
@@ -146,7 +149,8 @@ struct ArmedConfirm
 }
 
 /// Sub-pages of the TOOLS tab.
-enum ToolsPage { main, stripMetadata, friendList, muteList, blockList }
+enum ToolsPage { main, stripMetadata, friendList, muteList, blockList,
+    promotionRules, promotionEdit, promotionPickUser }
 
 /// Top-level tabs. The active one lives in the UI, but which tab a profile
 /// came from is part of where the app stands, like ToolsPage is.
@@ -409,6 +413,19 @@ struct AppState
     // Moderation/friendship actions queued by the UI, drained by gui.d.
     ModerationAction[] pendingModerationActions;
     bool moderationActionInFlight;
+
+    // Notification promotion rules, as the server last broadcast them.
+    PromotionRule[] promotionRules;
+    bool promotionsLoaded;
+    string promotionsError;
+    // A whole rule set queued by the UI, drained by gui.d. The flag is the
+    // request, since an empty set is a valid one to send.
+    PromotionRule[] pendingPromotions;
+    bool promotionsSendRequested;
+    bool promotionsSaving;
+    // The rule open in the editor, staged until Save.
+    PromotionRule ruleDraft;
+    bool ruleDraftIsNew;
 
     // Server protocol version from auth_ok (0 = unknown). The moderation
     // API (get_moderations, moderate_user, unfriend) needs version 3.
@@ -708,6 +725,53 @@ struct AppState
             if (m.userId == userId)
                 return true;
         }
+        return false;
+    }
+
+    /// Queue a whole rule set for gui.d to send. Every edit is built from
+    /// the last broadcast set rather than one held since an editor opened,
+    /// so another front-end's change to a different rule is not undone.
+    void queuePromotions(PromotionRule[] rules)
+    {
+        pendingPromotions = rules;
+        promotionsSendRequested = true;
+        promotionsSaving = true;
+        promotionsError = null;
+    }
+
+    /// The current set with `rule` in place of the one sharing its ID, or
+    /// appended when there is none.
+    PromotionRule[] promotionsWith(PromotionRule rule)
+    {
+        PromotionRule[] rules = promotionRules.dup;
+        foreach (ref PromotionRule r; rules)
+        {
+            if (r.id != rule.id)
+                continue;
+            r = rule;
+            return rules;
+        }
+        return rules ~ rule;
+    }
+
+    PromotionRule[] promotionsWithout(string ruleId)
+    {
+        PromotionRule[] rules;
+        foreach (ref PromotionRule r; promotionRules)
+            if (r.id != ruleId)
+                rules ~= r;
+        return rules;
+    }
+
+    /// Whether the shared "Notify When Online" rule is watching a user.
+    bool isWatched(string userId)
+    {
+        import std.algorithm.searching : canFind;
+        import vrcd.promotions : WATCH_RULE_ID;
+
+        foreach (ref PromotionRule r; promotionRules)
+            if (r.id == WATCH_RULE_ID)
+                return r.enabled && canFind(r.users, userId);
         return false;
     }
 

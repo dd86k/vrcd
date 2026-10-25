@@ -8,6 +8,7 @@
 /// License: BSD-3-Clause-Clear
 module vrcd.events;
 
+import std.algorithm.searching : startsWith;
 import std.json;
 
 /// Metadata for one feed event type: the human-readable label shown in
@@ -79,6 +80,7 @@ immutable FeedEventType[] feedEventTypes = [
     FeedEventType("DAP Error",         ["dap-error", "dap-login-error"],                  true),
     FeedEventType("System",            ["system"],                                        true),
     FeedEventType("Error",             ["error"],                                         true),
+    FeedEventType("Promoted",          ["notification-promoted"],                         true),
 ];
 
 /// Display labels, derived from feedEventTypes. Kept as a separate symbol
@@ -209,6 +211,21 @@ void extractEventFields(string eventType, JSONValue msg, out string user, out st
                         detail = prettyNotifType(v.str);
                 return;
 
+            case "notification-promoted":
+                if (const(JSONValue)* v = "sender_name" in c)
+                    user = v.str;
+                string title, message;
+                if (const(JSONValue)* v = "title" in c)
+                    title = v.str;
+                if (const(JSONValue)* v = "message" in c)
+                    message = v.str;
+                // An unnamed rule is titled with the label the message
+                // starts with, and saying it twice says nothing.
+                detail = title.length > 0 && title != message
+                    && message.startsWith(title) == false
+                    ? title ~ ": " ~ message : message;
+                return;
+
             case "notification-v2-delete":
             case "notification-v2-update":
             case "see-notification":
@@ -319,6 +336,7 @@ string prettyNotifType(string notifType)
         case "group.transfer":            return "Group Transfer";
         case "group.queueReady":          return "Queue Ready";
         case "instance.closed":           return "Instance Closed";
+        case "vrcd.promoted":             return "Rule";
         default:                          return notifType;
     }
 }

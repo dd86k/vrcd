@@ -24,7 +24,7 @@ versions "SDL_TTF_3_2" "SDL_Image_3_2"
 # friends.d, events.d: Roster bucketing, ordering, and event presentation
 #                      shared with the web front-end, so both cannot drift
 # notifications.d: Notification model that server and clients speak
-sourceFiles "../common/source/vrcd/friends.d" "../common/source/vrcd/events.d" "../common/source/vrcd/notifications.d"
+sourceFiles "../common/source/vrcd/friends.d" "../common/source/vrcd/events.d" "../common/source/vrcd/notifications.d" "../common/source/vrcd/promotions.d"
 
 # Direct-IPC join support: the Windows client talks to VRChat's launch-URI
 # named pipe in-process, sharing the protocol code with the pipehelper

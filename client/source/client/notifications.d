@@ -64,6 +64,7 @@ immutable FeedFilterSection[] feedFilterSections = [
         labelIdx("Notification"), labelIdx("Notif Delete"),
         labelIdx("Notif Update"), labelIdx("Notif Seen"),
         labelIdx("Notif Hidden"), labelIdx("Notif Response"),
+        labelIdx("Promoted"),
     ]),
     FeedFilterSection("Groups", [
         labelIdx("Group Joined"), labelIdx("Group Left"),
@@ -115,6 +116,7 @@ immutable string[] notifyEventLabels = [
     "Player Joined",
     "Player Left",
     "Photo Taken",
+    "Promoted",
 ];
 
 /// Raw event type strings corresponding to each notifyEventLabels entry.
@@ -128,6 +130,7 @@ private immutable string[][] notifyEventTypes = [
     ["player-joined"],
     ["player-left"],
     ["photo-taken"],
+    ["notification-promoted"],
 ];
 
 /// Format a VR notification from event fields.
@@ -164,6 +167,10 @@ private void formatNotification(string eventType, string user, string detail,
         case "notification":
         case "notification-v2":
             title = detail.length > 0 ? detail : "Notification";
+            body_ = user;
+            return;
+        case "notification-promoted":
+            title = detail.length > 0 ? detail : "Promoted";
             body_ = user;
             return;
         case "player-joining":
@@ -241,8 +248,11 @@ void dispatchNotification(string eventType, string user, string detail, Settings
     }
 
     // Rate-limit: drop notifications that arrive faster than the cooldown.
+    // A promoted one is exempt: it is the toast somebody asked for by name,
+    // its rule has a quiet period of its own, and losing it to an ordinary
+    // Online toast two seconds earlier would defeat the rule.
     MonoTime now = MonoTime.currTime;
-    if (lastNotifyTime != MonoTime.init)
+    if (eventType != "notification-promoted" && lastNotifyTime != MonoTime.init)
     {
         Duration elapsed = now - lastNotifyTime;
         if (elapsed < notifyCooldown)

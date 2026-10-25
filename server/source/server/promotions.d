@@ -14,11 +14,13 @@ import core.sync.mutex;
 import core.time : MonoTime, Duration, dur;
 
 import std.json;
-import std.string : startsWith;
 
 import server.events;
 import vrcd.events : feedEventIndex, feedEventTypes;
 import vrcd.notifications : NotificationInfo;
+public import vrcd.promotions : PromotionRule;
+import vrcd.promotions : parseRule, RULES_MAX;
+static import vrcd.promotions;
 
 /// Notification type the front-ends see on a promoted entry.
 enum string PROMOTED_NOTIFICATION_TYPE = "vrcd.promoted";
@@ -26,26 +28,6 @@ enum string PROMOTED_NOTIFICATION_TYPE = "vrcd.promoted";
 /// Promoted entries are vrcd's own, so their IDs must never be mistaken for
 /// VRChat's (`not_...`): an action on one is answered locally.
 enum string PROMOTED_ID_PREFIX = "user_notification_";
-
-/// Bounds on what a front-end may store, since the whole set is re-broadcast
-/// to every front-end and walked on every event.
-private enum size_t RULES_MAX = 100;
-private enum size_t RULE_USERS_MAX = 200;
-private enum size_t RULE_NAME_MAX = 64;
-
-struct PromotionRule
-{
-    string id;
-    string name;
-    bool enabled = true;
-    /// Raw or synthetic event types, e.g. "friend-delete".
-    string[] events;
-    /// User IDs the event must be about; empty matches anyone.
-    string[] users;
-    /// Seconds a rule stays quiet for the same user after firing, so a friend
-    /// whose connection flaps does not fill the inbox.
-    long cooldown;
-}
 
 class PromotionRules
 {
@@ -94,11 +76,7 @@ class PromotionRules
     {
         synchronized (mtx)
         {
-            JSONValue[] items;
-            items.reserve(rules.length);
-            foreach (ref PromotionRule rule; rules)
-                items ~= buildRuleJSON(rule);
-            return JSONValue(items);
+            return vrcd.promotions.buildRulesJSON(rules);
         }
     }
 
@@ -176,23 +154,6 @@ NotificationInfo buildPromotedNotification(ref const(PromotionRule) rule,
 
 private:
 
-JSONValue buildRuleJSON(ref const(PromotionRule) rule)
-{
-    JSONValue[] events, users;
-    foreach (string e; rule.events)
-        events ~= JSONValue(e);
-    foreach (string u; rule.users)
-        users ~= JSONValue(u);
-    return JSONValue([
-        "id":       JSONValue(rule.id),
-        "name":     JSONValue(rule.name),
-        "enabled":  JSONValue(rule.enabled),
-        "events":   JSONValue(events),
-        "users":    JSONValue(users),
-        "cooldown": JSONValue(rule.cooldown),
-    ]);
-}
-
 /// Parse and validate a rule list. All or nothing: a set that half-applied
 /// would leave the front-end showing rules the server is not running.
 string parseRules(JSONValue jrules, out PromotionRule[] parsed)
@@ -202,37 +163,14 @@ string parseRules(JSONValue jrules, out PromotionRule[] parsed)
     if (jrules.array.length > RULES_MAX)
         return "Too many rules";
 
-    foreach (size_t n, JSONValue jrule; jrules.array)
+    foreach (JSONValue jrule; jrules.array)
     {
-        if (jrule.type != JSONType.object)
-            return "A rule must be an object";
-
         PromotionRule rule;
-        rule.id = stringField(jrule, "id");
-        if (rule.id.length == 0 || rule.id.length > RULE_NAME_MAX)
-            return "A rule needs an id";
+        if (string error = parseRule(jrule, rule))
+            return error;
         foreach (ref PromotionRule other; parsed)
             if (other.id == rule.id)
                 return "Duplicate rule id: " ~ rule.id;
-
-        rule.name = stringField(jrule, "name");
-        if (rule.name.length > RULE_NAME_MAX)
-            return "Rule name too long";
-
-        if (const(JSONValue)* v = "enabled" in jrule)
-            rule.enabled = v.type != JSONType.false_;
-
-        if (const(JSONValue)* v = "cooldown" in jrule)
-        {
-            if (v.type != JSONType.integer || v.integer < 0)
-                return "cooldown must be a non-negative integer";
-            rule.cooldown = v.integer;
-        }
-
-        if (string error = stringList(jrule, "events", rule.events))
-            return error;
-        if (rule.events.length == 0)
-            return "A rule needs at least one event";
         foreach (string e; rule.events)
         {
             // Promoting a notification to a notification is a duplicate row.
@@ -240,32 +178,7 @@ string parseRules(JSONValue jrules, out PromotionRule[] parsed)
             if (isNotificationEvent(t))
                 return "Already a notification: " ~ e;
         }
-
-        if (string error = stringList(jrule, "users", rule.users))
-            return error;
-        if (rule.users.length > RULE_USERS_MAX)
-            return "Too many users in one rule";
-        foreach (string u; rule.users)
-            if (u.startsWith("usr_") == false)
-                return "Not a user ID: " ~ u;
-
         parsed ~= rule;
-    }
-    return null;
-}
-
-string stringList(JSONValue obj, string key, out string[] list)
-{
-    const(JSONValue)* v = key in obj;
-    if (v is null)
-        return null;
-    if (v.type != JSONType.array)
-        return key ~ " must be an array";
-    foreach (const(JSONValue) item; v.array)
-    {
-        if (item.type != JSONType.string || item.str.length == 0)
-            return key ~ " must hold strings";
-        list ~= item.str;
     }
     return null;
 }
