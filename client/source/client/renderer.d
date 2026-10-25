@@ -5,13 +5,13 @@
 module client.renderer;
 
 import core.stdc.string;
-import std.typecons : Yes;
-import std.utf : decode;
 import bindbc.sdl;
 import sdl_ttf;
 import ddlogger;
 import ddui;
 import std.string : fromStringz;
+import std.typecons : Yes;
+import std.utf : decode;
 
 __gshared SDL_Window* window;
 // Logical size: what ddui lays out in. The surface is in physical pixels,
@@ -30,11 +30,21 @@ __gshared mu_Rect clip;
 // and the surface format never changes, so it is fetched once.
 private __gshared const(SDL_PixelFormatDetails)* pixelFormat;
 
-// Font fallback chain. fonts[0] is the primary (used for layout metrics);
-// subsequent entries are coverage fonts opened opportunistically for scripts
-// the primary doesn't provide (Thai, Arabic, CJK, etc.). Strings are split
-// into runs per-codepoint via TTF_FontHasGlyph and rendered per-font.
+// Fonts opened. fonts[0] is the primary and defines the UI metrics, the rest are
+// coverage fonts attached to it with TTF_AddFallbackFont, so SDL_ttf picks the
+// font per glyph and shapes across them.
 __gshared TTF_Font*[] fonts;
+
+/// Bitmap-only emoji font, kept out of the fallback chain. SDL_ttf draws its
+/// glyphs at the strike size (109px for NotoColorEmoji), so emoji runs are
+/// rendered with it on their own and scaled down to the line height.
+private __gshared TTF_Font* emojiFont;
+
+/// Scaled emoji runs by text, cleared on font reload or size change.
+private __gshared SDL_Surface*[string] emojiCache;
+
+/// Entries kept before emojiCache is cleared.
+private enum EMOJI_CACHE_MAX = 512;
 
 // Font size the fonts are currently rasterized at, i.e. points * uiScale.
 private __gshared float fontPixelSize = 0.0f;
@@ -91,9 +101,11 @@ void r_update_metrics()
     float wantFont = currentFontSize * scale;
     if (fonts.length > 0 && wantFont != fontPixelSize)
     {
-        foreach (TTF_Font* f; fonts)
+        // Fallbacks first so the primary flushes its cache last.
+        foreach_reverse (TTF_Font* f; fonts)
             TTF_SetFontSize(f, wantFont);
         fontPixelSize = wantFont;
+        clearEmojiCache();
     }
 }
 
@@ -215,77 +227,138 @@ void r_draw_text(const(char)[] text, mu_Vec2 pos, mu_Color color)
     SDL_SetSurfaceClipRect(surface, &clipRect);
     scope(exit) SDL_SetSurfaceClipRect(surface, null);
 
-    // Fast path: single font loaded, or pure-ASCII string,  render the
-    // whole thing with the primary in one shot. Covers the common case of
-    // UI labels and log lines.
-    if (fonts.length == 1 || isAscii(text))
+    if (emojiFont is null || isAscii(text))
     {
-        SDL_Surface* s = TTF_RenderText_Blended(fonts[0], text.ptr, text.length, fg);
-        if (s is null) return;
-        SDL_Rect dst = SDL_Rect(pos.x, pos.y, s.w, s.h);
-        SDL_BlitSurface(s, null, surface, &dst);
-        SDL_DestroySurface(s);
+        drawTextRun(text, pos.x, pos.y, fg);
         return;
     }
 
-    // Slow path: walk codepoints, group into same-font runs, render each
-    // run separately and blit at a shared baseline so per-font ascent
-    // differences line up.
-    int penX = pos.x;
-    int baselineY = pos.y + TTF_GetFontAscent(fonts[0]);
-
-    size_t runStart = 0;
-    int runFontIdx = -1;
-    size_t i = 0;
-    while (i < text.length)
+    int x = pos.x;
+    size_t start;
+    while (start < text.length)
     {
-        size_t cpStart = i;
-        dchar cp = decode!(Yes.useReplacementDchar)(text, i);
-        int idx = pickFontIndex(cp);
-        if (runFontIdx < 0)
-            runFontIdx = idx;
-        else if (idx != runFontIdx)
+        bool emoji;
+        size_t end = nextRun(text, start, emoji);
+        const(char)[] run = text[start .. end];
+        if (emoji)
         {
-            penX += blitRun(text[runStart .. cpStart], runFontIdx, penX, baselineY, fg);
-            runStart = cpStart;
-            runFontIdx = idx;
+            if (SDL_Surface* e = emojiSurface(run))
+            {
+                SDL_Rect dst = SDL_Rect(x, pos.y, e.w, e.h);
+                SDL_BlitSurface(e, null, surface, &dst);
+                x += e.w;
+            }
+        }
+        else
+            x += drawTextRun(run, x, pos.y, fg);
+        start = end;
+    }
+}
+
+/// Draw run with the primary and its fallbacks at x, y, returning its width.
+private int drawTextRun(const(char)[] run, int x, int y, SDL_Color fg)
+{
+    SDL_Surface* s = TTF_RenderText_Blended(fonts[0], run.ptr, run.length, fg);
+    if (s is null) return 0;
+    SDL_Rect dst = SDL_Rect(x, y, s.w, s.h);
+    SDL_BlitSurface(s, null, surface, &dst);
+    int w = s.w;
+    SDL_DestroySurface(s);
+    return w;
+}
+
+/// End of the run starting at start, setting emoji when it goes to emojiFont.
+/// Joiners, variation selectors and tags stay with the emoji before them.
+private size_t nextRun(const(char)[] text, size_t start, out bool emoji)
+{
+    size_t end = start;
+    emoji = isEmojiBase(decode!(Yes.useReplacementDchar)(text, end));
+    while (end < text.length)
+    {
+        size_t next = end;
+        dchar cp = decode!(Yes.useReplacementDchar)(text, next);
+        bool e = isEmojiBase(cp) || (emoji && isEmojiJoiner(cp));
+        if (e != emoji)
+            break;
+        end = next;
+    }
+    return end;
+}
+
+/// Whether cp sits in an emoji block and emojiFont draws it.
+private bool isEmojiBase(dchar cp)
+{
+    bool block = (cp >= 0x1F000 && cp <= 0x1FAFF) ||
+        (cp >= 0x2300 && cp <= 0x23FF) ||
+        (cp >= 0x2600 && cp <= 0x27BF) ||
+        (cp >= 0x2B00 && cp <= 0x2BFF);
+    return block && TTF_FontHasGlyph(emojiFont, cast(uint)cp);
+}
+
+/// Whether cp only modifies the emoji before it (ZWJ, VS16, keycap, tags).
+private bool isEmojiJoiner(dchar cp)
+{
+    return cp == 0x200D || cp == 0xFE0F || cp == 0x20E3 ||
+        (cp >= 0xE0020 && cp <= 0xE007F);
+}
+
+/// Emoji run drawn with emojiFont and scaled to the primary line height, or
+/// null when it cannot be drawn. Cached, null included.
+private SDL_Surface* emojiSurface(const(char)[] run)
+{
+    if (SDL_Surface** hit = run in emojiCache)
+        return *hit;
+    if (emojiCache.length >= EMOJI_CACHE_MAX)
+        clearEmojiCache();
+
+    SDL_Surface* s = TTF_RenderText_Blended(emojiFont, run.ptr, run.length,
+        SDL_Color(255, 255, 255, 255));
+    if (s && s.h > 0)
+    {
+        int h = TTF_GetFontHeight(fonts[0]);
+        int w = cast(int)(cast(long)s.w * h / s.h);
+        s = shrinkSurface(s, w > 0 ? w : 1, h > 0 ? h : 1);
+    }
+    emojiCache[run.idup] = s;
+    return s;
+}
+
+/// s shrunk to w by h, freeing s. Halved first so the linear filter averages
+/// every source pixel instead of sampling a few. Premultiplied so transparent
+/// pixels do not darken the edges.
+private SDL_Surface* shrinkSurface(SDL_Surface* s, int w, int h)
+{
+    SDL_PremultiplySurfaceAlpha(s, false);
+    while (s.w >= w * 2 && s.h >= h * 2)
+    {
+        SDL_Surface* half = SDL_ScaleSurface(s, s.w / 2, s.h / 2, SDL_SCALEMODE_LINEAR);
+        if (half is null)
+            break;
+        SDL_DestroySurface(s);
+        s = half;
+    }
+    if (s.w != w || s.h != h)
+    {
+        SDL_Surface* t = SDL_ScaleSurface(s, w, h, SDL_SCALEMODE_LINEAR);
+        if (t)
+        {
+            SDL_DestroySurface(s);
+            s = t;
         }
     }
-    if (runFontIdx >= 0 && runStart < text.length)
-        blitRun(text[runStart .. $], runFontIdx, penX, baselineY, fg);
+    SDL_SetSurfaceBlendMode(s, SDL_BLENDMODE_BLEND_PREMULTIPLIED);
+    return s;
 }
 
-// Returns the advance width (pixels) the run consumed, or 0 on failure.
-// SDL_ttf 3 takes the length alongside the pointer, so a run can be handed
-// over as the slice it already is rather than copied to null-terminate it.
-private int blitRun(const(char)[] run, int fontIdx, int penX, int baselineY, SDL_Color fg)
+/// Free every cached emoji run.
+private void clearEmojiCache()
 {
-    TTF_Font* f = fonts[fontIdx];
-    SDL_Surface* s = TTF_RenderText_Blended(f, run.ptr, run.length, fg);
-    if (s is null) return 0;
-
-    SDL_Rect dst = SDL_Rect(penX, baselineY - TTF_GetFontAscent(f), s.w, s.h);
-    SDL_BlitSurface(s, null, surface, &dst);
-    int advance = s.w;
-    SDL_DestroySurface(s);
-    return advance;
+    foreach (SDL_Surface* s; emojiCache)
+        if (s) SDL_DestroySurface(s);
+    emojiCache.clear();
 }
 
-// Pick the first font in the fallback chain that provides a glyph for cp.
-// Falls back to the primary (index 0) so unknown glyphs at least render
-// as tofu rather than vanishing.
-private int pickFontIndex(dchar cp)
-{
-    // ASCII always lives in the primary,  skip the charmap lookups.
-    if (cp < 0x80) return 0;
-    foreach (size_t i, TTF_Font* f; fonts)
-    {
-        if (TTF_FontHasGlyph(f, cast(uint)cp))
-            return cast(int)i;
-    }
-    return 0;
-}
-
+/// Whether s holds only ASCII.
 private bool isAscii(const(char)[] s)
 {
     foreach (char c; s)
@@ -400,43 +473,35 @@ int r_get_text_width(const(char) *text, int len)
     if (total == 0) return 0;
     const(char)[] str = text[0 .. total];
 
-    // Fast path: single font or ASCII,  one TTF_GetStringSize call.
-    if (fonts.length == 1 || isAscii(str))
+    if (emojiFont is null || isAscii(str))
     {
         int w;
         TTF_GetStringSize(fonts[0], str.ptr, str.length, &w, null);
         return unsc(w);
     }
 
-    // Slow path: same run-splitting walk as r_draw_text, sum per-run widths.
-    int totalW = 0;
-    size_t runStart = 0;
-    int runFontIdx = -1;
-    size_t i = 0;
-    while (i < str.length)
+    // Same runs as r_draw_text.
+    int totalW;
+    size_t start;
+    while (start < str.length)
     {
-        size_t cpStart = i;
-        dchar cp = decode!(Yes.useReplacementDchar)(str, i);
-        int idx = pickFontIndex(cp);
-        if (runFontIdx < 0)
-            runFontIdx = idx;
-        else if (idx != runFontIdx)
+        bool emoji;
+        size_t end = nextRun(str, start, emoji);
+        const(char)[] run = str[start .. end];
+        if (emoji)
         {
-            totalW += measureRun(str[runStart .. cpStart], runFontIdx);
-            runStart = cpStart;
-            runFontIdx = idx;
+            if (SDL_Surface* e = emojiSurface(run))
+                totalW += e.w;
         }
+        else
+        {
+            int w;
+            TTF_GetStringSize(fonts[0], run.ptr, run.length, &w, null);
+            totalW += w;
+        }
+        start = end;
     }
-    if (runFontIdx >= 0 && runStart < str.length)
-        totalW += measureRun(str[runStart .. $], runFontIdx);
     return unsc(totalW);
-}
-
-private int measureRun(const(char)[] run, int fontIdx)
-{
-    int w;
-    TTF_GetStringSize(fonts[fontIdx], run.ptr, run.length, &w, null);
-    return w;
 }
 
 int r_get_text_height()
@@ -473,6 +538,7 @@ version(Windows)
         "segoeui.ttf",
         "arial.ttf",
         "tahoma.ttf",
+        "NotoSans-Regular.ttf",
     ];
 }
 else
@@ -485,8 +551,17 @@ else
     ];
 }
 
-// Coverage fonts, every one found is opened and appended after the primary.
-// Each covers a script the primary likely doesn't provide.
+// Noto coverage set, the one to put in a fonts folder beside the binary.
+private static immutable string[] notoFontNames = [
+    "NotoSansThai-Regular.ttf",
+    "NotoSansArabic-Regular.ttf",
+    "NotoSansHebrew-Regular.ttf",
+    "NotoSansDevanagari-Regular.ttf",
+    "NotoSansCJK-Regular.ttc",      // single OTC covers JP/KR/SC/TC
+];
+
+// Coverage fonts, every one found becomes a fallback of the primary, in order.
+// Each covers a script the primary likely does not provide.
 version(Windows)
 {
     private static immutable string[] coverageFontNames = [
@@ -495,17 +570,29 @@ version(Windows)
         "msjh.ttc",         // Microsoft JhengHei,  Traditional Chinese
         "meiryo.ttc",       // Meiryo,  Japanese
         "malgun.ttf",       // Malgun Gothic,  Korean
-        "seguiemj.ttf",     // Segoe UI Emoji
-    ];
+    ] ~ notoFontNames;
 }
 else
 {
-    private static immutable string[] coverageFontNames = [
-        "NotoSansThai-Regular.ttf",
-        "NotoSansArabic-Regular.ttf",
-        "NotoSansHebrew-Regular.ttf",
-        "NotoSansDevanagari-Regular.ttf",
-        "NotoSansCJK-Regular.ttc",      // single OTC covers JP/KR/SC/TC
+    private static immutable string[] coverageFontNames = notoFontNames;
+}
+
+/// Emoji font candidates, only the first found is used. A scalable one joins
+/// the fallbacks, a bitmap one becomes emojiFont. Color before monochrome.
+private static immutable string[] emojiFontNames = [
+    "seguiemj.ttf",                 // Segoe UI Emoji
+    "TwemojiMozilla.ttf",           // COLRv0
+    "NotoColorEmoji.ttf",           // CBDT bitmap
+    "Noto-COLRv1.ttf",              // needs FreeType 2.13
+    "NotoEmoji-Regular.ttf",        // monochrome
+];
+
+/// Fallbacks attached after the emoji font, so they never take an emoji.
+version(Windows)
+    private static immutable string[] lastResortFontNames = [];
+else
+{
+    private static immutable string[] lastResortFontNames = [
         // GNU Unifont,  last-resort BMP coverage (looks bitmappy but renders)
         "unifont.ttf",
         "unifont.otf",
@@ -609,6 +696,7 @@ bool initFont(const(char)[] customPath = null, int size = FONT_SIZE)
     int fontSize = (size >= 8 && size <= 72) ? size : FONT_SIZE;
 
     TTF_Font* primary;
+    string primaryName;
 
     // Try custom path first.
     if (customPath.length > 0)
@@ -632,7 +720,11 @@ bool initFont(const(char)[] customPath = null, int size = FONT_SIZE)
         foreach (string name; primaryFontNames)
         {
             primary = openIndexedFont(name, fontSize * uiScale);
-            if (primary) break;
+            if (primary)
+            {
+                primaryName = name;
+                break;
+            }
         }
     }
 
@@ -641,11 +733,33 @@ bool initFont(const(char)[] customPath = null, int size = FONT_SIZE)
     destroyFont();
     fonts ~= primary;
 
-    // Open every coverage font we can find.
+    // Attach every coverage font found. SDL_ttf then takes a glyph the primary
+    // lacks from the first fallback that has it, and missing ones still draw
+    // as the primary's box.
     foreach (string name; coverageFontNames)
     {
+        if (name == primaryName)
+            continue;
+        if (TTF_Font* f = openIndexedFont(name, fontSize * uiScale))
+            attachFallback(f, name);
+    }
+
+    foreach (string name; emojiFontNames)
+    {
         TTF_Font* f = openIndexedFont(name, fontSize * uiScale);
-        if (f) fonts ~= f;
+        if (f is null)
+            continue;
+        if (TTF_FontIsScalable(f))
+            attachFallback(f, name);
+        else
+            emojiFont = f;
+        break;
+    }
+
+    foreach (string name; lastResortFontNames)
+    {
+        if (TTF_Font* f = openIndexedFont(name, fontSize * uiScale))
+            attachFallback(f, name);
     }
 
     currentFontSize = fontSize;
@@ -653,12 +767,31 @@ bool initFont(const(char)[] customPath = null, int size = FONT_SIZE)
     return true;
 }
 
+/// Attach f, opened from name, as a fallback of the primary, closing it on failure.
+private void attachFallback(TTF_Font* f, string name)
+{
+    if (TTF_AddFallbackFont(fonts[0], f) == false)
+    {
+        logWarn("Font fallback %s: %s", name, fromStringz( SDL_GetError() ));
+        TTF_CloseFont(f);
+        return;
+    }
+    fonts ~= f;
+}
+
+/// Close the primary, its fallbacks and the emoji font.
 void destroyFont()
 {
-    foreach (f; fonts)
+    clearEmojiCache();
+    if (emojiFont)
     {
-        if (f) TTF_CloseFont(f);
+        TTF_CloseFont(emojiFont);
+        emojiFont = null;
     }
+    if (fonts.length)
+        TTF_ClearFallbackFonts(fonts[0]);
+    foreach (TTF_Font* f; fonts)
+        TTF_CloseFont(f);
     fonts.length = 0;
 }
 

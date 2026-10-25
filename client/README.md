@@ -104,7 +104,7 @@ UI layout using ddui (immediate-mode). Defines five tabs:
 SDL3 software rendering and font management. Provides:
 - `r_draw_rect()`, `r_draw_text()`, `r_draw_icon()` -- primitives with alpha blending
 - `r_set_clip_rect()`, `r_clear()`, `r_present()` -- frame management
-- `initFont()` opens a primary font (Segoe UI on Windows, Liberation Sans on Linux, with per-platform fallbacks) plus a coverage chain of per-script fonts (Thai, Arabic, Hebrew, Devanagari, CJK, emoji). `r_draw_text` splits strings into runs per-codepoint via `TTF_FontHasGlyph` and renders each run with the first font in the chain that provides the glyph, blitted at a shared baseline.
+- `initFont()` opens a primary font (Segoe UI on Windows, Liberation Sans on Linux, with per-platform fallbacks) and attaches every per-script coverage font it finds (Thai, Arabic, Hebrew, Devanagari, CJK, emoji) with `TTF_AddFallbackFont`, so SDL_ttf picks the font per glyph.
 - 128x128 monochrome icon atlas from ddui
 
 ### `state.d`
@@ -173,6 +173,8 @@ For Unicode coverage outside Latin/Greek/Cyrillic (Thai, Arabic, CJK, etc.), ins
 # Debian/Ubuntu, but they likely already have them
 sudo apt install fonts-noto fonts-noto-cjk
 ```
+
+Or put them in a `fonts` folder beside the binary (any platform): `NotoSans-Regular.ttf`, `NotoSansThai-Regular.ttf`, `NotoSansArabic-Regular.ttf`, `NotoSansHebrew-Regular.ttf`, `NotoSansDevanagari-Regular.ttf`, `NotoSansCJK-Regular.ttc`, `NotoColorEmoji.ttf`.
 
 ## Dependencies
 
