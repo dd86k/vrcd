@@ -94,6 +94,9 @@ class PromotionRules
     {
         if (isNotificationEvent(event.type))
             return null;
+        // Synthetics also report your own avatar and profile changes.
+        if (isSelfEvent(event.content))
+            return null;
 
         string userId = eventUserId(event.content);
 
@@ -204,6 +207,16 @@ string eventUserId(const(JSONValue) content)
     return null;
 }
 
+/// Whether the event is flagged as being about the signed-in user.
+bool isSelfEvent(const(JSONValue) content)
+{
+    if (content.type != JSONType.object)
+        return false;
+    if (const(JSONValue)* v = "isSelf" in content)
+        return v.type == JSONType.true_;
+    return false;
+}
+
 bool contains(const(string)[] list, string value)
 {
     foreach (string item; list)
@@ -252,6 +265,16 @@ unittest
     assert(rules.match(alice, t0));
     assert(rules.match(alice, t0 + dur!"seconds"(30)) is null);
     assert(rules.match(alice, t0 + dur!"seconds"(61)));
+
+    // Your own changes never match, even an "anyone" rule.
+    assert(rules.replace(parseJSON(`[{"id":"d","events":["avatar-change"]}]`)) is null);
+    VRCEvent own = mk("avatar-change", "usr_me");
+    own.content["isSelf"] = JSONValue(true);
+    assert(rules.match(own, t0) is null);
+    VRCEvent other = mk("avatar-change", "usr_bob");
+    other.content["isSelf"] = JSONValue(false);
+    assert(rules.match(other, t0));
+    assert(rules.replace(parseJSON(`[{"id":"a","events":["friend-delete"]}]`)) is null);
 
     // Validation is all or nothing.
     assert(rules.replace(parseJSON(`[{"id":"c","events":["notification"]}]`)));
