@@ -15,6 +15,8 @@ import std.json;
 
 import vrcd.friends;
 import vrcd.notifications;
+import vrcd.promotions;
+import vrcd.events : feedEventIndex, feedEventLabels;
 import web.connection;
 import web.debugging;
 
@@ -201,6 +203,56 @@ string buildStateJSON(ServerLink link)
         ]);
     }
 
+    // The catalogue rides along so the page labels events from the same table
+    // the feed uses. Absent when vrcd-server cannot hold rules.
+    if (link.canPromote())
+    {
+        PromotionsSnapshot promotions = link.promotions();
+        JSONValue[] groups;
+        foreach (ref const(PromotableGroup) group; promotableEvents)
+        {
+            JSONValue[] events;
+            foreach (string type; group.rawTypes)
+                events ~= JSONValue([
+                    "type":  JSONValue(type),
+                    "label": JSONValue(eventLabel(type)),
+                ]);
+            groups ~= JSONValue([
+                "title":  JSONValue(group.title),
+                "events": JSONValue(events),
+            ]);
+        }
+
+        // Labels for every event a rule names, offered or not, so a rule
+        // another front-end wrote still reads as words.
+        JSONValue labels = JSONValue.emptyObject;
+        foreach (ref const(PromotionRule) rule; promotions.rules)
+            foreach (string type; rule.events)
+                labels[type] = JSONValue(eventLabel(type));
+
+        root["promotions"] = JSONValue([
+            "loaded":    JSONValue(promotions.loaded),
+            "rules":     buildRulesJSON(promotions.rules),
+            "saving":    JSONValue(promotions.saving),
+            "answered":  JSONValue(promotions.answered),
+            "error":     JSONValue(promotions.error),
+            "catalog":   JSONValue(groups),
+            "labels":    labels,
+            "cooldowns": JSONValue(cooldownPresets.dup),
+            "limits":    JSONValue([
+                "rules":    JSONValue(cast(long)RULES_MAX),
+                "users":    JSONValue(cast(long)RULE_USERS_MAX),
+                "name":     JSONValue(cast(long)RULE_NAME_MAX),
+            ]),
+            "watch":     JSONValue([
+                "id":       JSONValue(WATCH_RULE_ID),
+                "name":     JSONValue(WATCH_RULE_NAME),
+                "event":    JSONValue(WATCH_RULE_EVENT),
+                "cooldown": JSONValue(WATCH_RULE_COOLDOWN),
+            ]),
+        ]);
+    }
+
     if (contentAction.attempted)
     {
         root["content_action"] = JSONValue([
@@ -345,4 +397,11 @@ private JSONValue friendsJSON(FriendInfo[] friends)
         items ~= entry;
     }
     return JSONValue(items);
+}
+
+/// Feed label for a raw event type, or the type itself when it has none.
+private string eventLabel(string type)
+{
+    size_t index = feedEventIndex(type);
+    return index == size_t.max ? type : feedEventLabels[index];
 }

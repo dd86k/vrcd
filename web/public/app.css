@@ -718,3 +718,9 @@ select.note-input { padding: 0 .6rem; }
     .act.primary:hover { background: var(--accent); }
     .group-head:hover { border-color: var(--line); }
 }
+
+/* Toggle chips that wrap onto more lines, for pickers with more than a row. */
+.chips.wrap { flex-wrap: wrap; overflow: visible; }
+.chip:disabled { opacity: .45; cursor: default; }
+/* A rule that is switched off. */
+.row.off .who { opacity: .55; }

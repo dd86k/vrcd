@@ -197,7 +197,8 @@ var NOTIFY_ACCENTS = {
     votetokick: "#dc4646",              // red, something ending
     "instance.closed": "#dc4646",
     boop: "#dcaa3c",                    // amber, someone talking
-    message: "#dcaa3c"
+    message: "#dcaa3c",
+    "vrcd.promoted": "#3cbebe"           // teal, asked for by a rule
 };
 
 function notifyAccent(type) {
@@ -237,7 +238,8 @@ var PLACEHOLDERS = {
 var TOOL_SECTIONS = [
     { id: "friends", label: "FRIENDS" },
     { id: "muted",   label: "MUTED",   undo: "unmute",  undoLabel: "UNMUTE" },
-    { id: "blocked", label: "BLOCKED", undo: "unblock", undoLabel: "UNBLOCK" }
+    { id: "blocked", label: "BLOCKED", undo: "unblock", undoLabel: "UNBLOCK" },
+    { id: "rules",   label: "RULES" }
 ];
 
 /* What each section is, under its list. Both moderation lists say where they
@@ -250,6 +252,8 @@ var TOOL_HINTS = {
            "mute made in-game shows up after a refresh.",
     blocked: "People you have blocked. VRChat reports no changes to this, so " +
              "a block made in-game shows up after a refresh.",
+    rules: "Events a rule picks become notifications in the inbox. vrcd-server " +
+           "runs them, so they fire while no page is open.",
     debug: "Only here because this vrcd-web was started with --debug or " +
            "VRCD_WEB_DEBUG. Nothing below touches VRChat: the rows are made " +
            "here and answered here."
@@ -822,6 +826,9 @@ function notifyCard(entry) {
     var responses = entry.responses || [];
     var kind = NOTIFY_TYPES[entry.notification_type] ||
         { label: notifyLabel(entry.notification_type), hide: "DISMISS" };
+    // A promoted entry is headed by the rule that made it.
+    if (entry.notification_type === "vrcd.promoted")
+        kind = { label: entry.title || "Rule", hide: "DISMISS" };
     var busy = pendingNotifications[entry.id] === true;
 
     /* A group notification puts the group's own ID where a user ID goes and
@@ -953,6 +960,8 @@ function notifyCard(entry) {
    would be a real call about a person who was invented two clicks ago. */
 function notifyBlock(actions, entry, busy) {
     if (entry.debug) return;
+    // A promoted entry names who it is about, not who sent it.
+    if (entry.notification_type === "vrcd.promoted") return;
     if ((entry.sender_user_id || "").indexOf("usr_") !== 0) return;
 
     var id = entry.sender_user_id;
@@ -2836,6 +2845,7 @@ function renderTools(body) {
 
     if (info.id === "friends")     renderFriendList(body);
     else if (info.id === "debug")  renderDebug(body);
+    else if (info.id === "rules")  renderRules(body);
     else                           renderModerated(body, info);
 
     body.appendChild(el("div", "hint", TOOL_HINTS[info.id]));
@@ -2923,6 +2933,8 @@ function toolSwitcher() {
         var count = 0;
         if (section.id === "friends")
             count = allFriends().length;
+        else if (section.id === "rules")
+            count = state.promotions && state.promotions.loaded ? state.promotions.rules.length : 0;
         else if (section.id !== "debug")
             count = state.moderations.loaded ? moderated(section.id).length : 0;
         if (count) chip.appendChild(el("span", "n", String(count)));
@@ -3129,6 +3141,488 @@ function refreshModerations(button) {
         refreshingModerations = false;
         if (view.tab === "tools") renderList();
     });
+}
+
+/* --------------------------------------------------------------- rules */
+
+/* Notification rules: events vrcd-server turns into inbox entries. The editor
+   stages one rule in `ruleDraft` and sends the whole set on SAVE, built from
+   the latest snapshot so another front-end's edit to a different rule stands. */
+
+/* The rule open in the detail pane, or null. */
+var ruleDraft = null;
+/* The save this page is waiting on: { toast, close }, or null. */
+var ruleSending = null;
+/* `promotions.answered` as last seen, -1 before the first snapshot. */
+var lastRuleAnswer = -1;
+
+/* Whether a rule save is under way, from here or from this link. */
+function ruleBusy() {
+    return ruleSending !== null ||
+        (state.promotions !== undefined && state.promotions.saving === true);
+}
+
+/* Feed label for an event type, or the type itself. */
+function ruleLabel(type) {
+    var p = state.promotions;
+    if (p && p.labels && p.labels[type]) return p.labels[type];
+    var found = type;
+    (p ? p.catalog : []).forEach(function (group) {
+        group.events.forEach(function (e) { if (e.type === type) found = e.label; });
+    });
+    return found;
+}
+
+/* What a rule is called in a list: its name, or its first event. */
+function ruleTitle(rule) {
+    if (rule.name) return rule.name;
+    return rule.events.length ? ruleLabel(rule.events[0]) : rule.id;
+}
+
+/* "300" -> "5m". */
+function cooldownText(seconds) {
+    if (!seconds) return "Off";
+    if (seconds % 3600 === 0) return (seconds / 3600) + "h";
+    if (seconds % 60 === 0) return (seconds / 60) + "m";
+    return seconds + "s";
+}
+
+/* Name for a user ID: the roster's, or the ID itself. */
+function personName(id) {
+    var hit = findFriend(id);
+    return hit ? hit.friend.displayName : id;
+}
+
+/* One line saying what a rule does. */
+function ruleSummary(rule) {
+    var n = rule.users.length;
+    var parts = [
+        rule.events.map(ruleLabel).join(", "),
+        n === 0 ? "anyone" : (n === 1 ? personName(rule.users[0]) : n + " people")
+    ];
+    if (rule.cooldown > 0) parts.push("quiet " + cooldownText(rule.cooldown));
+    return parts.join(" · ");
+}
+
+/* A copy of a rule safe to edit. */
+function copyRule(rule) {
+    return {
+        id: rule.id, name: rule.name || "", enabled: rule.enabled !== false,
+        events: (rule.events || []).slice(), users: (rule.users || []).slice(),
+        cooldown: rule.cooldown || 0
+    };
+}
+
+/* An empty rule with a fresh ID. */
+function newRule() {
+    return copyRule({ id: "rule_" + Date.now().toString(36) });
+}
+
+/* The current set with `rule` in place of its namesake, or appended. */
+function rulesWith(rule) {
+    var found = false;
+    var rules = state.promotions.rules.map(function (held) {
+        if (held.id !== rule.id) return held;
+        found = true;
+        return rule;
+    });
+    if (found === false) rules.push(rule);
+    return rules;
+}
+
+/* The current set without the rule `id`. */
+function rulesWithout(id) {
+    return state.promotions.rules.filter(function (held) { return held.id !== id; });
+}
+
+/* Send a whole rule set. Fire and forget, the answer arrives in a snapshot. */
+function sendRules(rules, outcome, button) {
+    ruleSending = outcome;
+    armedAction = "";
+    var restore = markSending(button);
+
+    function fail(message) {
+        ruleSending = null;
+        restore();
+        showToast(message, true);
+    }
+
+    fetch("/api/promotions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rules: rules })
+    }).then(function (r) {
+        if (r.ok) return;
+        r.json().then(function (body) {
+            fail(body.error || "The vrcd web server refused that");
+        }).catch(function () { fail("The vrcd web server refused that"); });
+    }).catch(function () {
+        fail("Could not reach the vrcd web server");
+    });
+}
+
+/* Toast the answer to this page's save, closing the editor when it asked to. */
+function reportRules(seeding) {
+    var p = state.promotions;
+    if (!p) { ruleSending = null; return; }
+    if (p.answered === lastRuleAnswer) return;
+    lastRuleAnswer = p.answered;
+    if (seeding || ruleSending === null) return;
+
+    var outcome = ruleSending;
+    ruleSending = null;
+    if (p.error) {
+        showToast("That failed: " + p.error, true);
+        render();
+        return;
+    }
+    if (outcome.close && view.sel && view.sel.kind === "rule") {
+        view.sel = null;
+        ruleDraft = null;
+        showList();
+    }
+    showToast(outcome.toast, false);
+    render();
+}
+
+/* TOOLS > RULES: one row per rule, ON/OFF sends at once. */
+function renderRules(body) {
+    var p = state.promotions;
+    var offline = state.connected === false;
+
+    var bar = el("div", "bar");
+    var count = p && p.loaded ? p.rules.length : 0;
+    bar.appendChild(el("div", "count", p && p.loaded
+        ? count + (count === 1 ? " rule" : " rules") : ""));
+    if (p && p.loaded) {
+        var add = el("button", "act small primary", "NEW RULE");
+        add.disabled = offline || ruleBusy() || count >= p.limits.rules;
+        add.onclick = function () { openRule(newRule(), true); };
+        bar.appendChild(add);
+    }
+    body.appendChild(bar);
+
+    if (!p) {
+        body.appendChild(placeholder(offline
+            ? "Not connected to vrcd-server."
+            : "This vrcd-server is too old for notification rules (needs protocol v15)."));
+        return;
+    }
+    if (p.loaded === false) { body.appendChild(placeholder("Loading...")); return; }
+
+    var rules = p.rules.filter(function (rule) {
+        return matches(ruleTitle(rule)) || matches(ruleSummary(rule));
+    });
+    if (rules.length === 0) {
+        body.appendChild(placeholder(view.filter
+            ? "Nothing matches that filter."
+            : "No rules yet. Make one, or press NOTIFY WHEN ONLINE on a friend."));
+        return;
+    }
+
+    var list = el("div", "flat");
+    rules.forEach(function (rule) { list.appendChild(ruleRow(rule)); });
+    body.appendChild(list);
+}
+
+/* One rule: the name opens the editor, the toggle sends. */
+function ruleRow(rule) {
+    var row = el("div", "row" + (rule.enabled === false ? " off" : ""));
+    if (view.sel && view.sel.kind === "rule" && view.sel.id === rule.id)
+        row.classList.add("on");
+
+    var who = el("button", "who bare");
+    who.appendChild(el("div", "n", ruleTitle(rule)));
+    who.appendChild(el("div", "d", ruleSummary(rule)));
+    who.onclick = function () { openRule(rule, false); };
+    row.appendChild(who);
+
+    var on = rule.enabled !== false;
+    var toggle = el("button", "act small" + (on ? " primary" : ""), on ? "ON" : "OFF");
+    toggle.title = on ? "Turn this rule off" : "Turn this rule on";
+    toggle.disabled = ruleBusy() || state.connected === false;
+    toggle.onclick = function () {
+        var flipped = copyRule(rule);
+        flipped.enabled = on === false;
+        sendRules(rulesWith(flipped), {
+            toast: ruleTitle(rule) + (on ? " off" : " on"), close: false
+        }, toggle);
+    };
+    row.appendChild(toggle);
+    return row;
+}
+
+/* Open a rule in the detail pane, staged in `ruleDraft`. */
+function openRule(rule, isNew) {
+    ruleDraft = {
+        rule: copyRule(rule), isNew: isNew === true,
+        someone: (rule.users || []).length > 0, search: ""
+    };
+    armedAction = "";
+    select({ kind: "rule", id: rule.id });
+}
+
+/* Why the draft cannot be saved yet, or "". */
+function ruleProblem(draft) {
+    if (draft.rule.events.length === 0) return "Pick at least one event.";
+    if (draft.someone && draft.rule.users.length === 0)
+        return "Add at least one friend, or pick ANYONE.";
+    return "";
+}
+
+/* A chip that toggles, redrawing the pane. */
+function ruleChip(label, on, disabled, onclick) {
+    var chip = el("button", "chip" + (on ? " on" : ""), label);
+    chip.disabled = disabled;
+    chip.onclick = function () { onclick(); renderDetail(); };
+    return chip;
+}
+
+/* The rule editor. Nothing is sent until SAVE. */
+function detailRule(body) {
+    var p = state.promotions;
+    if (!p || ruleDraft === null || ruleDraft.rule.id !== view.sel.id) {
+        body.appendChild(placeholder("That rule is not open any more."));
+        return;
+    }
+
+    var draft = ruleDraft;
+    var rule = draft.rule;
+    var busy = ruleBusy() || state.connected === false;
+    var gone = draft.isNew === false && p.rules.every(function (held) {
+        return held.id !== rule.id;
+    });
+    document.getElementById("detailTitle").textContent =
+        draft.isNew ? "New rule" : ruleTitle(rule);
+
+    if (gone)
+        body.appendChild(el("div", "hint",
+            "Deleted from somewhere else. Saving puts it back."));
+
+    body.appendChild(el("div", "section", "Name"));
+    var name = el("input", "note-input");
+    name.id = "ruleName";
+    name.type = "text";
+    name.maxLength = p.limits.name;
+    name.placeholder = "Optional. Titles the notifications";
+    name.value = rule.name;
+    name.disabled = busy;
+    name.oninput = function (ev) { rule.name = ev.target.value; };
+    body.appendChild(name);
+
+    body.appendChild(el("div", "section", "When"));
+    var offered = {};
+    p.catalog.forEach(function (group) {
+        body.appendChild(el("div", "hint", group.title));
+        var chips = el("div", "chips wrap");
+        group.events.forEach(function (e) {
+            offered[e.type] = true;
+            chips.appendChild(ruleChip(e.label, rule.events.indexOf(e.type) >= 0, busy,
+                function () { toggleIn(rule.events, e.type); }));
+        });
+        body.appendChild(chips);
+    });
+
+    // Picked by another front-end and not offered here, listed so they can go.
+    var others = rule.events.filter(function (type) { return !offered[type]; });
+    if (others.length) {
+        body.appendChild(el("div", "hint", "Other"));
+        var rest = el("div", "chips wrap");
+        others.forEach(function (type) {
+            rest.appendChild(ruleChip(ruleLabel(type), true, busy,
+                function () { toggleIn(rule.events, type); }));
+        });
+        body.appendChild(rest);
+    }
+
+    body.appendChild(el("div", "section", "Who"));
+    var who = el("div", "chips wrap");
+    who.appendChild(ruleChip("ANYONE", draft.someone === false, busy,
+        function () { draft.someone = false; }));
+    who.appendChild(ruleChip("SPECIFIC FRIENDS", draft.someone, busy,
+        function () { draft.someone = true; }));
+    body.appendChild(who);
+    if (draft.someone) rulePeople(body, draft, busy, p.limits.users);
+
+    body.appendChild(el("div", "section", "Quiet period"));
+    body.appendChild(el("div", "hint",
+        "After firing, stay quiet this long for the same person."));
+    var quiet = el("div", "chips wrap");
+    var presets = p.cooldowns.slice();
+    if (presets.indexOf(rule.cooldown) < 0) presets.push(rule.cooldown);
+    presets.forEach(function (seconds) {
+        quiet.appendChild(ruleChip(cooldownText(seconds), rule.cooldown === seconds, busy,
+            function () { rule.cooldown = seconds; }));
+    });
+    body.appendChild(quiet);
+
+    var problem = ruleProblem(draft);
+    if (problem) body.appendChild(el("div", "hint", problem));
+    if (p.error && ruleSending === null) body.appendChild(el("div", "err", p.error));
+
+    var actions = el("div", "actions");
+    var save = el("button", "act primary", draft.isNew || gone ? "CREATE RULE" : "SAVE RULE");
+    save.disabled = busy || problem !== "";
+    save.onclick = function () {
+        var out = copyRule(rule);
+        out.name = out.name.trim();
+        if (draft.someone === false) out.users = [];
+        sendRules(rulesWith(out), { toast: "Rule saved", close: true }, save);
+    };
+    actions.appendChild(save);
+
+    var cancel = el("button", "act", "CANCEL");
+    cancel.onclick = function () {
+        view.sel = null;
+        ruleDraft = null;
+        showList();
+        render();
+    };
+    actions.appendChild(cancel);
+
+    if (draft.isNew === false && gone === false)
+        appendArmed(actions, "rule|" + rule.id, "DELETE RULE", "CONFIRM DELETE", busy,
+            function (label) {
+                var button = el("button", "act", label);
+                button.onclick = function () {
+                    sendRules(rulesWithout(rule.id),
+                        { toast: "Rule deleted", close: true }, button);
+                };
+                return button;
+            });
+    body.appendChild(actions);
+}
+
+/* Add `value` to `list`, or take it out when it is there. In place. */
+function toggleIn(list, value) {
+    var at = list.indexOf(value);
+    if (at >= 0) list.splice(at, 1);
+    else list.push(value);
+}
+
+/* RULE_PICK_MAX friends at most are offered under the search box. */
+var RULE_PICK_MAX = 8;
+
+/* The people a rule is about, and a search box to add more from the roster. */
+function rulePeople(body, draft, busy, max) {
+    var rule = draft.rule;
+
+    if (rule.users.length) {
+        var chosen = el("div", "flat");
+        rule.users.forEach(function (id) {
+            var hit = findFriend(id);
+            var row = el("div", "row");
+            row.appendChild(avatar(personName(id), false, hit ? hit.friend : null));
+            var text = el("div", "who");
+            text.appendChild(el("div", "n", personName(id)));
+            if (hit === null) text.appendChild(el("div", "d", "not on your friends list"));
+            row.appendChild(text);
+            var remove = el("button", "act small", "REMOVE");
+            remove.disabled = busy;
+            remove.onclick = function () { toggleIn(rule.users, id); renderDetail(); };
+            row.appendChild(remove);
+            chosen.appendChild(row);
+        });
+        body.appendChild(chosen);
+    }
+
+    if (rule.users.length >= max) return;
+
+    var search = el("input", "note-input");
+    search.id = "ruleSearch";
+    search.type = "text";
+    search.placeholder = "Add a friend...";
+    search.value = draft.search;
+    search.disabled = busy;
+    body.appendChild(search);
+
+    // Only the results redraw while typing, so the box keeps its caret.
+    var results = el("div");
+    body.appendChild(results);
+    function fill() {
+        results.textContent = "";
+        var q = draft.search.trim().toLowerCase();
+        if (q === "") return;
+        var picks = allFriends().filter(function (f) {
+            return rule.users.indexOf(f.userId) < 0 &&
+                (f.displayName || "").toLowerCase().indexOf(q) >= 0;
+        }).slice(0, RULE_PICK_MAX);
+        if (picks.length === 0) {
+            results.appendChild(el("div", "hint", "Nobody on your friends list matches."));
+            return;
+        }
+        var list = el("div", "flat");
+        picks.forEach(function (f) {
+            var row = el("button", "row");
+            row.appendChild(avatar(f.displayName, false, f));
+            var text = el("div", "who");
+            text.appendChild(el("div", "n", f.displayName));
+            row.appendChild(text);
+            row.onclick = function () {
+                rule.users.push(f.userId);
+                draft.search = "";
+                renderDetail();
+            };
+            list.appendChild(row);
+        });
+        results.appendChild(list);
+    }
+    search.oninput = function (ev) { draft.search = ev.target.value; fill(); };
+    fill();
+}
+
+/* The shared rule NOTIFY WHEN ONLINE adds friends to, or null. */
+function watchRule() {
+    var p = state.promotions;
+    if (!p) return null;
+    for (var i = 0; i < p.rules.length; i++)
+        if (p.rules[i].id === p.watch.id) return p.rules[i];
+    return null;
+}
+
+/* Whether the shared rule is watching a friend. */
+function isWatched(id) {
+    var rule = watchRule();
+    return rule !== null && rule.enabled !== false && rule.users.indexOf(id) >= 0;
+}
+
+/* NOTIFY WHEN ONLINE for a friend's pane, or null when rules are unavailable. */
+function watchButton(id) {
+    var p = state.promotions;
+    if (!p || p.loaded === false) return null;
+
+    var on = isWatched(id);
+    var button = el("button", "act" + (on ? " primary" : ""),
+        on ? "NOTIFYING WHEN ONLINE" : "NOTIFY WHEN ONLINE");
+    button.title = on ? "Stop notifying when they come online"
+                      : "Put a notification in the inbox when they come online";
+    button.disabled = ruleBusy() || state.connected === false;
+    button.onclick = function () { toggleWatched(id, button); };
+    return button;
+}
+
+/* Add a friend to the shared rule, or take them out. */
+function toggleWatched(id, button) {
+    var p = state.promotions;
+    var held = watchRule();
+    var rule = held ? copyRule(held) : copyRule({
+        id: p.watch.id, name: p.watch.name, events: [p.watch.event],
+        cooldown: p.watch.cooldown
+    });
+    var name = personName(id);
+
+    if (rule.enabled && rule.users.indexOf(id) >= 0) {
+        toggleIn(rule.users, id);
+        // Kept with nobody in it, the rule would match anyone.
+        sendRules(rule.users.length ? rulesWith(rule) : rulesWithout(rule.id),
+            { toast: "Stopped watching " + name, close: false }, button);
+        return;
+    }
+
+    if (rule.users.indexOf(id) < 0) rule.users.push(id);
+    rule.enabled = true;
+    sendRules(rulesWith(rule),
+        { toast: "Notifying when " + name + " comes online", close: false }, button);
 }
 
 /* ------------------------------------------------------------- profile */
@@ -3374,6 +3868,10 @@ function renderProfile(body, person, opts) {
 
     var actions = el("div", "actions");
     if (opts.location) actions.appendChild(joinButton(opts.location, "SELF-INVITE"));
+    if (opts.friend === true) {
+        var watch = watchButton(p.id);
+        if (watch) actions.appendChild(watch);
+    }
     actions.appendChild(copyButton("Copy user ID", p.id));
     // Last, and only for someone else: nothing here is aimed at yourself, and
     // the pane's own order is what keeps a block away from a self-invite.
@@ -4069,6 +4567,14 @@ function copyButton(label, text) {
 
 function renderDetail() {
     var body = document.getElementById("detailBody");
+    // The rule editor has boxes in this pane, and a snapshot redraws it.
+    rememberCaret(body);
+    renderDetailBody(body);
+    restoreCaret();
+}
+
+/* Fill the detail pane for whatever is selected. */
+function renderDetailBody(body) {
     var title = document.getElementById("detailTitle");
     body.textContent = "";
     title.textContent = "Details";
@@ -4077,7 +4583,8 @@ function renderDetail() {
         var nothing = "Pick a world or a friend.";
         if (view.tab === "inbox") nothing = "Pick a sender to see their profile.";
         else if (view.tab === "stuff") nothing = "Pick something.";
-        else if (view.tab === "tools") nothing = "Pick someone.";
+        else if (view.tab === "tools") nothing = view.tool === "rules"
+            ? "Pick a rule, or make a new one." : "Pick someone.";
         body.appendChild(placeholder(nothing));
         return;
     }
@@ -4090,6 +4597,11 @@ function renderDetail() {
         var known = findFriend(view.sel.id);
         if (known) detailFriend(body, known.friend, known.group);
         else detailPerson(body, view.sel.id, view.sel.name);
+        return;
+    }
+
+    if (view.sel.kind === "rule") {
+        detailRule(body);
         return;
     }
 
@@ -4560,6 +5072,8 @@ function applyState(message) {
         // be pressed again.
         pendingModerations = {};
         refreshingModerations = false;
+        ruleSending = null;
+        refreshingModerations = false;
         linkWasDown = true;
     } else if (linkWasDown) {
         // Profiles that failed while the link was down failed for a reason
@@ -4584,6 +5098,7 @@ function applyState(message) {
     reportNotifyAction(seeding);
     reportContentAction(seeding);
     reportModeration(seeding);
+    reportRules(seeding);
     reportStatus(seeding);
     reportProfile();
     syncContent();

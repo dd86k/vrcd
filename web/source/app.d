@@ -29,6 +29,7 @@ import web.profiles;
 import web.state;
 
 import vrcd.badgeurl : isBadgeImageURL;
+import vrcd.promotions : PromotionRule, RULES_MAX, parseRule;
 
 /// Web front-end version.
 immutable string VERSION = import("VERSION");
@@ -424,6 +425,26 @@ int main(string[] args)
             else
                 link.requestModeration(action, userId);
 
+            req.replyJSON(HTTPStatus.ok, `{"requested":true}`);
+            return REQUEST_OK;
+        })
+        .post(`/api/promotions`, (ref HTTPRequest req)
+        {
+            if (authorized(req, true) == false)
+                return REQUEST_OK;
+
+            PromotionRule[] rules;
+            string error = promotionRules(req.payload, rules);
+            if (error)
+            {
+                req.replyJSON(HTTPStatus.badRequest,
+                    JSONValue([ "error": JSONValue(error) ]).toString());
+                return REQUEST_OK;
+            }
+
+            // Fire and forget: the saved set reaches every browser in the
+            // next snapshot, and a refusal as its error.
+            link.requestSetPromotions(rules);
             req.replyJSON(HTTPStatus.ok, `{"requested":true}`);
             return REQUEST_OK;
         })
@@ -951,6 +972,39 @@ private bool contentAction(ubyte[] payload, out string action, out string id,
     case "set_icon":                     return true;
     default:                             return false;
     }
+}
+
+/// Parse a /api/promotions body into a rule set. Returns an error, or null.
+/// Checked here so a bad set is refused before it costs a round trip.
+private string promotionRules(ubyte[] payload, out PromotionRule[] rules)
+{
+    if (payload.length == 0)
+        return "empty body";
+
+    JSONValue body_;
+    try body_ = parseJSON(cast(const(char)[])payload);
+    catch (JSONException ex)
+        return "malformed JSON";
+
+    if (body_.type != JSONType.object)
+        return "body must be an object";
+    const(JSONValue)* jrules = "rules" in body_;
+    if (jrules is null || jrules.type != JSONType.array)
+        return "rules must be an array";
+    if (jrules.array.length > RULES_MAX)
+        return "Too many rules";
+
+    foreach (const(JSONValue) jrule; jrules.array)
+    {
+        PromotionRule rule;
+        if (string error = parseRule(jrule, rule))
+            return error;
+        foreach (ref PromotionRule other; rules)
+            if (other.id == rule.id)
+                return "Duplicate rule id: " ~ rule.id;
+        rules ~= rule;
+    }
+    return null;
 }
 
 /// Pull a moderation out of a /api/moderation request body. Returns false when

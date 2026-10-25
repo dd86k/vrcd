@@ -20,6 +20,7 @@ import ddlogger;
 import vrcd.events;
 import vrcd.friends;
 import vrcd.notifications;
+import vrcd.promotions;
 import web.debugging;
 import web.images;
 import web.profiles;
@@ -56,6 +57,9 @@ private enum long PROTOCOL_PROFILE_EDIT = 8;
 /// Protocol version that added filtered inventory listings, which is how the
 /// exclusive stickers and emoji are asked for apart from the props in the inventory.
 private enum long PROTOCOL_INVENTORY_FILTER = 11;
+
+/// Protocol version that added promotion rules (`get_promotions`, `set_promotions`).
+private enum long PROTOCOL_PROMOTIONS = 15;
 
 /// Byte budget for proxied images. Thumbnails run tens of kilobytes each, so
 /// this holds a few hundred of them; past that the oldest are dropped and
@@ -348,6 +352,20 @@ struct ModerationActionResult
     string error;
 }
 
+/// Promotion rules, as vrcd-server last broadcast them.
+struct PromotionsSnapshot
+{
+    /// True once a `promotions` message has landed.
+    bool loaded;
+    PromotionRule[] rules;
+    /// True while a `set_promotions` sent from this link is unanswered.
+    bool saving;
+    /// Bumped on each answer to a save from this link, so the page can tell a new one.
+    long answered;
+    /// Why the last save from here was refused, empty when it went through.
+    string error;
+}
+
 /// TCP client for the vrcd-server JSON-L API.
 ///
 /// Only the messages the web front-end renders are interpreted (`self`,
@@ -493,6 +511,57 @@ class ServerLink
     {
         synchronized (stateMutex)
             return moderationList;
+    }
+
+    /// Promotion rules and the state of a save from here.
+    PromotionsSnapshot promotions()
+    {
+        synchronized (stateMutex)
+            return promotionList;
+    }
+
+    /// Whether vrcd-server can hold promotion rules.
+    bool canPromote()
+    {
+        LinkStatus current = status();
+        return current.connected && current.serverVersion >= PROTOCOL_PROMOTIONS;
+    }
+
+    /// Replace the whole rule set. Safe to call from an HTTP thread.
+    void requestSetPromotions(PromotionRule[] rules)
+    {
+        string error;
+        LinkStatus current = status();
+        if (current.connected == false)
+            error = "Not connected to vrcd-server";
+        else if (current.serverVersion < PROTOCOL_PROMOTIONS)
+            error = "This vrcd-server is too old for notification rules (needs protocol v15)";
+
+        if (error is null)
+        {
+            synchronized (stateMutex)
+            {
+                promotionList.saving = true;
+                promotionList.error = null;
+            }
+            notifyChange();
+            logInfo("Saving %d promotion rule(s)", rules.length);
+            if (sendMessage(JSONValue([
+                "type":  JSONValue("set_promotions"),
+                "rules": buildRulesJSON(rules),
+            ])))
+                return;
+            error = "Not connected to vrcd-server";
+        }
+
+        synchronized (stateMutex)
+        {
+            promotionList.saving = false;
+            promotionList.error = error;
+            ++promotionList.answered;
+        }
+        notifyChange();
+        logWarn("Promotion rules dropped: %s", error);
     }
 
     /// Outcome of the most recent mute, block or unfriend.
@@ -1293,6 +1362,7 @@ private:
     ContentActionResult lastContentAction;
     ModerationSnapshot moderationList;
     ModerationActionResult lastModeration;
+    PromotionsSnapshot promotionList;
     /// Proxied VRChat images. Has its own lock: HTTP threads look images up
     /// while this thread stores them, and neither needs the state lock.
     ImageCache images;
@@ -1553,6 +1623,14 @@ private:
                     moderationList.loading = false;
                     moderationList.error = "Not connected to vrcd-server";
                 }
+
+                // And a rule save, whose answer died with the socket.
+                if (promotionList.saving)
+                {
+                    promotionList.saving = false;
+                    promotionList.error = "Not connected to vrcd-server";
+                    ++promotionList.answered;
+                }
             }
 
             // On the same terms as the content lists: profiles already fetched
@@ -1673,6 +1751,16 @@ private:
             logWarn("Server protocol is too old for mutes and blocks " ~
                 "(needs v%d, server is v%d)",
                 PROTOCOL_MODERATION, status().serverVersion);
+        }
+
+        // Rules are broadcast on every change, so one ask per connection.
+        if (status().serverVersion >= PROTOCOL_PROMOTIONS)
+            sendMessage(JSONValue([ "type": JSONValue("get_promotions") ]));
+        else
+        {
+            synchronized (stateMutex)
+                promotionList = PromotionsSnapshot.init;
+            notifyChange();
         }
 
         // The database counters. Nothing announces them, so they are asked for
@@ -1858,6 +1946,10 @@ private:
 
         case "moderations":
             applyModerations(message);
+            break;
+
+        case "promotions":
+            applyPromotions(message);
             break;
 
         case "moderate_result":
@@ -2223,6 +2315,33 @@ private:
             logWarn("Could not fetch moderations: %s", error);
         else
             logInfo("Moderations: %d muted, %d blocked", muted.length, blocked.length);
+    }
+
+    /// Fold a `promotions` message in: a broadcast, or the refusal of our own save.
+    void applyPromotions(ref JSONValue message)
+    {
+        PromotionRule[] rules = parsePromotionsMessage(message);
+        string error = jsonString(message, "error");
+
+        synchronized (stateMutex)
+        {
+            promotionList.loaded = true;
+            promotionList.rules = rules;
+            // NOTE: A broadcast for another front-end's save landing while
+            // ours is in flight is taken as our answer.
+            if (promotionList.saving || error.length > 0)
+            {
+                promotionList.saving = false;
+                promotionList.error = error;
+                ++promotionList.answered;
+            }
+        }
+        notifyChange();
+
+        if (error.length > 0)
+            logWarn("Promotion rules refused: %s", error);
+        else
+            logInfo("Promotion rules: %d", rules.length);
     }
 
     /// Fold one moderation reply into the last-moderation slot.
