@@ -17,7 +17,7 @@ import vrcd.events : prettyPlatform, prettyNotifType, shortAvatarId;
 import vrcd.notifications : NotificationInfo, NotificationResponse, prettyResponseLabel;
 import vrcd.promotions : PromotableGroup, RULES_MAX, RULE_NAME_MAX, RULE_USERS_MAX,
     WATCH_RULE_COOLDOWN, WATCH_RULE_EVENT, WATCH_RULE_ID, WATCH_RULE_NAME,
-    cooldownPresets, promotableEvents;
+    ALREADY_NOTIFIED_HINT, cooldownPresets, promotableEvents;
 
 import client.notifications : notifyEventLabels, feedEventLabels, feedFilterSections,
     feedEventIndex, prettyEventType;
@@ -4682,6 +4682,8 @@ private void drawPromotionEditPage(mu_Context* ctx, AppState* state, int scrollD
 
     spacer(ctx);
     sectionHeader(ctx, "When");
+    mu_layout_row(ctx, 1, fullCol.ptr, 0);
+    mu_label(ctx, ALREADY_NOTIFIED_HINT);
     foreach (ref const(PromotableGroup) group; promotableEvents)
     {
         groupHeading(ctx, group.title);

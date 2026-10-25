@@ -280,6 +280,15 @@ A rule turns a matching event into an inbox entry (see `notifications`) and an e
 ]}
 ```
 
+#### What VRChat already notifies
+
+A rule is for events VRChat does not turn into a notification of its own. These already arrive as `notification` or `notification-v2` and land in the inbox without one:
+
+- v1: `friendRequest`, `invite`, `requestInvite`, `inviteResponse`, `requestInviteResponse`, `votetokick`, `boop`, `message`
+- v2: `group.*` (announcement, invite, join request, transfer, post, event created/starting), `event.announcement`, `badge.earned`, `boop`, `moderation.*`, gifts (`economy.received.gift`, `vrcplus.gift`), `avatarreview.*`, `instance.closed`
+
+VRChat has no notification for a friend request being accepted (`friend-add`), an unfriend (`friend-delete`), or a friend going online, offline or elsewhere, so those are what rules are for. `user-badge-assigned` is deliberately not in the editors' catalogue (`promotableEvents` in `common/source/vrcd/promotions.d`), since it most likely duplicates `badge.earned`. Check new catalogue entries against this list.
+
 The rule with `id` `"watch-online"` is the one a friend's "Notify When Online" toggle adds to and removes from, so every front-end edits the same rule. Nothing on the server treats it specially.
 
 ### `set_status`

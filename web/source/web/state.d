@@ -239,6 +239,7 @@ string buildStateJSON(ServerLink link)
             "catalog":   JSONValue(groups),
             "labels":    labels,
             "cooldowns": JSONValue(cooldownPresets.dup),
+            "hint":      JSONValue(ALREADY_NOTIFIED_HINT),
             "limits":    JSONValue([
                 "rules":    JSONValue(cast(long)RULES_MAX),
                 "users":    JSONValue(cast(long)RULE_USERS_MAX),

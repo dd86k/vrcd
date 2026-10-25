@@ -3411,6 +3411,7 @@ function detailRule(body) {
     body.appendChild(name);
 
     body.appendChild(el("div", "section", "When"));
+    if (p.hint) body.appendChild(el("div", "hint", p.hint));
     var offered = {};
     p.catalog.forEach(function (group) {
         body.appendChild(el("div", "hint", group.title));

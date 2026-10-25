@@ -49,7 +49,8 @@ struct PromotableGroup
 /// What an editor offers. Only events vrcd-server sees and that are about
 /// somebody: local log events never reach it, notifications are already
 /// notifications, and `friend-traveling` is never broadcast as an event the
-/// rules are run on.
+/// rules are run on. Badges are left out too: VRChat sends `badge.earned`
+/// as a v2 notification of its own.
 immutable PromotableGroup[] promotableEvents = [
     PromotableGroup("Friends", [
         "friend-online", "friend-offline", "friend-active",
@@ -58,10 +59,14 @@ immutable PromotableGroup[] promotableEvents = [
     PromotableGroup("Changes", [
         "avatar-change", "profile-change",
     ]),
-    PromotableGroup("Account", [
-        "user-badge-assigned", "group-joined", "group-left",
+    PromotableGroup("Groups", [
+        "group-joined", "group-left",
     ]),
 ];
+
+/// Hint under an editor's event picker, so nobody builds a rule VRChat already covers.
+enum string ALREADY_NOTIFIED_HINT = "Friend requests, invites, boops, group notices " ~
+    "and badges already arrive as notifications.";
 
 /// Quiet periods an editor offers, in seconds. Presets rather than a number
 /// box, since typing in a headset is the expensive part of an editor.
