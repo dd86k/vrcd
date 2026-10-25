@@ -6,20 +6,21 @@ module client.utils;
 
 import ddlogger;
 
-/// Open a specific folder or url with the system's file manager.
+/// Open a folder or URL with the system's default handler.
+/// NOTE: SDL_OpenURL wants file:// URIs but its xdg-open and ShellExecute
+/// backends take plain paths too, which spares escaping them.
 void openFolder(string path)
 {
-    import std.process : spawnProcess;
+    import bindbc.sdl : SDL_OpenURL, SDL_GetError;
+    import std.string : fromStringz, toStringz;
 
     if (path.length == 0)
         return;
 
-    version (Windows) static immutable app = "explorer";
-    else              static immutable app = "xdg-open";
-    
     logInfo("Opening '%s'...", path);
 
-    try spawnProcess([app, path]); catch (Exception ex) { logError("%s: %s", app, ex.msg); }
+    if (SDL_OpenURL(path.toStringz) == false)
+        logError("SDL_OpenURL: %s", SDL_GetError().fromStringz);
 }
 alias openBrowser = openFolder;
 
