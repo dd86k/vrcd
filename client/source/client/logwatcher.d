@@ -374,7 +374,7 @@ class LogWatcher
                 addPlayer(displayName, userId);
                 if (isLocalUser(displayName, userId))
                     roomLoading = false;
-                pushEvent(LogEvent.playerJoined, displayName);
+                pushEvent(LogEvent.playerJoined, displayName, userId);
             }
             return;
         }
@@ -405,7 +405,7 @@ class LogWatcher
                 logDebugging("LogWatcher: player left '%s' (id=%s)",
                     displayName, userId);
                 removePlayer(displayName);
-                pushEvent(LogEvent.playerLeft, displayName);
+                pushEvent(LogEvent.playerLeft, displayName, userId);
             }
             return;
         }
@@ -585,6 +585,7 @@ class LogWatcher
         currentPlayers ~= TrackedPlayer(displayName.idup, userId.idup);
     }
 
+    /// True if the player is the local user, by ID when both sides have one.
     private bool isLocalUser(string displayName, string userId)
     {
         if (userId.length > 0 && localUser.userId.length > 0)
@@ -699,13 +700,13 @@ class LogWatcher
     }
 
     /// Push a player join/leave event into the shared queue.
-    private void pushEvent(LogEvent event, string displayName)
+    private void pushEvent(LogEvent event, string displayName, string userId)
     {
         if (silent)
             return;
 
         // I think we know when we do something
-        if (localUser.displayName && displayName == localUser.displayName)
+        if (isLocalUser(displayName, userId))
             return;
 
         // Without a known local user the hold would never lift, so it only
@@ -717,6 +718,8 @@ class LogWatcher
         msg["type"] = "log-event";
         msg["event_type"] = cast(string) event;
         msg["display_name"] = displayName;
+        if (userId.length > 0)
+            msg["user_id"] = userId;
 
         queue.pushMessage(msg.toString());
         pushWakeEvent();

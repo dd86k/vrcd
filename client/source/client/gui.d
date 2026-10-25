@@ -1688,11 +1688,16 @@ private void drainNetworkMessages()
                     string logUser;
                     if (const(JSONValue)* v = "display_name" in msg)
                         logUser = v.str;
-                    bool logIsSelf;
-                    if (const(JSONValue) *jis_self = "is_self" in msg)
-                        logIsSelf = jis_self.type == JSONType.true_;
+                    string logUserId;
+                    if (const(JSONValue)* v = "user_id" in msg)
+                        logUserId = v.str;
+                    // NOTE: Log watcher drops self only once it saw "User Authenticated".
+                    bool logIsSelf = logUserId.length > 0 && appState.selfUserId.length > 0
+                        ? logUserId == appState.selfUserId
+                        : logUser.length > 0 && logUser == appState.selfDisplayName;
                     appState.addFeedEntry(0, logEventType, logUser, "", timeNow(), "", logIsSelf, EventSource.local);
-                    dispatchNotification(logEventType, logUser, "", saved);
+                    if (logIsSelf == false)
+                        dispatchNotification(logEventType, logUser, "", saved);
                 }
                 break;
 
