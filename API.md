@@ -60,6 +60,7 @@ Protocol versions:
 - `13` = imports (`import_begin`, `import_events`, `import_end`, `import_abort`, `get_imports`, `import_undo`)
 - `14` = boop replies (`notification_action` takes `boop`)
 - `15` = notification promotion (`get_promotions`, `set_promotions`, `promotions`)
+- `16` = `set_promotions` takes a `request_id`, echoed to the requester only
 
 **Failure:**
 ```json
@@ -262,6 +263,8 @@ Request the promotion rules. Server replies with `promotions`. Requires `server_
 
 Replace the whole rule set. On success the server stores it and broadcasts `promotions` to every client; on failure only the requester gets `promotions` with `error` and the rules as they were. Requires `server_version >= 15`.
 
+An optional `request_id` string (`server_version >= 16`) comes back in the `promotions` sent to the requester, on success and on failure. The other clients get the same broadcast without it, which is how a front-end tells its own save from another's. Saves are applied one at a time, in the order they arrive.
+
 A rule turns a matching event into an inbox entry (see `notifications`) and an ephemeral `notification-promoted` event. Rules see only events that survived noise suppression, and synthetics (`avatar-change`, `profile-change`). The first matching enabled rule wins, so one event makes at most one entry.
 
 | Field      | Type   | Description                                                                 |
@@ -277,7 +280,7 @@ A rule turns a matching event into an inbox entry (see `notifications`) and an e
 {"type": "set_promotions", "rules": [
   {"id": "r1", "name": "Unfriended", "events": ["friend-delete"]},
   {"id": "r2", "events": ["friend-online"], "users": ["usr_..."], "cooldown": 300}
-]}
+], "request_id": "save-1"}
 ```
 
 #### What VRChat already notifies
@@ -751,6 +754,7 @@ The promotion rules, in the shape `set_promotions` takes. Sent as the reply to `
 | `type`  | string | `"promotions"`                           |
 | `rules` | array  | The rules the server is running          |
 | `error` | string | Why a `set_promotions` was rejected      |
+| `request_id` | string | The requester's `request_id`, to the requester only |
 
 ### `moderate_result`
 

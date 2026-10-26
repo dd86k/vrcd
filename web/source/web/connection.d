@@ -12,6 +12,7 @@ import core.sync.mutex : Mutex;
 import core.thread : Thread;
 import core.time : Duration, dur;
 import std.base64 : Base64;
+import std.conv : to;
 import std.json;
 import std.socket;
 import std.string : indexOf, strip;
@@ -60,6 +61,10 @@ private enum long PROTOCOL_INVENTORY_FILTER = 11;
 
 /// Protocol version that added promotion rules (`get_promotions`, `set_promotions`).
 private enum long PROTOCOL_PROMOTIONS = 15;
+
+/// Protocol version that echoes a save's `request_id`, which is how a save
+/// tells its own answer from another front-end's.
+private enum long PROTOCOL_PROMOTION_IDS = 16;
 
 /// Byte budget for proxied images. Thumbnails run tens of kilobytes each, so
 /// this holds a few hundred of them; past that the oldest are dropped and
@@ -539,16 +544,20 @@ class ServerLink
 
         if (error is null)
         {
+            string requestId;
             synchronized (stateMutex)
             {
                 promotionList.saving = true;
                 promotionList.error = null;
+                promotionRequestId = "save-" ~ (++promotionSaveCount).to!string;
+                requestId = promotionRequestId;
             }
             notifyChange();
             logInfo("Saving %d promotion rule(s)", rules.length);
             if (sendMessage(JSONValue([
-                "type":  JSONValue("set_promotions"),
-                "rules": buildRulesJSON(rules),
+                "type":       JSONValue("set_promotions"),
+                "rules":      buildRulesJSON(rules),
+                "request_id": JSONValue(requestId),
             ])))
                 return;
             error = "Not connected to vrcd-server";
@@ -1363,6 +1372,9 @@ private:
     ModerationSnapshot moderationList;
     ModerationActionResult lastModeration;
     PromotionsSnapshot promotionList;
+    /// ID sent with the latest save from here, and the count it is made from.
+    string promotionRequestId;
+    long promotionSaveCount;
     /// Proxied VRChat images. Has its own lock: HTTP threads look images up
     /// while this thread stores them, and neither needs the state lock.
     ImageCache images;
@@ -2322,14 +2334,17 @@ private:
     {
         PromotionRule[] rules = parsePromotionsMessage(message);
         string error = jsonString(message, "error");
+        string requestId = jsonString(message, "request_id");
 
         synchronized (stateMutex)
         {
             promotionList.loaded = true;
             promotionList.rules = rules;
-            // NOTE: A broadcast for another front-end's save landing while
-            // ours is in flight is taken as our answer.
-            if (promotionList.saving || error.length > 0)
+            // An older server sends no ID, so any answer during a save counts as ours.
+            bool ours = promotionList.saving
+                && (linkStatus.serverVersion < PROTOCOL_PROMOTION_IDS
+                    || requestId == promotionRequestId);
+            if (ours || error.length > 0)
             {
                 promotionList.saving = false;
                 promotionList.error = error;

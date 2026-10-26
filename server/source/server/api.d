@@ -54,8 +54,9 @@ import vrcd.vrcx;
 /// carries it, `events_reset` when history was rewritten),
 /// 13 = imports (`import_begin`, `import_events`, `import_end`, `import_abort`, `get_imports`, `import_undo`),
 /// 14 = boop replies (`notification_action` takes `boop`),
-/// 15 = notification promotion (`get_promotions`, `set_promotions`, `promotions`).
-private enum int PROTOCOL_VERSION = 15;
+/// 15 = notification promotion (`get_promotions`, `set_promotions`, `promotions`),
+/// 16 = `set_promotions` takes a `request_id`, echoed to the sender only.
+private enum int PROTOCOL_VERSION = 16;
 
 /// `server_state` key holding the promotion rules as a JSON array.
 private enum string PROMOTION_RULES_KEY = "promotion_rules";
@@ -97,6 +98,9 @@ class APIServer
     private ModerationsTracker moderationsTracker;
     private NotificationsTracker notificationsTracker;
     private PromotionRules promotionRules;
+    // One rule save at a time, so the running set, the stored set and the
+    // order of the broadcasts agree.
+    private Mutex promotionsSaveMutex;
     private WorldCache worldCache;
     private InstanceCache instanceCache;
     private UserProfileCache userProfiles;
@@ -147,6 +151,7 @@ class APIServer
         this.moderationsTracker = new ModerationsTracker();
         this.notificationsTracker = new NotificationsTracker();
         this.promotionRules = new PromotionRules();
+        this.promotionsSaveMutex = new Mutex();
         if (store)
             promotionRules.load(store.getState(PROMOTION_RULES_KEY));
         this.userProfiles = new UserProfileCache();
@@ -529,17 +534,25 @@ class APIServer
     }
 
     /// Send the promotion rules to every authenticated client, so an edit
-    /// from one front-end shows on the others.
-    void broadcastPromotions()
+    /// from one front-end shows on the others. Only `origin` gets `requestId`
+    /// back, which is how it tells its own save from another front-end's.
+    void broadcastPromotions(ClientHandler origin, string requestId)
     {
-        string line = promotionRules.buildPromotionsMessage().toString() ~ "\n";
+        JSONValue message = promotionRules.buildPromotionsMessage();
+        string line = message.toString() ~ "\n";
+        string originLine = line;
+        if (requestId.length > 0)
+        {
+            message["request_id"] = JSONValue(requestId);
+            originLine = message.toString() ~ "\n";
+        }
 
         clientsMutex.lock();
         scope(exit) clientsMutex.unlock();
 
         foreach (client; clients)
             if (client.authenticated)
-                client.sendLine(line);
+                client.sendLine(client is origin ? originLine : line);
     }
 
     /// Seed or re-seed the server-side inbox from VRChat's two listings: v1
@@ -3002,25 +3015,35 @@ private class ClientHandler
     }
 
     /// Replace the promotion rules and re-broadcast them. Rejected as a whole
-    /// on any invalid rule, reported in the `promotions` reply.
+    /// on any invalid rule, reported in the `promotions` reply. Both carry
+    /// the `request_id` the save came with, if any.
     void handleSetPromotions(JSONValue msg)
     {
         JSONValue jrules;
         if (const(JSONValue)* v = "rules" in msg)
             jrules = *v;
+        string requestId;
+        if (const(JSONValue)* v = "request_id" in msg)
+            if (v.type == JSONType.string)
+                requestId = v.str;
 
-        if (string error = server.promotionRules.replace(jrules))
+        synchronized (server.promotionsSaveMutex)
         {
-            JSONValue reply = server.promotionRules.buildPromotionsMessage();
-            reply["error"] = JSONValue(error);
-            sendLine(reply.toString() ~ "\n");
-            return;
-        }
+            if (string error = server.promotionRules.replace(jrules))
+            {
+                JSONValue reply = server.promotionRules.buildPromotionsMessage();
+                reply["error"] = JSONValue(error);
+                if (requestId.length > 0)
+                    reply["request_id"] = JSONValue(requestId);
+                sendLine(reply.toString() ~ "\n");
+                return;
+            }
 
-        if (server.store)
-            server.store.setState(PROMOTION_RULES_KEY,
-                server.promotionRules.buildRulesJSON().toString());
-        server.broadcastPromotions();
+            if (server.store)
+                server.store.setState(PROMOTION_RULES_KEY,
+                    server.promotionRules.buildRulesJSON().toString());
+            server.broadcastPromotions(this, requestId);
+        }
     }
 
     /// Reply to `get_moderations`: refetch the mute/block lists from VRChat

@@ -423,6 +423,9 @@ struct AppState
     PromotionRule[] pendingPromotions;
     bool promotionsSendRequested;
     bool promotionsSaving;
+    // ID sent with the latest save, and the count it is made from.
+    string promotionsRequestId;
+    long promotionsSaveCount;
     // The rule open in the editor, staged until Save.
     PromotionRule ruleDraft;
     bool ruleDraftIsNew;

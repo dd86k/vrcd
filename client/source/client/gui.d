@@ -1175,7 +1175,12 @@ private void eventLoop(mu_Context* uictx)
         {
             appState.promotionsSendRequested = false;
             if (conn && appState.connected && conn.serverVersion >= PROTOCOL_PROMOTIONS)
-                conn.sendSetPromotions(buildRulesJSON(appState.pendingPromotions));
+            {
+                appState.promotionsRequestId =
+                    "save-" ~ (++appState.promotionsSaveCount).to!string;
+                conn.sendSetPromotions(buildRulesJSON(appState.pendingPromotions),
+                    appState.promotionsRequestId);
+            }
             else
                 appState.promotionsSaving = false;
             appState.pendingPromotions = null;
@@ -2401,8 +2406,16 @@ private void applyNotificationsSnapshot(JSONValue msg)
 /// set the server kept.
 private void applyPromotionsMessage(JSONValue msg)
 {
-    bool wasSaving = appState.promotionsSaving;
-    appState.promotionsSaving = false;
+    string requestId;
+    if (const(JSONValue)* v = "request_id" in msg)
+        if (v.type == JSONType.string)
+            requestId = v.str;
+    // An older server sends no ID, so any answer during a save counts as ours.
+    bool ours = appState.promotionsSaving
+        && (appState.serverProtocol < PROTOCOL_PROMOTION_IDS
+            || requestId == appState.promotionsRequestId);
+    if (ours)
+        appState.promotionsSaving = false;
     appState.promotionRules = parsePromotionsMessage(msg);
     appState.promotionsLoaded = true;
 
@@ -2415,7 +2428,7 @@ private void applyPromotionsMessage(JSONValue msg)
 
     // Only our own save closes the editor: a broadcast for another
     // front-end's edit arriving mid-edit must not throw the draft away.
-    if (wasSaving && appState.toolsPage == ToolsPage.promotionEdit)
+    if (ours && appState.toolsPage == ToolsPage.promotionEdit)
         appState.toolsPage = ToolsPage.promotionRules;
     // Rows may have moved under an armed confirmation; disarm.
     appState.armedConfirm = ArmedConfirm.init;

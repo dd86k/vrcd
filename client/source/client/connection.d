@@ -50,6 +50,10 @@ enum long PROTOCOL_BOOP = 14;
 /// (`get_promotions`, `set_promotions`).
 enum long PROTOCOL_PROMOTIONS = 15;
 
+/// Minimum server protocol version for `set_promotions` echoing a
+/// `request_id`, which is how a save tells its own answer from another's.
+enum long PROTOCOL_PROMOTION_IDS = 16;
+
 /// How many events to ask a catch-up for.
 ///
 /// The feed keeps `FEED_CAPACITY` entries and back-fills the rest a page at a
@@ -337,13 +341,15 @@ class ServerConnection
 
     /// Replace the whole rule set. The server broadcasts `promotions` to
     /// every front-end on success, and answers only this one, with `error`
-    /// set, on a refusal. Requires PROTOCOL_PROMOTIONS.
-    void sendSetPromotions(JSONValue rules)
+    /// set, on a refusal. Both carry `requestId` back to this front-end only
+    /// (PROTOCOL_PROMOTION_IDS). Requires PROTOCOL_PROMOTIONS.
+    void sendSetPromotions(JSONValue rules, string requestId)
     {
-        logDebugging("sendSetPromotions: %d rule(s)", rules.array.length);
+        logDebugging("sendSetPromotions: %d rule(s), %s", rules.array.length, requestId);
         sendMessage(JSONValue([
             "type": JSONValue("set_promotions"),
             "rules": rules,
+            "request_id": JSONValue(requestId),
         ]));
     }
 
