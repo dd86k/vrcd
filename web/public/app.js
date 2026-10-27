@@ -1,3 +1,8 @@
+    /* A group notification puts the group's own ID where a user ID goes and
+       sends no name with it. The title carries the row, and the row opens the
+       group. */
+    var fromUser = (entry.sender_user_id || "").indexOf("usr_") === 0;
+    var fromGroup = (entry.sender_user_id || "").indexOf("grp_") === 0;
 /* vrcd front-end.
  *
  * The page is a shell: a tab rail, a list column, and a detail pane. State
@@ -239,6 +244,7 @@ var TOOL_SECTIONS = [
     { id: "friends", label: "FRIENDS" },
     { id: "muted",   label: "MUTED",   undo: "unmute",  undoLabel: "UNMUTE" },
     { id: "blocked", label: "BLOCKED", undo: "unblock", undoLabel: "UNBLOCK" },
+    { id: "groups",  label: "GROUPS" },
     { id: "rules",   label: "RULES" }
 ];
 
@@ -252,6 +258,8 @@ var TOOL_HINTS = {
            "mute made in-game shows up after a refresh.",
     blocked: "People you have blocked. VRChat reports no changes to this, so " +
              "a block made in-game shows up after a refresh.",
+    groups: "Groups you are in. Pick one to represent it, choose who sees " +
+            "you in it, or leave.",
     rules: "Turns chosen events into notifications, processed server-side.",
     debug: "Only here because this vrcd-web was started with --debug or " +
            "VRCD_WEB_DEBUG. Nothing below touches VRChat: the rows are made " +
@@ -355,7 +363,8 @@ var state = {
     last_error: "",
     roster: { instances: [], active_elsewhere: [], offline: [] },
     notifications: [],
-    moderations: { loading: false, loaded: false, error: "", muted: [], blocked: [] }
+    moderations: { loading: false, loaded: false, error: "", muted: [], blocked: [] },
+    groups: { loading: false, loaded: false, error: "", list: [] }
 };
 var feed = [];
 var view = { tab: "online", sel: null, filter: "", section: "gallery",
@@ -831,9 +840,10 @@ function notifyCard(entry) {
     var busy = pendingNotifications[entry.id] === true;
 
     /* A group notification puts the group's own ID where a user ID goes and
-       sends no name with it, so there is nobody to name and nobody to open.
-       The title carries the row instead. */
+       sends no name with it. The title carries the row, and the row opens the
+       group. */
     var fromUser = (entry.sender_user_id || "").indexOf("usr_") === 0;
+    var fromGroup = (entry.sender_user_id || "").indexOf("grp_") === 0;
     var who = entry.sender_name || (fromUser ? entry.sender_user_id : "") ||
         entry.title || "VRChat";
 
@@ -855,7 +865,7 @@ function notifyCard(entry) {
        needs a bio and a trust rank to make. */
     var hit = fromUser ? findFriend(entry.sender_user_id) : null;
     var friend = hit ? hit.friend : null;
-    var head = el(fromUser ? "button" : "div", "head");
+    var head = el(fromUser || fromGroup ? "button" : "div", "head");
     head.appendChild(avatar(who, false, friend));
     var text = el("div", "who");
     text.appendChild(el("div", "n", who));
@@ -877,6 +887,10 @@ function notifyCard(entry) {
             select(friend
                 ? { kind: "friend", id: entry.sender_user_id }
                 : { kind: "person", id: entry.sender_user_id, name: who });
+        };
+    else if (fromGroup)
+        head.onclick = function () {
+            select({ kind: "group", id: entry.sender_user_id, name: entry.title });
         };
     card.appendChild(head);
 
@@ -2845,6 +2859,7 @@ function renderTools(body) {
     if (info.id === "friends")     renderFriendList(body);
     else if (info.id === "debug")  renderDebug(body);
     else if (info.id === "rules")  renderRules(body);
+    else if (info.id === "groups") renderGroups(body);
     else                           renderModerated(body, info);
 
     body.appendChild(el("div", "hint", TOOL_HINTS[info.id]));
@@ -2934,6 +2949,8 @@ function toolSwitcher() {
             count = allFriends().length;
         else if (section.id === "rules")
             count = state.promotions && state.promotions.loaded ? state.promotions.rules.length : 0;
+        else if (section.id === "groups")
+            count = state.groups.loaded ? groupList().length : 0;
         else if (section.id !== "debug")
             count = state.moderations.loaded ? moderated(section.id).length : 0;
         if (count) chip.appendChild(el("span", "n", String(count)));
@@ -3140,6 +3157,403 @@ function refreshModerations(button) {
         refreshingModerations = false;
         if (view.tab === "tools") renderList();
     });
+}
+
+/* -------------------------------------------------------------- groups */
+
+/* Group panes from /api/group/:id, cached on the same terms as profiles. */
+var groupPanes = {};
+var groupPaneErrors = {};
+var groupPaneWaiting = {};
+/* Group IDs with an action in flight, and whether a list refresh is. */
+var pendingGroups = {};
+var refreshingGroups = false;
+/* `group_action.serial` as last seen. */
+var lastGroupSerial = -1;
+
+/* Who sees you in a group, as VRChat words the setting. */
+var GROUP_VISIBILITY = [
+    { value: "visible", label: "EVERYONE" },
+    { value: "friends", label: "FRIENDS" },
+    { value: "hidden",  label: "NOBODY" }
+];
+
+var GROUP_JOIN_STATES = {
+    open: "OPEN", request: "REQUEST TO JOIN", invite: "INVITE ONLY", closed: "CLOSED"
+};
+
+/* Toast wording once a group action went through. The group name follows. */
+var GROUP_DONE = {
+    represent: "Representing", unrepresent: "Stopped representing",
+    subscribe: "Announcements on for", unsubscribe: "Announcements off for",
+    visibility: "Visibility changed for", join: "Joined", leave: "Left",
+    cancel_request: "Request cancelled for"
+};
+
+function groupList() {
+    return (state.groups && state.groups.list) || [];
+}
+
+/* The user's entry for this group, or null when not a member (or not loaded). */
+function listedGroup(id) {
+    var list = groupList();
+    for (var i = 0; i < list.length; i++)
+        if (list[i].id === id) return list[i];
+    return null;
+}
+
+/* "CODE.1234", or "" when VRChat gave no short code. */
+function groupCode(g) {
+    if (!g.shortCode) return "";
+    return g.shortCode + (g.discriminator ? "." + g.discriminator : "");
+}
+
+/* Group icon: the avatar disc, squared off. */
+function groupIcon(g, big) {
+    var node = avatar(g.name || "?", big, g.iconFileId
+        ? { imageFileId: g.iconFileId, imageVersion: g.iconVersion }
+        : null);
+    node.classList.add("sq");
+    return node;
+}
+
+/* Held pane for this group, or null with a fetch started. */
+function groupFor(id) {
+    if (groupPanes[id]) return groupPanes[id];
+    if (groupPaneWaiting[id]) return null;
+
+    var failed = groupPaneErrors[id];
+    if (failed && Date.now() - failed.at < PROFILE_ERROR_MS) return null;
+
+    groupPaneWaiting[id] = true;
+    fetchGroup(id, PROFILE_TRIES);
+    return null;
+}
+
+/* Last fetch error for this group, or "" while one is on its way. */
+function groupPaneError(id) {
+    if (groupPaneWaiting[id]) return "";
+    var failed = groupPaneErrors[id];
+    return failed ? failed.error : "";
+}
+
+function fetchGroup(id, tries) {
+    fetch("/api/group/" + encodeURIComponent(id)).then(function (r) {
+        if (r.status === 401) { location.href = "/login"; return null; }
+        if (r.status === 202) {
+            if (tries > 0)
+                setTimeout(function () { fetchGroup(id, tries - 1); }, PROFILE_RETRY_MS);
+            else
+                groupPaneDone(id, null, "vrcd-server did not answer in time");
+            return null;
+        }
+        return r.json().then(function (body) {
+            if (r.ok) groupPaneDone(id, body, null);
+            else groupPaneDone(id, null, body.error || "Group unavailable");
+            return null;
+        });
+    }).catch(function () {
+        groupPaneDone(id, null, "Could not reach the vrcd web server");
+    });
+}
+
+function groupPaneDone(id, pane, error) {
+    delete groupPaneWaiting[id];
+    if (pane) {
+        groupPanes[id] = pane;
+        delete groupPaneErrors[id];
+    } else {
+        groupPaneErrors[id] = { error: error, at: Date.now() };
+    }
+    if (view.sel && view.sel.kind === "group" && view.sel.id === id) renderDetail();
+}
+
+function renderGroups(body) {
+    var groups = state.groups;
+    var entries = groupList().filter(function (g) {
+        return matches(g.name) || matches(groupCode(g));
+    });
+
+    var bar = el("div", "bar");
+    var count = "";
+    if (groups.loading || refreshingGroups) count = "Loading...";
+    else if (groups.loaded)
+        count = groupList().length + (groupList().length === 1 ? " group" : " groups");
+    bar.appendChild(el("div", "count", count));
+    var refresh = el("button", "act small", "REFRESH");
+    refresh.disabled = groups.loading || refreshingGroups || state.connected === false;
+    refresh.onclick = function () { refreshGroups(refresh); };
+    bar.appendChild(refresh);
+    body.appendChild(bar);
+
+    if (groups.error) body.appendChild(el("div", "err", groups.error));
+
+    if (entries.length === 0) {
+        var why = "You are not in any group.";
+        if (groups.loaded === false)
+            why = groups.error ? "That list could not be fetched." : "Loading...";
+        else if (view.filter) why = "Nothing matches that filter.";
+        body.appendChild(placeholder(why));
+        return;
+    }
+
+    var list = el("div", "flat");
+    entries.forEach(function (g) { list.appendChild(groupRow(g)); });
+    body.appendChild(list);
+}
+
+function groupRow(g) {
+    var row = el("button", "row");
+    if (view.sel && view.sel.kind === "group" && view.sel.id === g.id)
+        row.classList.add("on");
+    row.appendChild(groupIcon(g, false));
+
+    var who = el("div", "who");
+    who.appendChild(el("div", "n", g.name || g.id));
+    var code = groupCode(g);
+    who.appendChild(el("div", "d", (code ? code + " · " : "") +
+        countText(g.memberCount) + (g.memberCount === 1 ? " member" : " members")));
+    row.appendChild(who);
+
+    if (g.isRepresenting) row.appendChild(el("span", "plat", "REPRESENTING"));
+
+    row.onclick = function () { select({ kind: "group", id: g.id, name: g.name }); };
+    return row;
+}
+
+/* A group's pane: what it is, then what you can do about being in it. The
+   list entry is live (an in-game change arrives as an event), the fetched pane
+   is not, so representation and visibility come from the list when listed. */
+function detailGroup(body, id, name) {
+    var listed = listedGroup(id);
+    var full = groupFor(id);
+    var g = {};
+    var key;
+    if (full) for (key in full) if (full.hasOwnProperty(key)) g[key] = full[key];
+    if (listed) for (key in listed) if (listed.hasOwnProperty(key) && listed[key] !== "") g[key] = listed[key];
+    if (!g.name) g.name = name || id;
+    g.id = id;
+
+    // Once the list is in, it is the authority on membership. The pane may
+    // predate a join or a leave made elsewhere.
+    var member = state.groups.loaded
+        ? listed !== null
+        : (full !== null && full.membershipStatus === "member");
+    var mine = (full && full.myMember) || null;
+    var representing = listed ? listed.isRepresenting === true
+        : (mine !== null && mine.isRepresenting === true);
+    var visibility = listed ? listed.visibility : (mine ? mine.visibility : "");
+    var busy = pendingGroups[id] === true || state.connected === false;
+
+    document.getElementById("detailTitle").textContent = g.name;
+
+    if (g.bannerFileId) {
+        var banner = el("div", "gbanner");
+        banner.style.background = shotBackground(g.name);
+        var img = document.createElement("img");
+        img.alt = "";
+        banner.appendChild(img);
+        imageWhenVisible(img, g.bannerFileId, g.bannerVersion || 1, 1024);
+        viewable(banner, { id: g.bannerFileId, version: g.bannerVersion || 1 },
+            g.name + " banner", 1024);
+        body.appendChild(banner);
+    }
+
+    var hero = el("div", "hero");
+    var face = groupIcon(g, true);
+    if (g.iconFileId)
+        viewable(face, { id: g.iconFileId, version: g.iconVersion || 1 },
+            g.name + " icon", AV_BIG_SIZE);
+    hero.appendChild(face);
+    hero.appendChild(el("div", "name", g.name));
+    var code = groupCode(g);
+    if (code) hero.appendChild(el("div", "sub", code));
+
+    var marks = el("div", "marks");
+    if (g.isVerified) marks.appendChild(el("span", "pill staff", "VERIFIED"));
+    if (representing) marks.appendChild(el("span", "pill rank r4", "REPRESENTING"));
+    if (g.privacy === "private") marks.appendChild(el("span", "pill", "PRIVATE"));
+    if (member === false) {
+        if (g.membershipStatus === "requested")
+            marks.appendChild(el("span", "pill", "REQUESTED"));
+        else if (g.membershipStatus === "invited")
+            marks.appendChild(el("span", "pill", "INVITED"));
+        else if (GROUP_JOIN_STATES[g.joinState])
+            marks.appendChild(el("span", "pill", GROUP_JOIN_STATES[g.joinState]));
+    }
+    if (marks.childNodes.length) hero.appendChild(marks);
+    body.appendChild(hero);
+
+    if (full === null)
+        body.appendChild(el("div", "hint", groupPaneError(id) || "Loading group..."));
+
+    if (g.description) {
+        body.appendChild(el("div", "section", "About"));
+        body.appendChild(el("div", "bio", g.description));
+    }
+    if (g.rules) {
+        body.appendChild(el("div", "section", "Rules"));
+        body.appendChild(el("div", "bio", g.rules));
+    }
+    if (g.links && g.links.length) {
+        body.appendChild(el("div", "section", "Links"));
+        var links = el("dl", "kv");
+        g.links.forEach(function (url, index) {
+            var dd = el("dd");
+            dd.appendChild(profileLink(url));
+            links.appendChild(el("dt", null, "#" + (index + 1)));
+            links.appendChild(dd);
+        });
+        body.appendChild(links);
+    }
+
+    body.appendChild(el("div", "section", "Details"));
+    var kv = el("dl", "kv");
+    if (g.memberCount) {
+        var members = countText(g.memberCount);
+        if (g.onlineMemberCount) members += " (" + countText(g.onlineMemberCount) + " online)";
+        pair(kv, "Members", members);
+    }
+    if (g.languages && g.languages.length)
+        pair(kv, "Languages", g.languages.map(languageName).join(", "));
+    if (g.createdAt) pair(kv, "Created", whenDay(g.createdAt));
+    if (member && mine && mine.joinedAt) pair(kv, "Joined", whenDay(mine.joinedAt));
+    if (member && mine && mine.roles && mine.roles.length)
+        pair(kv, "Roles", mine.roles.join(", "));
+    pair(kv, "Group ID", id);
+    body.appendChild(kv);
+
+    if (member) groupMembership(body, id, representing, visibility, mine, busy);
+
+    var actions = el("div", "actions");
+    if (member === false) groupJoinButton(actions, g, busy);
+    actions.appendChild(copyButton("Copy group ID", id));
+    // An owner cannot leave, VRChat wants ownership handed over first.
+    var owner = state.self && g.ownerId && state.self.id === g.ownerId;
+    if (member && owner === false)
+        appendArmed(actions, "leave|" + id, "LEAVE", "CONFIRM LEAVE", busy,
+            function (label) { return groupButton(id, "leave", "", label, busy); });
+    body.appendChild(actions);
+}
+
+/* Representation, visibility and announcements for a group you are in. */
+function groupMembership(body, id, representing, visibility, mine, busy) {
+    body.appendChild(el("div", "section", "Membership"));
+
+    var acts = el("div", "actions");
+    acts.appendChild(representing
+        ? groupButton(id, "unrepresent", "", "STOP REPRESENTING", busy)
+        : groupButton(id, "represent", "", "REPRESENT", busy, true));
+
+    // Subscription is only in the fetched pane. Without it the toggle would
+    // not know which way it points.
+    if (mine)
+        acts.appendChild(mine.isSubscribedToAnnouncements
+            ? groupButton(id, "unsubscribe", "", "MUTE ANNOUNCEMENTS", busy)
+            : groupButton(id, "subscribe", "", "GET ANNOUNCEMENTS", busy));
+    body.appendChild(acts);
+
+    body.appendChild(el("div", "hint", "Who sees you in this group"));
+    var chips = el("div", "chips wrap");
+    GROUP_VISIBILITY.forEach(function (choice) {
+        var on = visibility === choice.value;
+        var chip = el("button", "chip" + (on ? " on" : ""), choice.label);
+        chip.disabled = busy;
+        if (on === false)
+            chip.onclick = function () { groupAct("visibility", id, choice.value, chip); };
+        chips.appendChild(chip);
+    });
+    body.appendChild(chips);
+}
+
+/* JOIN, REQUEST, ACCEPT INVITE or CANCEL REQUEST, by what VRChat allows. */
+function groupJoinButton(actions, g, busy) {
+    if (g.membershipStatus === "requested") {
+        actions.appendChild(groupButton(g.id, "cancel_request", "", "CANCEL REQUEST", busy));
+        return;
+    }
+    if (g.membershipStatus === "invited") {
+        actions.appendChild(groupButton(g.id, "join", "", "ACCEPT INVITE", busy, true));
+        return;
+    }
+    if (g.joinState === "open")
+        actions.appendChild(groupButton(g.id, "join", "", "JOIN", busy, true));
+    else if (g.joinState === "request")
+        actions.appendChild(groupButton(g.id, "join", "", "REQUEST TO JOIN", busy, true));
+}
+
+function groupButton(id, action, value, label, busy, primary) {
+    var button = el("button", "act" + (primary ? " primary" : ""), label);
+    button.disabled = busy;
+    button.onclick = function () { groupAct(action, id, value, button); };
+    return button;
+}
+
+/* Fire and forget: the outcome and the moved list arrive in the next snapshot. */
+function groupAct(action, id, value, button) {
+    pendingGroups[id] = true;
+    armedAction = "";
+    var restore = markSending(button);
+
+    fetch("/api/group", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: action, group_id: id, value: value || "" })
+    }).then(function (r) {
+        if (r.ok) return;
+        delete pendingGroups[id];
+        showToast("The vrcd web server refused that", true);
+        restore();
+    }).catch(function () {
+        delete pendingGroups[id];
+        showToast("Could not reach the vrcd web server", true);
+        restore();
+    });
+}
+
+/* Re-list the groups. Joins and leaves arrive as events, so this is only for
+   a list that failed or looks wrong. */
+function refreshGroups(button) {
+    refreshingGroups = true;
+    button.disabled = true;
+
+    fetch("/api/group", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "refresh" })
+    }).then(function (r) {
+        if (r.ok) return;
+        showToast("The vrcd web server refused that", true);
+    }).catch(function () {
+        showToast("Could not reach the vrcd web server", true);
+    }).then(function () {
+        refreshingGroups = false;
+        if (view.tab === "tools") renderList();
+    });
+}
+
+function reportGroupAction(seeding) {
+    var result = state.group_action;
+    if (!result || result.serial === lastGroupSerial) return;
+    lastGroupSerial = result.serial;
+    if (seeding) return;
+
+    delete pendingGroups[result.group_id];
+    // The held pane describes the membership as it was.
+    if (result.success) delete groupPanes[result.group_id];
+    armedAction = "";
+    if (view.tab === "tools") renderList();
+    renderDetail();
+
+    if (result.success === false) {
+        showToast("That failed: " + result.error, true);
+        return;
+    }
+    var name = result.name || result.group_id;
+    if (result.action === "join" && result.membership_status === "requested")
+        showToast("Requested to join " + name, false);
+    else
+        showToast((GROUP_DONE[result.action] || "Done") + " " + name, false);
 }
 
 /* --------------------------------------------------------------- rules */
@@ -4698,7 +5112,8 @@ function renderDetailBody(body) {
         if (view.tab === "inbox") nothing = "Pick a sender to see their profile.";
         else if (view.tab === "stuff") nothing = "Pick something.";
         else if (view.tab === "tools") nothing = view.tool === "rules"
-            ? "Pick a rule, or make a new one." : "Pick someone.";
+            ? "Pick a rule, or make a new one."
+            : view.tool === "groups" ? "Pick a group." : "Pick someone.";
         body.appendChild(placeholder(nothing));
         return;
     }
@@ -4711,6 +5126,11 @@ function renderDetailBody(body) {
         var known = findFriend(view.sel.id);
         if (known) detailFriend(body, known.friend, known.group);
         else detailPerson(body, view.sel.id, view.sel.name);
+        return;
+    }
+
+    if (view.sel.kind === "group") {
+        detailGroup(body, view.sel.id, view.sel.name);
         return;
     }
 
@@ -5163,6 +5583,8 @@ function applyState(message) {
     if (!state.moderations)
         state.moderations = { loading: false, loaded: false, error: "",
                               muted: [], blocked: [] };
+    if (!state.groups)
+        state.groups = { loading: false, loaded: false, error: "", list: [] };
 
     // A notification that left the snapshot is answered, however it was
     // answered: by us, by another client, or by VRChat itself. Pruned before
@@ -5188,12 +5610,15 @@ function applyState(message) {
         refreshingModerations = false;
         ruleSending = null;
         refreshingModerations = false;
+        pendingGroups = {};
+        refreshingGroups = false;
         linkWasDown = true;
     } else if (linkWasDown) {
         // Profiles that failed while the link was down failed for a reason
         // that has just gone away. What was actually fetched stays.
         linkWasDown = false;
         forgetProfileErrors();
+        groupPaneErrors = {};
         // Pictures the same way, and this is the common case rather than the
         // odd one: a proxied image asked for while the link was down is
         // refused on the spot, and a roster is hundreds of faces. The render
@@ -5212,6 +5637,7 @@ function applyState(message) {
     reportNotifyAction(seeding);
     reportContentAction(seeding);
     reportModeration(seeding);
+    reportGroupAction(seeding);
     reportRules(seeding);
     reportStatus(seeding);
     reportProfile();

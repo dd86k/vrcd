@@ -174,6 +174,8 @@ button { font: inherit; color: inherit; }
     object-fit: cover; display: block; }
 .av.lg { width: 5rem; height: 5rem; font-size: 1.6rem; }
 .av.xs { width: 1.4rem; height: 1.4rem; font-size: .5rem; }
+/* Group icons are rounded squares in VRChat. */
+.av.sq { border-radius: 22%; }
 .dot { width: .7rem; height: .7rem; border-radius: 50%; background: var(--muted); flex: none; }
 .dot.big { width: 1rem; height: 1rem; }
 .plat { flex: none; font-size: .65rem; letter-spacing: .04em; color: var(--muted);
@@ -415,6 +417,14 @@ button.head { cursor: pointer; }
     background: linear-gradient(to top, rgba(10,10,14,.9), rgba(10,10,14,0) 70%); }
 .shot > * { position: relative; z-index: 1; }
 .shot .world { font-weight: 700; font-size: 1.1rem; text-shadow: 0 1px 3px rgba(0,0,0,.7); }
+
+/* Group banner. VRChat crops these to 3:1. */
+.gbanner {
+    aspect-ratio: 3 / 1; border-radius: 10px; border: 1px solid var(--line);
+    margin-bottom: .25rem; position: relative; overflow: hidden;
+}
+.gbanner img { position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: cover; display: block; }
 
 .pills { display: flex; gap: .35rem; flex-wrap: wrap; margin-bottom: .9rem; }
 .pill { font-size: .7rem; font-weight: 600; letter-spacing: .05em; color: var(--muted);

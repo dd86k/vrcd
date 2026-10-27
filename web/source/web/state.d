@@ -203,6 +203,31 @@ string buildStateJSON(ServerLink link)
         ]);
     }
 
+    // Carried whole like the moderation lists: a few dozen small entries.
+    GroupSnapshot groupList = link.groups();
+    root["groups"] = JSONValue([
+        "loading": JSONValue(groupList.loading),
+        "loaded":  JSONValue(groupList.loaded),
+        "error":   JSONValue(groupList.error),
+        "list":    groupList.groups.type == JSONType.array
+            ? groupList.groups : JSONValue.emptyArray,
+    ]);
+
+    GroupActionResult groupAction = link.groupResult();
+    if (groupAction.attempted)
+    {
+        root["group_action"] = JSONValue([
+            "action":            JSONValue(groupAction.action),
+            "group_id":          JSONValue(groupAction.groupId),
+            "name":              JSONValue(groupAction.name),
+            "value":             JSONValue(groupAction.value),
+            "membership_status": JSONValue(groupAction.membershipStatus),
+            "success":           JSONValue(groupAction.success),
+            "error":             JSONValue(groupAction.error),
+            "serial":            JSONValue(groupAction.serial),
+        ]);
+    }
+
     // The catalogue rides along so the page labels events from the same table
     // the feed uses. Absent when vrcd-server cannot hold rules.
     if (link.canPromote())

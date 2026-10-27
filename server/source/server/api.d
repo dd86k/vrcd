@@ -23,6 +23,7 @@ import server.badgeimage;
 import server.content;
 import server.events;
 import server.friends;
+import server.groups;
 import server.instancecache;
 import server.moderations;
 import server.notifications;
@@ -56,8 +57,9 @@ import vrcd.vrcx;
 /// 14 = boop replies (`notification_action` takes `boop`),
 /// 15 = notification promotion (`get_promotions`, `set_promotions`, `promotions`),
 /// 16 = `set_promotions` takes a `request_id`, echoed to the sender only,
-/// 17 = `status-change` synthetic, promotion rules take `statuses`.
-private enum int PROTOCOL_VERSION = 17;
+/// 17 = `status-change` synthetic, promotion rules take `statuses`,
+/// 18 = groups (`get_groups`, `get_group`, `group_action`, `groups`).
+private enum int PROTOCOL_VERSION = 18;
 
 /// `server_state` key holding the promotion rules as a JSON array.
 private enum string PROMOTION_RULES_KEY = "promotion_rules";
@@ -97,6 +99,7 @@ class APIServer
     private string vrchatLastError;
     private FriendsTracker friendsTracker;
     private ModerationsTracker moderationsTracker;
+    private GroupsTracker groupsTracker;
     private NotificationsTracker notificationsTracker;
     private PromotionRules promotionRules;
     // One rule save at a time, so the running set, the stored set and the
@@ -105,6 +108,7 @@ class APIServer
     private WorldCache worldCache;
     private InstanceCache instanceCache;
     private UserProfileCache userProfiles;
+    private UserProfileCache groupProfiles; // Group panes, keyed by group ID
     private BadgeImageService badgeImages;
     private HTTPClient httpClient;
     private ContentService contentService;
@@ -150,12 +154,14 @@ class APIServer
         this.clientsMutex = new Mutex();
         this.friendsTracker = new FriendsTracker();
         this.moderationsTracker = new ModerationsTracker();
+        this.groupsTracker = new GroupsTracker();
         this.notificationsTracker = new NotificationsTracker();
         this.promotionRules = new PromotionRules();
         this.promotionsSaveMutex = new Mutex();
         if (store)
             promotionRules.load(store.getState(PROMOTION_RULES_KEY));
         this.userProfiles = new UserProfileCache();
+        this.groupProfiles = new UserProfileCache();
         this.badgeImages = new BadgeImageService();
         this.reseedSignalMutex = new Mutex();
         this.reseedSignalCond = new Condition(this.reseedSignalMutex);
@@ -462,6 +468,116 @@ class APIServer
         }
         logDebugging("broadcastModerationsSnapshot: clients=%d/%d",
             delivered, clients.length);
+    }
+
+    /// Broadcast the group list to all authenticated clients.
+    void broadcastGroupsSnapshot()
+    {
+        string line = groupsTracker.buildGroupsMessage().toString() ~ "\n";
+
+        clientsMutex.lock();
+        scope(exit) clientsMutex.unlock();
+
+        foreach (client; clients)
+        {
+            if (client.authenticated)
+                client.sendLine(line);
+        }
+    }
+
+    /// Fold a group event into the group list and broadcast it when it moved.
+    /// Called from the WebSocket event callback.
+    void processGroupEvent(VRCEvent event)
+    {
+        if (event.content.type != JSONType.object)
+            return;
+
+        string groupId;
+        if (const(JSONValue)* v = "groupId" in event.content)
+            if (v.type == JSONType.string)
+                groupId = v.str;
+
+        bool changed;
+        switch (event.type)
+        {
+            case EventType.groupLeft:
+                groupProfiles.forget(groupId);
+                changed = groupsTracker.remove(groupId);
+                break;
+            case EventType.groupJoined:
+                groupProfiles.forget(groupId);
+                // The event carries only the ID, and an unloaded list fills
+                // itself on the next get_groups.
+                if (groupsTracker.isLoaded() == false || isGroupId(groupId) == false)
+                    break;
+                if (httpClient is null || apiMutex is null)
+                    break;
+                JSONValue group;
+                string error;
+                synchronized (apiMutex)
+                    fetchGroupLocked(groupId, group, error);
+                if (error.length == 0)
+                    changed = groupsTracker.upsert(group);
+                break;
+            case EventType.groupMemberUpdated:
+                if (const(JSONValue)* m = "member" in event.content)
+                {
+                    // Only our own membership belongs in the list.
+                    if (const(JSONValue)* u = "userId" in *m)
+                        if (u.type == JSONType.string && u.str != friendsTracker.getSelfUserId())
+                            break;
+                    if (const(JSONValue)* v = "groupId" in *m)
+                        if (v.type == JSONType.string)
+                            groupProfiles.forget(v.str);
+                    changed = groupsTracker.applyMember(*m);
+                }
+                break;
+            case EventType.groupRoleUpdated:
+                if (const(JSONValue)* r = "role" in event.content)
+                    if (const(JSONValue)* v = "groupId" in *r)
+                        if (v.type == JSONType.string)
+                            groupProfiles.forget(v.str);
+                break;
+            default:
+        }
+
+        if (changed)
+            broadcastGroupsSnapshot();
+    }
+
+    /// Fetch `GET /groups/{id}?includeRoles=true` into `group`, or set `error`.
+    /// Caller holds apiMutex and has checked the ID.
+    void fetchGroupLocked(string groupId, out JSONValue group, out string error)
+    {
+        if (rateLimiter && rateLimiter.isBlocked())
+        {
+            error = "Rate limited by VRChat, try again later";
+            return;
+        }
+
+        try
+        {
+            HTTPResponse resp = httpClient.get("/groups/" ~ groupId ~ "?includeRoles=true");
+            logDebugging("fetchGroup: VRC GET /groups/%s -> HTTP %d", groupId, resp.code);
+            if (rateLimiter)
+            {
+                rateLimiter.update(resp);
+                broadcastStatus();
+            }
+            if (resp.code < 200 || resp.code >= 300)
+            {
+                error = vrchatError(resp);
+                return;
+            }
+
+            group = parseJSON(resp.text);
+            if (group.type != JSONType.object)
+                error = "Unexpected group response";
+        }
+        catch (Exception e)
+        {
+            error = e.msg;
+        }
     }
 
     /// Broadcast the current inbox to all authenticated clients. Called
@@ -1546,6 +1662,30 @@ private class ClientHandler
                         return;
                     }
                     handleUnfriend(msg);
+                    break;
+                case "get_groups":
+                    if (authenticated == false)
+                    {
+                        sendError("Not authenticated");
+                        return;
+                    }
+                    handleGetGroups();
+                    break;
+                case "get_group":
+                    if (authenticated == false)
+                    {
+                        sendError("Not authenticated");
+                        return;
+                    }
+                    handleGetGroup(msg);
+                    break;
+                case "group_action":
+                    if (authenticated == false)
+                    {
+                        sendError("Not authenticated");
+                        return;
+                    }
+                    handleGroupAction(msg);
                     break;
                 case "get_notifications":
                     if (authenticated == false)
@@ -3307,6 +3447,309 @@ private class ClientHandler
         catch (Exception e)
         {
             sendResult(false, displayName, e.msg);
+        }
+    }
+
+    /// Reply to `get_groups` with the user's group list, refetched from VRChat.
+    /// Failures go out as a `groups` message with `error`.
+    void handleGetGroups()
+    {
+        void sendGroupsError(string error)
+        {
+            JSONValue result = JSONValue([
+                "type": JSONValue("groups"),
+                "error": JSONValue(error),
+            ]);
+            sendLine(result.toString() ~ "\n");
+        }
+
+        string selfId = server.friendsTracker.getSelfUserId();
+        if (selfId.length == 0)
+        {
+            sendGroupsError("Own user ID not known yet");
+            return;
+        }
+
+        if (server.httpClient is null || server.apiMutex is null)
+        {
+            sendGroupsError("Server HTTP client not configured");
+            return;
+        }
+
+        server.apiMutex.lock();
+        scope(exit) server.apiMutex.unlock();
+
+        if (server.rateLimiter && server.rateLimiter.isBlocked())
+        {
+            sendGroupsError("Rate limited by VRChat, try again later");
+            return;
+        }
+
+        try
+        {
+            HTTPResponse resp = server.httpClient.get("/users/" ~ selfId ~ "/groups");
+            logDebugging("handleGetGroups: VRC GET /users/%s/groups -> HTTP %d",
+                selfId, resp.code);
+            if (server.rateLimiter)
+            {
+                server.rateLimiter.update(resp);
+                server.broadcastStatus();
+            }
+            if (resp.code < 200 || resp.code >= 300)
+            {
+                sendGroupsError("HTTP " ~ resp.code.to!string);
+                return;
+            }
+
+            JSONValue json = parseJSON(resp.text);
+            if (json.type != JSONType.array)
+            {
+                sendGroupsError("Unexpected groups response");
+                return;
+            }
+
+            server.groupsTracker.replaceFromAPI(json.array);
+            sendLine(server.groupsTracker.buildGroupsMessage().toString() ~ "\n");
+        }
+        catch (Exception e)
+        {
+            sendGroupsError(e.msg);
+        }
+    }
+
+    /// Reply to `get_group` with one group's pane, from cache when fresh.
+    void handleGetGroup(JSONValue msg)
+    {
+        string groupId = stringField(msg, "group_id");
+
+        void sendGroup(JSONValue profile, string error)
+        {
+            JSONValue result = JSONValue([
+                "type": JSONValue("group"),
+                "group_id": JSONValue(groupId),
+                "success": JSONValue(error.length == 0),
+            ]);
+            if (error.length > 0)
+                result["error"] = JSONValue(error);
+            else
+                result["group"] = profile;
+            sendLine(result.toString() ~ "\n");
+        }
+
+        if (isGroupId(groupId) == false)
+        {
+            sendGroup(JSONValue.init, "Not a group ID");
+            return;
+        }
+
+        JSONValue cached;
+        string cachedError;
+        if (server.groupProfiles.lookup(groupId, cached, cachedError))
+        {
+            sendGroup(cached, cachedError);
+            return;
+        }
+
+        if (server.httpClient is null || server.apiMutex is null)
+        {
+            sendGroup(JSONValue.init, "Server HTTP client not configured");
+            return;
+        }
+
+        JSONValue group;
+        string error;
+        {
+            server.apiMutex.lock();
+            scope(exit) server.apiMutex.unlock();
+            server.fetchGroupLocked(groupId, group, error);
+        }
+
+        if (error.length > 0)
+        {
+            // A rate limit says nothing about the group.
+            if (server.rateLimiter is null || server.rateLimiter.isBlocked() == false)
+                server.groupProfiles.storeFailure(groupId, error);
+            sendGroup(JSONValue.init, error);
+            return;
+        }
+
+        JSONValue profile = buildGroupProfile(group);
+        server.groupProfiles.store(groupId, profile);
+        sendGroup(profile, null);
+    }
+
+    /// Run one member-side group action. Replies with `group_action_result`,
+    /// and on success re-broadcasts `groups`.
+    void handleGroupAction(JSONValue msg)
+    {
+        string groupId = stringField(msg, "group_id");
+        string action = stringField(msg, "action");
+        string value = stringField(msg, "value");
+
+        string name = server.groupsTracker.getName(groupId);
+        if (name.length == 0)
+        {
+            JSONValue cached;
+            string cachedError;
+            if (server.groupProfiles.lookup(groupId, cached, cachedError))
+                if (cachedError.length == 0)
+                    name = stringField(cached, "name");
+        }
+
+        void sendResult(bool success, string error, string membership = null)
+        {
+            JSONValue result = JSONValue([
+                "type": JSONValue("group_action_result"),
+                "success": JSONValue(success),
+                "action": JSONValue(action),
+                "group_id": JSONValue(groupId),
+                "name": JSONValue(name),
+            ]);
+            if (value.length > 0)
+                result["value"] = JSONValue(value);
+            if (membership.length > 0)
+                result["membership_status"] = JSONValue(membership);
+            if (error.length > 0)
+                result["error"] = JSONValue(error);
+            sendLine(result.toString() ~ "\n");
+        }
+
+        if (isGroupId(groupId) == false)
+        {
+            sendResult(false, "Not a group ID");
+            return;
+        }
+
+        string selfId = server.friendsTracker.getSelfUserId();
+        string base = "/groups/" ~ groupId;
+        string method, path, payload;
+        switch (action)
+        {
+            case "represent", "unrepresent":
+                method = "PUT";
+                path = base ~ "/representation";
+                payload = JSONValue([ "isRepresenting": JSONValue(action == "represent") ]).toString();
+                break;
+            case "subscribe", "unsubscribe":
+                method = "PUT";
+                path = base ~ "/members/" ~ selfId;
+                payload = JSONValue([
+                    "isSubscribedToAnnouncements": JSONValue(action == "subscribe") ]).toString();
+                break;
+            case "visibility":
+                bool known;
+                foreach (string v; groupVisibilities)
+                    known = known || v == value;
+                if (known == false)
+                {
+                    sendResult(false, "Unknown visibility: " ~ value);
+                    return;
+                }
+                method = "PUT";
+                path = base ~ "/members/" ~ selfId;
+                payload = JSONValue([ "visibility": JSONValue(value) ]).toString();
+                break;
+            case "join":
+                method = "POST";
+                path = base ~ "/join";
+                payload = "{}";
+                break;
+            case "leave":
+                method = "POST";
+                path = base ~ "/leave";
+                payload = "{}";
+                break;
+            case "cancel_request":
+                method = "DELETE";
+                path = base ~ "/requests";
+                break;
+            default:
+                sendResult(false, "Unknown group action: " ~ action);
+                return;
+        }
+
+        if (selfId.length == 0 && path.startsWith(base ~ "/members/"))
+        {
+            sendResult(false, "Own user ID not known yet");
+            return;
+        }
+
+        if (server.httpClient is null || server.apiMutex is null)
+        {
+            sendResult(false, "Server HTTP client not configured");
+            return;
+        }
+
+        server.apiMutex.lock();
+        scope(exit) server.apiMutex.unlock();
+
+        if (server.rateLimiter && server.rateLimiter.isBlocked())
+        {
+            sendResult(false, "Rate limited by VRChat, try again later");
+            return;
+        }
+
+        try
+        {
+            HTTPResponse resp;
+            switch (method)
+            {
+                case "PUT":  resp = server.httpClient.putJSON(path, payload); break;
+                case "POST": resp = server.httpClient.postJSON(path, payload); break;
+                default:     resp = server.httpClient.del(path); break;
+            }
+            logDebugging("handleGroupAction: %s %s -> HTTP %d", method, path, resp.code);
+            if (server.rateLimiter)
+            {
+                server.rateLimiter.update(resp);
+                server.broadcastStatus();
+            }
+            if (resp.code < 200 || resp.code >= 300)
+            {
+                sendResult(false, vrchatError(resp));
+                return;
+            }
+
+            server.groupProfiles.forget(groupId);
+
+            // Join answers with the membership: member for an open group,
+            // requested for one that asks first.
+            string membership;
+            switch (action)
+            {
+                case "represent":   server.groupsTracker.setRepresenting(groupId, true); break;
+                case "unrepresent": server.groupsTracker.setRepresenting(groupId, false); break;
+                case "visibility":  server.groupsTracker.setVisibility(groupId, value); break;
+                case "leave":       server.groupsTracker.remove(groupId); break;
+                case "join":
+                    try
+                    {
+                        JSONValue member = parseJSON(resp.text);
+                        membership = stringField(member, "membershipStatus");
+                    }
+                    catch (Exception) {}
+                    if (membership == "member" && server.groupsTracker.isLoaded())
+                    {
+                        JSONValue group;
+                        string error;
+                        server.fetchGroupLocked(groupId, group, error);
+                        if (error.length == 0)
+                        {
+                            server.groupsTracker.upsert(group);
+                            if (name.length == 0)
+                                name = stringField(group, "name");
+                        }
+                    }
+                    break;
+                default:
+            }
+
+            sendResult(true, null, membership);
+            server.broadcastGroupsSnapshot();
+        }
+        catch (Exception e)
+        {
+            sendResult(false, e.msg);
         }
     }
 

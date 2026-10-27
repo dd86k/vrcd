@@ -62,6 +62,7 @@ Protocol versions:
 - `15` = notification promotion (`get_promotions`, `set_promotions`, `promotions`)
 - `16` = `set_promotions` takes a `request_id`, echoed to the requester only
 - `17` = `status-change` synthetic, promotion rules take `statuses`
+- `18` = groups (`get_groups`, `get_group`, `group_action`, `groups`)
 
 **Failure:**
 ```json
@@ -206,6 +207,34 @@ Remove a friend. The server calls `DELETE auth/user/friends/{userId}`, replies w
 |-----------|--------|-----------------------------|
 | `type`    | string | `"unfriend"`                |
 | `user_id` | string | Target user ID (`usr_...`)  |
+
+### `get_groups`
+
+Request the logged-in user's groups. Server refetches `GET users/{selfId}/groups` and replies with `groups`. Clients send this after connect (when `server_version >= 18`) and from REFRESH. The list is then kept current from `group-joined`, `group-left` and `group-member-updated`, re-broadcast on change.
+
+```json
+{"type": "get_groups"}
+```
+
+### `get_group`
+
+Request one group's details (`GET groups/{groupId}?includeRoles=true`, cached 5 minutes). Server replies with `group`. Works for groups the user is not in.
+
+| Field      | Type   | Description          |
+|------------|--------|----------------------|
+| `type`     | string | `"get_group"`        |
+| `group_id` | string | Group ID (`grp_...`) |
+
+### `group_action`
+
+Member-side group action. Replies with `group_action_result` and, on success, broadcasts `groups`.
+
+| Field      | Type   | Description |
+|------------|--------|-------------|
+| `type`     | string | `"group_action"` |
+| `group_id` | string | Group ID (`grp_...`) |
+| `action`   | string | `represent`, `unrepresent` (`PUT groups/{id}/representation`), `subscribe`, `unsubscribe`, `visibility` (`PUT groups/{id}/members/{selfId}`), `join` (`POST groups/{id}/join`), `cancel_request` (`DELETE groups/{id}/requests`), `leave` (`POST groups/{id}/leave`) |
+| `value`    | string | For `visibility`: `visible`, `friends` or `hidden` |
 
 ### `get_notifications`
 
@@ -757,6 +786,43 @@ The promotion rules, in the shape `set_promotions` takes. Sent as the reply to `
 | `rules` | array  | The rules the server is running          |
 | `error` | string | Why a `set_promotions` was rejected      |
 | `request_id` | string | The requester's `request_id`, to the requester only |
+
+### `groups`
+
+The user's groups, sorted by name. Reply to `get_groups`, and broadcast after a successful `group_action` or a group event that changed the list.
+
+| Field    | Type   | Description |
+|----------|--------|-------------|
+| `type`   | string | `"groups"` |
+| `groups` | array  | `{id, name, shortCode, discriminator, iconFileId, iconVersion, bannerFileId, bannerVersion, memberCount, isRepresenting, visibility, privacy, ownerId}` |
+| `error`  | string | On failure, sent *instead of* the list |
+
+### `group`
+
+Reply to `get_group`.
+
+| Field      | Type   | Description |
+|------------|--------|-------------|
+| `type`     | string | `"group"` |
+| `group_id` | string | Echoed group ID |
+| `success`  | bool   | Whether the fetch succeeded |
+| `group`    | object | `{id, name, shortCode, discriminator, description, rules, links, languages, iconFileId, iconVersion, bannerFileId, bannerVersion, memberCount, onlineMemberCount, privacy, joinState, isVerified, ownerId, createdAt, membershipStatus}`, plus `myMember: {isRepresenting, isSubscribedToAnnouncements, visibility, joinedAt, membershipStatus, roles}` when the user has a membership. `roles` are names. |
+| `error`    | string | Present only on failure |
+
+### `group_action_result`
+
+Reply to `group_action`, sent only to the requester.
+
+| Field               | Type   | Description |
+|---------------------|--------|-------------|
+| `type`              | string | `"group_action_result"` |
+| `success`           | bool   | Whether the VRChat call succeeded |
+| `action`            | string | Echoed action |
+| `group_id`          | string | Echoed group ID |
+| `name`              | string | Group name, best known |
+| `value`             | string | Echoed visibility, when sent |
+| `membership_status` | string | For `join`: `member`, or `requested` for groups that ask first |
+| `error`             | string | Present only on failure |
 
 ### `moderate_result`
 

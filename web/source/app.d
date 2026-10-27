@@ -428,6 +428,28 @@ int main(string[] args)
             req.replyJSON(HTTPStatus.ok, `{"requested":true}`);
             return REQUEST_OK;
         })
+        .post(`/api/group`, (ref HTTPRequest req)
+        {
+            if (authorized(req, true) == false)
+                return REQUEST_OK;
+
+            string action, groupId, value;
+            if (groupAction(req.payload, action, groupId, value) == false)
+            {
+                req.replyJSON(HTTPStatus.badRequest, `{"error":"bad group action"}`);
+                return REQUEST_OK;
+            }
+
+            // Fire and forget: the outcome and the moved list reach every
+            // browser in the next snapshot.
+            if (action == "refresh")
+                link.requestGroups(true);
+            else
+                link.requestGroupAction(action, groupId, value);
+
+            req.replyJSON(HTTPStatus.ok, `{"requested":true}`);
+            return REQUEST_OK;
+        })
         .post(`/api/promotions`, (ref HTTPRequest req)
         {
             if (authorized(req, true) == false)
@@ -501,6 +523,36 @@ int main(string[] args)
                 req.replyJSON(202, `{"pending":true}`);
                 break;
 
+            case failed:
+                req.replyJSON(502,
+                    JSONValue([ "error": JSONValue(found.error) ]).toString());
+                break;
+            }
+            return REQUEST_OK;
+        })
+        .get(`/api/group/:group_id`, (ref HTTPRequest req)
+        {
+            if (authorized(req, true) == false)
+                return REQUEST_OK;
+
+            string *groupId = "group_id" in req.params;
+            if (groupId is null || isGroupId(*groupId) == false)
+            {
+                req.replyJSON(HTTPStatus.badRequest, `{"error":"bad group id"}`);
+                return REQUEST_OK;
+            }
+
+            // Same terms as /api/user: 202 while it comes down the link.
+            ProfileLookup found = link.group(*groupId);
+            final switch (found.state) with (ProfileState)
+            {
+            case ready:
+                req.addHeader("Cache-Control", "no-store");
+                req.replyJSON(HTTPStatus.ok, found.json);
+                break;
+            case pending:
+                req.replyJSON(202, `{"pending":true}`);
+                break;
             case failed:
                 req.replyJSON(502,
                     JSONValue([ "error": JSONValue(found.error) ]).toString());
@@ -1166,6 +1218,71 @@ private bool envFlag(string name)
     case "1", "true", "yes", "on": return true;
     default:                       return false;
     }
+}
+
+/// Pull a group action out of a /api/group request body. False when the action
+/// is unknown, the group ID is malformed, or a visibility is missing.
+private bool groupAction(ubyte[] payload, out string action, out string groupId,
+    out string value)
+{
+    if (payload.length == 0)
+        return false;
+
+    JSONValue body_;
+    try body_ = parseJSON(cast(const(char)[])payload);
+    catch (JSONException ex)
+    {
+        logWarn("Malformed group request: %s", ex.msg);
+        return false;
+    }
+
+    if (body_.type != JSONType.object)
+        return false;
+
+    if (const(JSONValue) *v = "action" in body_)
+        if (v.type == JSONType.string)
+            action = v.str;
+    if (const(JSONValue) *v = "group_id" in body_)
+        if (v.type == JSONType.string)
+            groupId = v.str;
+    if (const(JSONValue) *v = "value" in body_)
+        if (v.type == JSONType.string)
+            value = v.str;
+
+    switch (action)
+    {
+    case "refresh":
+        return true;
+    case "represent", "unrepresent", "subscribe", "unsubscribe", "join",
+         "cancel_request", "leave":
+        value = null;
+        break;
+    case "visibility":
+        if (value != "visible" && value != "friends" && value != "hidden")
+            return false;
+        break;
+    default:
+        return false;
+    }
+
+    return isGroupId(groupId);
+}
+
+/// Whether this looks like a VRChat group ID. vrcd-server builds a path out of it.
+private bool isGroupId(string value)
+{
+    import std.ascii : isAlphaNum;
+    import std.string : startsWith;
+
+    if (value.length < 5 || value.length > 64 || startsWith(value, "grp_") == false)
+        return false;
+
+    foreach (char c; value)
+    {
+        if (isAlphaNum(c) == false && c != '-' && c != '_')
+            return false;
+    }
+    return true;
 }
 
 /// Whether this looks like a VRChat user ID. Checked here for the same reason

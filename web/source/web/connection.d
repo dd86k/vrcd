@@ -70,6 +70,9 @@ private enum long PROTOCOL_PROMOTION_IDS = 16;
 /// require a status (`statuses`).
 private enum long PROTOCOL_STATUS_RULES = 17;
 
+/// Protocol version that added groups (`get_groups`, `get_group`, `group_action`).
+private enum long PROTOCOL_GROUPS = 18;
+
 /// Byte budget for proxied images. Thumbnails run tens of kilobytes each, so
 /// this holds a few hundred of them; past that the oldest are dropped and
 /// re-fetched if they are looked at again.
@@ -361,6 +364,37 @@ struct ModerationActionResult
     string error;
 }
 
+/// The user's groups, as vrcd-server last gave them.
+struct GroupSnapshot
+{
+    /// True while a `get_groups` is outstanding.
+    bool loading;
+    /// True once a list has landed. Stays set across a refresh.
+    bool loaded;
+    /// Entries as vrcd-server built them, passed through to the page.
+    JSONValue groups;
+    string error;
+}
+
+/// Outcome of the most recent group action.
+struct GroupActionResult
+{
+    /// False until one has been taken this session.
+    bool attempted;
+    string action;
+    string groupId;
+    /// Group name for the page's toast, when known.
+    string name;
+    /// Visibility asked for, for the `visibility` action.
+    string value;
+    /// What a join became: "member" or "requested".
+    string membershipStatus;
+    bool success;
+    string error;
+    /// Counts answers, so two identical ones still read as two.
+    long serial;
+}
+
 /// Promotion rules, as vrcd-server last broadcast them.
 struct PromotionsSnapshot
 {
@@ -392,6 +426,7 @@ class ServerLink
         this.sendMutex = new Mutex();
         this.images = new ImageCache(IMAGE_CACHE_BYTES);
         this.profiles = new ProfileCache();
+        this.groupPanes = new ProfileCache();
     }
 
     /// Set the callback fired after any state change worth re-rendering.
@@ -677,6 +712,145 @@ class ServerLink
 
         if (sendMessage(message) == false)
             failModeration(action, userId, "Not connected to vrcd-server");
+    }
+
+    /// The user's groups. Empty until the first reply lands.
+    GroupSnapshot groups()
+    {
+        synchronized (stateMutex)
+            return groupList;
+    }
+
+    /// Outcome of the most recent group action.
+    GroupActionResult groupResult()
+    {
+        synchronized (stateMutex)
+            return lastGroupAction;
+    }
+
+    /// Ask vrcd-server for the group list. Safe to call from an HTTP thread.
+    /// Without `force` this does nothing once a list is held.
+    void requestGroups(bool force)
+    {
+        bool ask;
+        synchronized (stateMutex)
+        {
+            if (groupList.loading)
+                return;
+            if (force == false && groupList.loaded)
+                return;
+
+            ask = groupsUnavailable() == false;
+            if (ask)
+            {
+                groupList.loading = true;
+                groupList.error = null;
+            }
+        }
+        notifyChange();
+
+        if (ask == false)
+            return;
+
+        logInfo("Requesting groups");
+        if (sendMessage(JSONValue([ "type": JSONValue("get_groups") ])))
+            return;
+
+        synchronized (stateMutex)
+        {
+            groupList.loading = false;
+            groupList.error = "Not connected to vrcd-server";
+        }
+        notifyChange();
+    }
+
+    /// Run a member-side group action. Safe to call from an HTTP thread.
+    ///
+    /// Params:
+    ///   action = "represent", "unrepresent", "subscribe", "unsubscribe",
+    ///            "visibility", "join", "cancel_request" or "leave".
+    ///   groupId = Group it is aimed at.
+    ///   value = Visibility for the `visibility` action, else empty.
+    void requestGroupAction(string action, string groupId, string value)
+    {
+        logInfo("Group %s: %s", action, groupId);
+
+        string error;
+        LinkStatus current = status();
+        if (current.connected == false)
+            error = "Not connected to vrcd-server";
+        else if (current.serverVersion < PROTOCOL_GROUPS)
+            error = "This vrcd-server is too old for groups (needs protocol v18)";
+
+        if (error is null)
+        {
+            JSONValue message = JSONValue([
+                "type":     JSONValue("group_action"),
+                "action":   JSONValue(action),
+                "group_id": JSONValue(groupId),
+            ]);
+            if (value.length > 0)
+                message["value"] = JSONValue(value);
+            if (sendMessage(message))
+                return;
+            error = "Not connected to vrcd-server";
+        }
+
+        GroupActionResult result;
+        result.attempted = true;
+        result.action = action;
+        result.groupId = groupId;
+        result.value = value;
+        result.error = error;
+        synchronized (stateMutex)
+        {
+            result.serial = lastGroupAction.serial + 1;
+            lastGroupAction = result;
+        }
+        notifyChange();
+
+        logWarn("Group %s for %s dropped: %s", action, groupId, error);
+    }
+
+    /// Look one group pane up, asking vrcd-server for it when it is not held.
+    /// Never blocks, on the same terms as `profile`.
+    ProfileLookup group(string groupId)
+    {
+        bool startFetch;
+        ProfileLookup found = groupPanes.lookup(groupId, startFetch);
+        if (startFetch == false)
+            return found;
+
+        LinkStatus current = status();
+        string unavailable;
+        if (current.connected == false)
+            unavailable = "Not connected to vrcd-server";
+        else if (current.serverVersion < PROTOCOL_GROUPS)
+            unavailable = "This vrcd-server is too old for groups (needs protocol v18)";
+
+        if (unavailable.length > 0)
+        {
+            if (found.state == ProfileState.ready)
+                return found;
+            groupPanes.forget(groupId);
+            return ProfileLookup(ProfileState.failed, null, unavailable);
+        }
+
+        logDebugging("Fetching group %s", groupId);
+        bool sent = sendMessage(JSONValue([
+            "type":     JSONValue("get_group"),
+            "group_id": JSONValue(groupId),
+        ]));
+
+        if (sent == false)
+        {
+            if (found.state == ProfileState.ready)
+                return found;
+            groupPanes.storeFailure(groupId, "Not connected to vrcd-server");
+            return ProfileLookup(ProfileState.failed, null,
+                "Not connected to vrcd-server");
+        }
+        return found;
     }
 
     /// Ask vrcd-server for one section. Safe to call from an HTTP thread.
@@ -1390,6 +1564,10 @@ private:
     ImageCache images;
     /// Fetched user profiles, on the same terms as `images`.
     ProfileCache profiles;
+    /// Fetched group panes, keyed by group ID.
+    ProfileCache groupPanes;
+    GroupSnapshot groupList;
+    GroupActionResult lastGroupAction;
 
     /// Whether the link cannot serve this section right now, filling in the
     /// reason as it says so. Caller holds the state lock.
@@ -1495,6 +1673,24 @@ private:
         {
             moderationList.error = "This vrcd-server is too old to list mutes " ~
                 "and blocks (needs protocol v3)";
+            return true;
+        }
+        return false;
+    }
+
+    /// Whether the link cannot serve the group list right now, filling in the
+    /// reason. Caller holds the state lock.
+    bool groupsUnavailable()
+    {
+        if (linkStatus.connected == false)
+        {
+            groupList.error = "Not connected to vrcd-server";
+            return true;
+        }
+
+        if (linkStatus.serverVersion < PROTOCOL_GROUPS)
+        {
+            groupList.error = "This vrcd-server is too old for groups (needs protocol v18)";
             return true;
         }
         return false;
@@ -1646,6 +1842,12 @@ private:
                     moderationList.error = "Not connected to vrcd-server";
                 }
 
+                if (groupList.loading)
+                {
+                    groupList.loading = false;
+                    groupList.error = "Not connected to vrcd-server";
+                }
+
                 // And a rule save, whose answer died with the socket.
                 if (promotionList.saving)
                 {
@@ -1658,6 +1860,7 @@ private:
             // On the same terms as the content lists: profiles already fetched
             // stay readable, a request that died with the socket does not.
             profiles.dropUnresolved();
+            groupPanes.dropUnresolved();
             notifyChange();
 
             logInfo("Reconnecting in %d second(s)", backoff.total!"seconds");
@@ -1773,6 +1976,20 @@ private:
             logWarn("Server protocol is too old for mutes and blocks " ~
                 "(needs v%d, server is v%d)",
                 PROTOCOL_MODERATION, status().serverVersion);
+        }
+
+        // Asked on connect so the TOOLS chip has a count, then kept current by
+        // vrcd-server's broadcasts.
+        if (status().serverVersion >= PROTOCOL_GROUPS)
+            requestGroups(true);
+        else
+        {
+            synchronized (stateMutex)
+            {
+                groupList = GroupSnapshot.init;
+                groupsUnavailable();
+            }
+            notifyChange();
         }
 
         // Rules are broadcast on every change, so one ask per connection.
@@ -2048,6 +2265,18 @@ private:
 
         case "user":
             applyUser(message);
+            break;
+
+        case "groups":
+            applyGroups(message);
+            break;
+
+        case "group":
+            applyGroup(message);
+            break;
+
+        case "group_action_result":
+            applyGroupActionResult(message);
             break;
 
         case "badge_image":
@@ -2610,6 +2839,91 @@ private:
         // re-parsing on the way out would only be to build the same bytes.
         profiles.store(userId, user.toString());
         logDebugging("Profile for %s cached", userId);
+    }
+
+    /// Fold a `groups` message in: a reply, a broadcast, or a failed refresh.
+    /// A failure keeps the list on screen.
+    void applyGroups(ref JSONValue message)
+    {
+        string error = jsonString(message, "error");
+        JSONValue list = JSONValue.emptyArray;
+        if (const(JSONValue) *v = "groups" in message)
+            if (v.type == JSONType.array)
+                list = *v;
+
+        synchronized (stateMutex)
+        {
+            groupList.loading = false;
+            if (error.length > 0)
+                groupList.error = error;
+            else
+            {
+                groupList.error = null;
+                groupList.loaded = true;
+                groupList.groups = list;
+            }
+        }
+        notifyChange();
+
+        if (error.length > 0)
+            logWarn("Could not fetch groups: %s", error);
+        else
+            logInfo("Groups: %d", list.array.length);
+    }
+
+    /// Take in one `group` reply into the pane cache.
+    void applyGroup(ref JSONValue message)
+    {
+        string groupId = jsonString(message, "group_id");
+        if (groupId.length == 0)
+            return;
+
+        bool success;
+        if (const(JSONValue) *v = "success" in message)
+            success = v.type == JSONType.true_;
+
+        const(JSONValue) *group = "group" in message;
+        if (success == false || group is null || group.type != JSONType.object)
+        {
+            string error = jsonString(message, "error");
+            groupPanes.storeFailure(groupId, error.length > 0 ? error : "Group unavailable");
+            logDebugging("Group %s failed: %s", groupId, error);
+            return;
+        }
+
+        groupPanes.store(groupId, group.toString());
+    }
+
+    /// Fold a `group_action_result` in. A success drops the cached pane,
+    /// since membership fields in it just went stale.
+    void applyGroupActionResult(ref JSONValue message)
+    {
+        GroupActionResult result;
+        result.attempted = true;
+        result.action = jsonString(message, "action");
+        result.groupId = jsonString(message, "group_id");
+        result.name = jsonString(message, "name");
+        result.value = jsonString(message, "value");
+        result.membershipStatus = jsonString(message, "membership_status");
+        result.error = jsonString(message, "error");
+        if (const(JSONValue) *v = "success" in message)
+            result.success = v.type == JSONType.true_;
+
+        if (result.success && result.groupId.length > 0)
+            groupPanes.forget(result.groupId);
+
+        synchronized (stateMutex)
+        {
+            result.serial = lastGroupAction.serial + 1;
+            lastGroupAction = result;
+        }
+        notifyChange();
+
+        if (result.success)
+            logInfo("Group %s done: %s", result.action, result.groupId);
+        else
+            logWarn("Group %s for %s failed: %s", result.action, result.groupId,
+                result.error);
     }
 
     /// Take in one `badge_image` reply, into the same cache as everything else

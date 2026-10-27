@@ -467,6 +467,9 @@ void cmdRun(ref Config config)
         if (isNotificationEvent(event.type))
             apiServer.processNotificationEvent(event);
 
+        if (isGroupEvent(event.type))
+            apiServer.processGroupEvent(event);
+
         if (friendsChanged.snapshot)
             apiServer.broadcastFriendsSnapshot();
 

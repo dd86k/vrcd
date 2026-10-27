@@ -117,6 +117,21 @@ bool isNotificationEvent(EventType type)
     }
 }
 
+/// Whether this event changes the user's group memberships.
+bool isGroupEvent(EventType type)
+{
+    switch (type)
+    {
+        case EventType.groupJoined:
+        case EventType.groupLeft:
+        case EventType.groupRoleUpdated:
+        case EventType.groupMemberUpdated:
+            return true;
+        default:
+            return false;
+    }
+}
+
 /// Obtain content out of a raw VRChat WS message.
 ///
 /// WebSocket messages are JSON with structure: {"type": "...", "content": "..."}

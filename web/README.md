@@ -354,13 +354,14 @@ this page has nothing to describe them with.
 ### Tools
 
 The TOOLS tab is friend management: one flat list of everyone on the friends
-list, and VRChat's two player moderation lists.
+list, and VRChat's two player moderation lists, plus the groups you are in.
 
 | Section | Source | Actions |
 |---------|--------|---------|
 | Friends | The roster already in the snapshot | Mute, block, unfriend, from the detail pane |
 | Muted | `get_moderations` | Unmute, from the row |
 | Blocked | `get_moderations` | Unblock, from the row |
+| Groups | `get_groups`, kept current by vrcd-server | Represent, announcements, visibility, leave, from the detail pane |
 
 The friends section is the same roster the ONLINE tab draws, flattened and
 sorted by name: grouped by instance is the right shape for seeing where
