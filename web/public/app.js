@@ -3155,6 +3155,90 @@ var ruleSending = null;
 /* `promotions.answered` as last seen, -1 before the first snapshot. */
 var lastRuleAnswer = -1;
 
+/* Browser alerts for promoted entries. Opt-in per device, since every browser
+   open on vrcd would otherwise ring for the same entry. Read off the inbox
+   rather than the feed: the entry carries the rule's title, and the inbox is
+   what an alert opens.
+
+   The link empties its inbox on reconnect and fills it again, so "not in the
+   last snapshot" is not "new". An entry alerts once, and only when it arrived
+   after the page opened. ALERT_SLACK_MS covers a server clock running behind
+   this one. */
+var ALERTS_KEY = "vrcd.alerts";
+var ALERT_SLACK_MS = 60000;
+var pageOpenedAt = Date.now();
+/* Promoted entries already alerted on or passed over, by ID and arrival time,
+   since IDs start over when vrcd-server restarts. */
+var alerted = {};
+
+/* Why this browser cannot show alerts, or "". */
+function alertsUnavailable() {
+    if (!("Notification" in window) || window.isSecureContext !== true)
+        return "Browser alerts need the page over HTTPS (or localhost).";
+    if (Notification.permission === "denied")
+        return "Alerts are blocked for this site in the browser's settings.";
+    return "";
+}
+
+function alertsOn() {
+    return alertsUnavailable() === "" && Notification.permission === "granted" &&
+        localStorage.getItem(ALERTS_KEY) === "on";
+}
+
+/* Turn alerts on or off for this browser. Asking for permission has to come
+   from a press, which is why this is a button and not a default. */
+function toggleAlerts() {
+    if (alertsOn()) {
+        localStorage.removeItem(ALERTS_KEY);
+        renderList();
+        return;
+    }
+    Notification.requestPermission().then(function (permission) {
+        if (permission === "granted") {
+            localStorage.setItem(ALERTS_KEY, "on");
+            showToast("Alerts on for this browser", false);
+        }
+        renderList();
+    });
+}
+
+/* Alert on the promoted entries in the snapshot not seen before. */
+function alertPromoted() {
+    (state.notifications || []).forEach(function (entry) {
+        if (entry.notification_type !== "vrcd.promoted") return;
+        var key = entry.id + "@" + entry.received_at_unix;
+        if (alerted[key]) return;
+        alerted[key] = true;
+        if (entry.received_at_unix * 1000 < pageOpenedAt - ALERT_SLACK_MS) return;
+        if (alertsOn()) showAlert(entry);
+    });
+}
+
+/* Show one entry as a system notification. Through the service worker when
+   there is one, since phones refuse `new Notification`. The tag is the entry,
+   so a second tab replaces the first one's alert instead of adding its own. */
+function showAlert(entry) {
+    var title = entry.title || "vrcd";
+    var options = {
+        body: entry.sender_name ? entry.sender_name + " · " + entry.message : entry.message,
+        tag: entry.id + "@" + entry.received_at_unix,
+        icon: "/static/icon-512.png"
+    };
+    var fallback = function () {
+        try {
+            var alert = new Notification(title, options);
+            alert.onclick = function () { window.focus(); showTab("inbox"); alert.close(); };
+        } catch (err) {
+            console.log("alert not shown:", err);
+        }
+    };
+    if (!("serviceWorker" in navigator)) { fallback(); return; }
+    navigator.serviceWorker.getRegistration().then(function (reg) {
+        if (reg) reg.showNotification(title, options);
+        else fallback();
+    }).catch(fallback);
+}
+
 /* Whether a rule save is under way, from here or from this link. */
 function ruleBusy() {
     return ruleSending !== null ||
@@ -3307,7 +3391,15 @@ function renderRules(body) {
         add.onclick = function () { openRule(newRule(), true); };
         bar.appendChild(add);
     }
+    var on = alertsOn();
+    var alerts = el("button", "act small" + (on ? " primary" : ""),
+        on ? "ALERTS ON" : "ALERTS OFF");
+    alerts.title = "Show what the rules catch as browser alerts on this device";
+    alerts.disabled = alertsUnavailable() !== "";
+    alerts.onclick = toggleAlerts;
+    bar.appendChild(alerts);
     body.appendChild(bar);
+    if (alertsUnavailable()) body.appendChild(el("div", "hint", alertsUnavailable()));
 
     if (!p) {
         body.appendChild(placeholder(offline
@@ -5124,6 +5216,7 @@ function applyState(message) {
     reportStatus(seeding);
     reportProfile();
     syncContent();
+    alertPromoted();
 }
 
 /* A profile edit that has been answered. Watched as the snapshot's pending flag
@@ -5408,6 +5501,17 @@ window.addEventListener("resize", function () {
 watchDrops();
 render();
 connect();
+
+/* A pressed alert lands here: through the worker when a window was open, or
+   as ?tab=inbox on a window it opened. */
+if (new URLSearchParams(location.search).get("tab") === "inbox") {
+    history.replaceState(null, "", "/");
+    showTab("inbox");
+}
+if ("serviceWorker" in navigator)
+    navigator.serviceWorker.addEventListener("message", function (ev) {
+        if (ev.data && ev.data.type === "open-inbox") showTab("inbox");
+    });
 
 /* Registered last and on load: the worker is what makes the browser offer to
    install the page, and none of the screen depends on it, so it waits until

@@ -11,6 +11,8 @@
  * a cache-first worker would undo that by serving the previous file for one
  * more load after every edit.
  *
+ * It also answers a press on a rule alert, which the page shows through it.
+ *
  * Bump CACHE when the shell list changes -- activate drops every other cache,
  * which is how a stale worker's leftovers get collected.
  */
@@ -95,4 +97,19 @@ self.addEventListener("fetch", function (ev) {
     }).catch(function () {
         return offline(req);
     }));
+});
+
+/* Pressing an alert opens the inbox: in a vrcd window already open when there
+   is one, otherwise in a new one. */
+self.addEventListener("notificationclick", function (ev) {
+    ev.notification.close();
+    ev.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true })
+        .then(function (windows) {
+            for (var i = 0; i < windows.length; i++) {
+                if (new URL(windows[i].url).pathname === "/login") continue;
+                windows[i].postMessage({ type: "open-inbox" });
+                return windows[i].focus();
+            }
+            return self.clients.openWindow("/?tab=inbox");
+        }));
 });
