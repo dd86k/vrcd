@@ -8,6 +8,42 @@ Rules:
 - Better to keep entries closest to the actual intent: "Server supports standard I/O"
   is clearer than "Client can start server" (37b843ed1d2d4bca6011a69dcb5e64fa581cf235).
 
+## Unreleased
+
+### Client
+
+- Notification rules (TOOLS): get a notification for events VRChat does not
+  notify about, like an unfriend or a friend coming online. A rule can be
+  narrowed to some friends or a status, and quieted after firing.
+- "Notify When Online" on a friend's profile.
+- Text falls back to other fonts for characters the main one lacks, emoji
+  included.
+- Smoother thumbnails, and text is drawn faster.
+- Folders and links are opened through SDL.
+- Disabling yt-dlp should now last across world loads.
+- No more join/leave notifications for yourself.
+
+### Server
+
+- Turns events matching the notification rules into notifications, kept in
+  the inbox. Your own avatar and profile changes never match.
+- New "status-change" event when a friend changes their status or status
+  message.
+- Fix a location change being dropped from the log when the same update also
+  changed an avatar or profile.
+
+### Web
+
+- Notification rules (TOOLS > RULES), and NOTIFY WHEN ONLINE on a friend.
+- Browser alerts for rule notifications while the page is open (needs HTTPS).
+
+### API
+
+- Protocol version 15: notification rules (`get_promotions`, `set_promotions`,
+  `promotions`), and `vrcd.promoted` entries in the inbox.
+- Protocol version 16: `set_promotions` takes a `request_id`.
+- Protocol version 17: `status-change` event, rules take `statuses`.
+
 ## v0.4.1
 
 ### Web
