@@ -208,15 +208,20 @@ string buildStateJSON(ServerLink link)
     if (link.canPromote())
     {
         PromotionsSnapshot promotions = link.promotions();
+        bool statusRules = link.canRequireStatus();
         JSONValue[] groups;
         foreach (ref const(PromotableGroup) group; promotableEvents)
         {
             JSONValue[] events;
             foreach (string type; group.rawTypes)
+            {
+                if (type == "status-change" && statusRules == false)
+                    continue;
                 events ~= JSONValue([
                     "type":  JSONValue(type),
                     "label": JSONValue(eventLabel(type)),
                 ]);
+            }
             groups ~= JSONValue([
                 "title":  JSONValue(group.title),
                 "events": JSONValue(events),
@@ -240,6 +245,7 @@ string buildStateJSON(ServerLink link)
             "labels":    labels,
             "cooldowns": JSONValue(cooldownPresets.dup),
             "hint":      JSONValue(ALREADY_NOTIFIED_HINT),
+            "statuses":  JSONValue(statusRules ? promotableStatuses.dup : null),
             "limits":    JSONValue([
                 "rules":    JSONValue(cast(long)RULES_MAX),
                 "users":    JSONValue(cast(long)RULE_USERS_MAX),

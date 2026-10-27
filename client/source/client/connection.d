@@ -54,6 +54,10 @@ enum long PROTOCOL_PROMOTIONS = 15;
 /// `request_id`, which is how a save tells its own answer from another's.
 enum long PROTOCOL_PROMOTION_IDS = 16;
 
+/// Minimum server protocol version for `status-change` events and rules
+/// that require a status (`statuses`).
+enum long PROTOCOL_STATUS_RULES = 17;
+
 /// How many events to ask a catch-up for.
 ///
 /// The feed keeps `FEED_CAPACITY` entries and back-fills the rest a page at a

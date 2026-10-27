@@ -81,6 +81,7 @@ immutable FeedEventType[] feedEventTypes = [
     FeedEventType("System",            ["system"],                                        true),
     FeedEventType("Error",             ["error"],                                         true),
     FeedEventType("Promoted",          ["notification-promoted"],                         true),
+    FeedEventType("Status Change",     ["status-change"],                                 true),
 ];
 
 /// Display labels, derived from feedEventTypes. Kept as a separate symbol
@@ -284,6 +285,10 @@ void extractEventFields(string eventType, JSONValue msg, out string user, out st
                 }
                 return;
 
+            case "status-change":
+                detail = statusChangeLine(c);
+                return;
+
             case "content-refresh":
                 if (const(JSONValue)* v = "contentType" in c)
                     if (v.str.length > 0)
@@ -295,6 +300,23 @@ void extractEventFields(string eventType, JSONValue msg, out string user, out st
         }
     }
     catch (Exception) {}
+}
+
+/// The new status of a `status-change` and its message, e.g. "join me — say hi".
+string statusChangeLine(const(JSONValue) content)
+{
+    string line, description;
+    if (content.type != JSONType.object)
+        return null;
+    if (const(JSONValue)* v = "currentStatus" in content)
+        if (v.type == JSONType.string)
+            line = v.str;
+    if (const(JSONValue)* v = "currentStatusDescription" in content)
+        if (v.type == JSONType.string)
+            description = v.str;
+    if (description.length > 0)
+        line = line.length > 0 ? line ~ " — " ~ description : description;
+    return line;
 }
 
 /// Human-readable platform name.

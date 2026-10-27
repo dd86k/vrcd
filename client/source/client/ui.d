@@ -17,14 +17,14 @@ import vrcd.events : prettyPlatform, prettyNotifType, shortAvatarId;
 import vrcd.notifications : NotificationInfo, NotificationResponse, prettyResponseLabel;
 import vrcd.promotions : PromotableGroup, RULES_MAX, RULE_NAME_MAX, RULE_USERS_MAX,
     WATCH_RULE_COOLDOWN, WATCH_RULE_EVENT, WATCH_RULE_ID, WATCH_RULE_NAME,
-    ALREADY_NOTIFIED_HINT, cooldownPresets, promotableEvents;
+    ALREADY_NOTIFIED_HINT, cooldownPresets, promotableEvents, promotableStatuses;
 
 import client.notifications : notifyEventLabels, feedEventLabels, feedFilterSections,
     feedEventIndex, prettyEventType;
 import client.imagecache : imageKey, getIconId;
 import client.renderer : window_width, window_height;
 import client.connection : PROTOCOL_BOOP, PROTOCOL_MODERATION, PROTOCOL_PROFILES,
-    PROTOCOL_PROMOTIONS;
+    PROTOCOL_PROMOTIONS, PROTOCOL_STATUS_RULES;
 import client.gui : wasClick, requestRepaint;
 import client.state;
 import client.stream : tlsAvailable;
@@ -3713,7 +3713,6 @@ private void drawDeleteButton(mu_Context* ctx, AppState* state, string kind, str
 /// is currently enabled and offers a button to toggle it. Disabling it stops
 /// VRChat's in-world video players from resolving URLs (YouTube, Twitch,
 /// etc), which sidesteps yt-dlp hangs/crashes some Linux/Proton setups hit.
-/// VRChat may restore its own copy on the next game update.
 private void drawYtdlpControl(mu_Context* ctx, AppState* state)
 {
     import client.ytdlp : queryYtdlpState, toggleYtdlp, YtdlpState;
@@ -4398,6 +4397,11 @@ private const(char)[] ruleSummary(AppState* state, ref const(PromotionRule) rule
         n += copyInto(buf[n .. $], ruleUserName(state, rule.users[0]));
     else
         n += copyInto(buf[n .. $], sformat(num, "%d people", rule.users.length));
+    foreach (size_t i, string s; rule.statuses)
+    {
+        n += copyInto(buf[n .. $], i == 0 ? " . " : " / ");
+        n += copyInto(buf[n .. $], prettyStatus(s));
+    }
     if (rule.cooldown > 0)
     {
         n += copyInto(buf[n .. $], " . quiet ");
@@ -4409,7 +4413,7 @@ private const(char)[] ruleSummary(AppState* state, ref const(PromotionRule) rule
 private void openRuleEditor(AppState* state, ref const(PromotionRule) rule, bool isNew)
 {
     state.ruleDraft = PromotionRule(rule.id, rule.name, rule.enabled,
-        rule.events.dup, rule.users.dup, rule.cooldown);
+        rule.events.dup, rule.users.dup, rule.statuses.dup, rule.cooldown);
     state.ruleDraftIsNew = isNew;
     state.promotionsError = null;
     state.armedConfirm = ArmedConfirm.init;
@@ -4639,6 +4643,7 @@ private void drawPromotionEditPage(mu_Context* ctx, AppState* state, int scrollD
 
     PromotionRule* draft = &state.ruleDraft;
     string unavailable = promotionsUnavailable(state);
+    bool statusRules = state.serverProtocol >= PROTOCOL_STATUS_RULES;
     string problem = ruleDraftProblem(*draft);
 
     // Up top, so the button that sends is never scrolled away from.
@@ -4687,9 +4692,12 @@ private void drawPromotionEditPage(mu_Context* ctx, AppState* state, int scrollD
     foreach (ref const(PromotableGroup) group; promotableEvents)
     {
         groupHeading(ctx, group.title);
-        foreach (size_t i, string e; group.rawTypes)
+        size_t shown;
+        foreach (string e; group.rawTypes)
         {
-            if (i % columns == 0)
+            if (e == "status-change" && statusRules == false)
+                continue;
+            if (shown++ % columns == 0)
                 mu_layout_row(ctx, columns, cols.ptr, 56);
             if (toggleButton(ctx, prettyEventType(e), canFind(draft.events, e)))
                 toggleIn(draft.events, e);
@@ -4704,6 +4712,7 @@ private void drawPromotionEditPage(mu_Context* ctx, AppState* state, int scrollD
         bool offered;
         foreach (ref const(PromotableGroup) group; promotableEvents)
             offered = offered || canFind(group.rawTypes, e);
+        offered = offered && (e != "status-change" || statusRules);
         if (offered)
             continue;
         if (others == 0)
@@ -4753,6 +4762,24 @@ private void drawPromotionEditPage(mu_Context* ctx, AppState* state, int scrollD
                 state.toolsPage = ToolsPage.promotionPickUser;
                 requestRepaint();
             }
+        }
+    }
+
+    if (statusRules)
+    {
+        spacer(ctx);
+        sectionHeader(ctx, "With status");
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        mu_label(ctx, "Only fire while they are in one of these.");
+        mu_layout_row(ctx, columns, cols.ptr, 56);
+        if (toggleButton(ctx, "Any", draft.statuses.length == 0))
+            draft.statuses = null;
+        foreach (size_t i, string s; promotableStatuses)
+        {
+            if ((i + 1) % columns == 0)
+                mu_layout_row(ctx, columns, cols.ptr, 56);
+            if (toggleButton(ctx, prettyStatus(s), canFind(draft.statuses, s)))
+                toggleIn(draft.statuses, s);
         }
     }
 

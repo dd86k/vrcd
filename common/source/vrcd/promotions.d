@@ -8,7 +8,7 @@
 /// License: BSD-3-Clause-Clear
 module vrcd.promotions;
 
-import std.algorithm.searching : startsWith;
+import std.algorithm.searching : canFind, startsWith;
 import std.json;
 
 /// Bounds on what a front-end may store, since the whole set is re-broadcast
@@ -32,8 +32,10 @@ struct PromotionRule
     bool enabled = true;
     /// Raw or synthetic event types, e.g. "friend-delete".
     string[] events;
-    /// User IDs the event must be about; empty matches anyone.
+    /// User IDs the event must be about. Empty matches anyone.
     string[] users;
+    /// Statuses the friend must be in after the event, e.g. "join me". Empty matches any.
+    string[] statuses;
     /// Seconds a rule stays quiet for the same user after firing, so a friend
     /// whose connection flaps does not fill the inbox.
     long cooldown;
@@ -57,7 +59,7 @@ immutable PromotableGroup[] promotableEvents = [
         "friend-location", "friend-add", "friend-delete",
     ]),
     PromotableGroup("Changes", [
-        "avatar-change", "profile-change",
+        "avatar-change", "profile-change", "status-change",
     ]),
     PromotableGroup("Groups", [
         "group-joined", "group-left",
@@ -68,23 +70,30 @@ immutable PromotableGroup[] promotableEvents = [
 enum string ALREADY_NOTIFIED_HINT = "Friend requests, invites, boops, group notices " ~
     "and badges already arrive as notifications.";
 
+/// Statuses a rule may require, as VRChat names them. Offline is left out:
+/// a friend going offline is its own event.
+immutable string[] promotableStatuses = [ "join me", "active", "ask me", "busy" ];
+
 /// Quiet periods an editor offers, in seconds. Presets rather than a number
 /// box, since typing in a headset is the expensive part of an editor.
 immutable long[] cooldownPresets = [ 0, 60, 300, 900, 3600 ];
 
 JSONValue buildRuleJSON(ref const(PromotionRule) rule)
 {
-    JSONValue[] events, users;
+    JSONValue[] events, users, statuses;
     foreach (string e; rule.events)
         events ~= JSONValue(e);
     foreach (string u; rule.users)
         users ~= JSONValue(u);
+    foreach (string s; rule.statuses)
+        statuses ~= JSONValue(s);
     return JSONValue([
         "id":       JSONValue(rule.id),
         "name":     JSONValue(rule.name),
         "enabled":  JSONValue(rule.enabled),
         "events":   JSONValue(events),
         "users":    JSONValue(users),
+        "statuses": JSONValue(statuses),
         "cooldown": JSONValue(rule.cooldown),
     ]);
 }
@@ -136,6 +145,14 @@ string parseRule(const(JSONValue) jrule, out PromotionRule rule)
     foreach (string u; rule.users)
         if (u.startsWith("usr_") == false)
             return "Not a user ID: " ~ u;
+
+    if (string error = stringList(jrule, "statuses", rule.statuses))
+        return error;
+    if (rule.statuses.length > promotableStatuses.length)
+        return "Too many statuses in one rule";
+    foreach (string s; rule.statuses)
+        if (canFind(promotableStatuses, s) == false)
+            return "Not a status a rule can require: " ~ s;
 
     return null;
 }
@@ -194,6 +211,7 @@ unittest
     rule.events = [ "friend-online" ];
     rule.users = [ "usr_alice" ];
     rule.cooldown = 60;
+    rule.statuses = [ "join me" ];
 
     JSONValue msg = JSONValue([
         "type":  JSONValue("promotions"),
@@ -206,4 +224,5 @@ unittest
     assert(parseRule(parseJSON(`{"id":"b","events":["x"],"users":["bob"]}`), bad));
     assert(parseRule(parseJSON(`{"id":"b","events":[]}`), bad));
     assert(parseRule(parseJSON(`{"events":["x"]}`), bad));
+    assert(parseRule(parseJSON(`{"id":"b","events":["x"],"statuses":["offline"]}`), bad));
 }

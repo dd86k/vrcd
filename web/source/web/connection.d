@@ -66,6 +66,10 @@ private enum long PROTOCOL_PROMOTIONS = 15;
 /// tells its own answer from another front-end's.
 private enum long PROTOCOL_PROMOTION_IDS = 16;
 
+/// Protocol version that added `status-change` events and rules that
+/// require a status (`statuses`).
+private enum long PROTOCOL_STATUS_RULES = 17;
+
 /// Byte budget for proxied images. Thumbnails run tens of kilobytes each, so
 /// this holds a few hundred of them; past that the oldest are dropped and
 /// re-fetched if they are looked at again.
@@ -530,6 +534,12 @@ class ServerLink
     {
         LinkStatus current = status();
         return current.connected && current.serverVersion >= PROTOCOL_PROMOTIONS;
+    }
+
+    /// Whether vrcd-server can run rules on status changes.
+    bool canRequireStatus()
+    {
+        return status().serverVersion >= PROTOCOL_STATUS_RULES;
     }
 
     /// Replace the whole rule set. Safe to call from an HTTP thread.

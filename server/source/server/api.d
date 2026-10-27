@@ -55,8 +55,9 @@ import vrcd.vrcx;
 /// 13 = imports (`import_begin`, `import_events`, `import_end`, `import_abort`, `get_imports`, `import_undo`),
 /// 14 = boop replies (`notification_action` takes `boop`),
 /// 15 = notification promotion (`get_promotions`, `set_promotions`, `promotions`),
-/// 16 = `set_promotions` takes a `request_id`, echoed to the sender only.
-private enum int PROTOCOL_VERSION = 16;
+/// 16 = `set_promotions` takes a `request_id`, echoed to the sender only,
+/// 17 = `status-change` synthetic, promotion rules take `statuses`.
+private enum int PROTOCOL_VERSION = 17;
 
 /// `server_state` key holding the promotion rules as a JSON array.
 private enum string PROMOTION_RULES_KEY = "promotion_rules";

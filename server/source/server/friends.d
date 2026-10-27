@@ -378,6 +378,7 @@ class FriendsTracker
         {
             string userId = extractUserId(event.content);
             VisibleState before = userId.length > 0 ? visibleStateOf(userId) : VisibleState.init;
+            size_t queued = pendingSynthetics.length;
 
             switch (event.type)
             {
@@ -409,9 +410,15 @@ class FriendsTracker
                 return EventChange.init;
             }
 
+            if (before.present && after.present)
+                queueStatusChange(userId, before, after);
+
+            // The raw event is only worth keeping for what the synthetics it
+            // produced do not already say.
+            VRCEvent[] made = pendingSynthetics[queued .. $];
             EventChange changes;
             changes.snapshot = before != after;
-            changes.loggable = withoutPicture(before) != withoutPicture(after);
+            changes.loggable = uncovered(before, made) != uncovered(after, made);
             logDebugging("processEvent: type=%s snapshot=%s loggable=%s friends=%d",
                 event.typeRaw, changes.snapshot, changes.loggable, friends.length);
             return changes;
@@ -472,6 +479,64 @@ class FriendsTracker
         v.imageFileId = null;
         v.imageVersion = 0;
         return v;
+    }
+
+    /// `v` without the fields `synthetics` report.
+    private static VisibleState uncovered(VisibleState v, const(VRCEvent)[] synthetics)
+    {
+        v = withoutPicture(v);
+        foreach (ref const(VRCEvent) syn; synthetics)
+        {
+            switch (syn.type)
+            {
+                case EventType.profileChange:
+                    v.bio = null;
+                    v.pronouns = null;
+                    v.bioLinks = null;
+                    break;
+                case EventType.statusChange:
+                    v.status = null;
+                    v.statusDescription = null;
+                    break;
+                default:
+            }
+        }
+        return v;
+    }
+
+    /// Queue a `status-change` when a friend's status or status message moved.
+    /// Gated like VRCX's Status feed: a move to or from offline is left to
+    /// friend-online and friend-offline, and an empty status is not seeded yet.
+    private void queueStatusChange(string userId, ref const(VisibleState) before,
+        ref const(VisibleState) after)
+    {
+        if (before.status != after.status)
+        {
+            foreach (string s; [ before.status, after.status ])
+                if (s.length == 0 || s == "offline")
+                    return;
+        }
+        else if (before.statusDescription == after.statusDescription)
+            return;
+
+        JSONValue content = JSONValue([
+            "userId":                    JSONValue(userId),
+            "displayName":               JSONValue(after.displayName),
+            "previousStatus":            JSONValue(before.status),
+            "currentStatus":             JSONValue(after.status),
+            "previousStatusDescription": JSONValue(before.statusDescription),
+            "currentStatusDescription":  JSONValue(after.statusDescription),
+        ]);
+        pendingSynthetics ~= VRCEvent(
+            EventType.statusChange,
+            "status-change",
+            content,
+            Clock.currTime(),
+            JSONValue([
+                "type":    JSONValue("status-change"),
+                "content": JSONValue(content.toString()),
+            ]).toString()
+        );
     }
 
     /// Build a JSON message with the full friends snapshot.
@@ -1462,8 +1527,18 @@ unittest
     assert(picture.loggable == false);
     assert(tracker.takePendingSynthetics().length == 0);
 
-    // A status change on the same event type is real, and both flags say so.
+    // A status change becomes a status-change, which leaves the raw frame
+    // with nothing else worth a row.
     EventChange status = tracker.processEvent(parseNewVrcEvent(friendUpdate("join me", "file_bbb")));
     assert(status.snapshot);
-    assert(status.loggable);
+    assert(status.loggable == false);
+    VRCEvent[] made = tracker.takePendingSynthetics();
+    assert(made.length == 1 && made[0].typeRaw == "status-change");
+    assert(made[0].content["previousStatus"].str == "active");
+    assert(made[0].content["currentStatus"].str == "join me");
+
+    // Going offline is left to friend-offline, so the raw frame is kept.
+    EventChange gone = tracker.processEvent(parseNewVrcEvent(friendUpdate("offline", "file_bbb")));
+    assert(gone.loggable);
+    assert(tracker.takePendingSynthetics().length == 0);
 }

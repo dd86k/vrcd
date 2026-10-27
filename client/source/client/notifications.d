@@ -59,6 +59,7 @@ immutable FeedFilterSection[] feedFilterSections = [
         labelIdx("Friend Add"), labelIdx("Friend Remove"),
         labelIdx("Friend Update"), labelIdx("Friend Location"),
         labelIdx("Friend Traveling"),
+        labelIdx("Status Change"),
     ]),
     FeedFilterSection("Notifications", [
         labelIdx("Notification"), labelIdx("Notif Delete"),

@@ -3192,6 +3192,12 @@ function personName(id) {
     return hit ? hit.friend.displayName : id;
 }
 
+/* Label for a status value, e.g. "join me" -> "Join Me". */
+function statusName(value) {
+    var hit = STATUS_CHOICES.filter(function (s) { return s.value === value; });
+    return hit.length ? hit[0].label : value;
+}
+
 /* One line saying what a rule does. */
 function ruleSummary(rule) {
     var n = rule.users.length;
@@ -3199,6 +3205,7 @@ function ruleSummary(rule) {
         rule.events.map(ruleLabel).join(", "),
         n === 0 ? "anyone" : (n === 1 ? personName(rule.users[0]) : n + " people")
     ];
+    if ((rule.statuses || []).length) parts.push(rule.statuses.map(statusName).join(" / "));
     if (rule.cooldown > 0) parts.push("quiet " + cooldownText(rule.cooldown));
     return parts.join(" · ");
 }
@@ -3208,6 +3215,7 @@ function copyRule(rule) {
     return {
         id: rule.id, name: rule.name || "", enabled: rule.enabled !== false,
         events: (rule.events || []).slice(), users: (rule.users || []).slice(),
+        statuses: (rule.statuses || []).slice(),
         cooldown: rule.cooldown || 0
     };
 }
@@ -3443,6 +3451,20 @@ function detailRule(body) {
         function () { draft.someone = true; }));
     body.appendChild(who);
     if (draft.someone) rulePeople(body, draft, busy, p.limits.users);
+
+    if (p.statuses && p.statuses.length) {
+        body.appendChild(el("div", "section", "With status"));
+        body.appendChild(el("div", "hint", "Only fire while they are in one of these."));
+        var statuses = el("div", "chips wrap");
+        statuses.appendChild(ruleChip("ANY", rule.statuses.length === 0, busy,
+            function () { rule.statuses = []; }));
+        p.statuses.forEach(function (value) {
+            statuses.appendChild(ruleChip(statusName(value).toUpperCase(),
+                rule.statuses.indexOf(value) >= 0, busy,
+                function () { toggleIn(rule.statuses, value); }));
+        });
+        body.appendChild(statuses);
+    }
 
     body.appendChild(el("div", "section", "Quiet period"));
     body.appendChild(el("div", "hint",

@@ -61,6 +61,7 @@ Protocol versions:
 - `14` = boop replies (`notification_action` takes `boop`)
 - `15` = notification promotion (`get_promotions`, `set_promotions`, `promotions`)
 - `16` = `set_promotions` takes a `request_id`, echoed to the requester only
+- `17` = `status-change` synthetic, promotion rules take `statuses`
 
 **Failure:**
 ```json
@@ -265,7 +266,7 @@ Replace the whole rule set. On success the server stores it and broadcasts `prom
 
 An optional `request_id` string (`server_version >= 16`) comes back in the `promotions` sent to the requester, on success and on failure. The other clients get the same broadcast without it, which is how a front-end tells its own save from another's. Saves are applied one at a time, in the order they arrive.
 
-A rule turns a matching event into an inbox entry (see `notifications`) and an ephemeral `notification-promoted` event. Rules see only events that survived noise suppression, and synthetics (`avatar-change`, `profile-change`). The first matching enabled rule wins, so one event makes at most one entry.
+A rule turns a matching event into an inbox entry (see `notifications`) and an ephemeral `notification-promoted` event. Rules see only events that survived noise suppression, and synthetics (`avatar-change`, `profile-change`, `status-change`). Events about yourself never match. The first matching enabled rule wins, so one event makes at most one entry.
 
 | Field      | Type   | Description                                                                 |
 |------------|--------|-----------------------------------------------------------------------------|
@@ -274,6 +275,7 @@ A rule turns a matching event into an inbox entry (see `notifications`) and an e
 | `enabled`  | bool   | Absent means `true`                                                         |
 | `events`   | array  | Event types, e.g. `"friend-delete"`. Notification events are rejected       |
 | `users`    | array  | `usr_...` IDs the event must be about. Empty or absent matches anyone       |
+| `statuses` | array  | Status the friend must be in after the event, one of `"join me"`, `"active"`, `"ask me"`, `"busy"`. Read from a `status-change`'s `currentStatus`, else `user.status`. Empty or absent matches any. `server_version >= 17` |
 | `cooldown` | int    | Seconds the rule stays quiet for the same user after firing. `0` is none    |
 
 ```json
@@ -290,7 +292,7 @@ A rule is for events VRChat does not turn into a notification of its own. These 
 - v1: `friendRequest`, `invite`, `requestInvite`, `inviteResponse`, `requestInviteResponse`, `votetokick`, `boop`, `message`
 - v2: `group.*` (announcement, invite, join request, transfer, post, event created/starting), `event.announcement`, `badge.earned`, `boop`, `moderation.*`, gifts (`economy.received.gift`, `vrcplus.gift`), `avatarreview.*`, `instance.closed`
 
-VRChat has no notification for a friend request being accepted (`friend-add`), an unfriend (`friend-delete`), or a friend going online, offline or elsewhere, so those are what rules are for. `user-badge-assigned` is deliberately not in the editors' catalogue (`promotableEvents` in `common/source/vrcd/promotions.d`), since it most likely duplicates `badge.earned`. Check new catalogue entries against this list.
+VRChat has no notification for a friend request being accepted (`friend-add`), an unfriend (`friend-delete`), a status change (`status-change`), or a friend going online, offline or elsewhere, so those are what rules are for. `user-badge-assigned` is deliberately not in the editors' catalogue (`promotableEvents` in `common/source/vrcd/promotions.d`), since it most likely duplicates `badge.earned`. Check new catalogue entries against this list.
 
 The rule with `id` `"watch-online"` is the one a friend's "Notify When Online" toggle adds to and removes from, so every front-end edits the same rule. Nothing on the server treats it specially.
 
@@ -1087,6 +1089,7 @@ Derived on the server, not produced by VRChat's WebSocket.
 
 - `avatar-change` *(persisted)* - A tracked entry's `currentAvatar` changed between updates. Content: `{ userId, displayName, previousAvatar, currentAvatar, isSelf }`.
 - `profile-change` *(persisted)* - A tracked entry's `bio`, `pronouns`, or `bioLinks` changed between two non-empty values. First sighting of a subfield and clears (non-empty -> empty) seed silently and do not emit. A single edit covering multiple subfields produces one combined event. Content: `{ userId, displayName, isSelf, previousBio?, currentBio?, previousPronouns?, currentPronouns?, previousBioLinks?, currentBioLinks? }` - only the `previous*`/`current*` pairs for subfields that actually changed are included.
+- `status-change` *(persisted)* - A friend's `status` or `statusDescription` changed. Gated like VRCX's Status feed: a move to or from `offline` is left to `friend-online` and `friend-offline`, and a first sighting seeds silently. Never emitted for yourself. The raw `friend-update` behind it is dropped unless it also moved something else. Content: `{ userId, displayName, previousStatus, currentStatus, previousStatusDescription, currentStatusDescription }`.
 - `friend-traveling` *(ephemeral, `id == 0`)* - A friend's client is loading the next world (raw `friend-location` with `location == "traveling"`). Broadcast live for "Joining X" UI; never stored. The concrete arrival arrives shortly after as a normal `friend-location`. Content: `{ userId, displayName, travelingToLocation, world?, worldName? }`.
 
 ## Connection Flow

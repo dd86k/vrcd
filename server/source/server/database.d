@@ -114,6 +114,7 @@ string eventSource(EventType type)
 {
     switch (type) {
     case EventType.avatarChange:
+    case EventType.statusChange:
         return "synthetic";
     default:
         return "raw";

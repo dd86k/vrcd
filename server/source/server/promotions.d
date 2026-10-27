@@ -16,7 +16,7 @@ import core.time : MonoTime, Duration, dur;
 import std.json;
 
 import server.events;
-import vrcd.events : feedEventIndex, feedEventTypes;
+import vrcd.events : feedEventIndex, feedEventTypes, statusChangeLine;
 import vrcd.notifications : NotificationInfo;
 public import vrcd.promotions : PromotionRule;
 import vrcd.promotions : parseRule, RULES_MAX;
@@ -110,6 +110,9 @@ class PromotionRules
                     continue;
                 if (rule.users.length > 0 && contains(rule.users, userId) == false)
                     continue;
+                if (rule.statuses.length > 0
+                    && contains(rule.statuses, eventStatus(event.content)) == false)
+                    continue;
 
                 string key = rule.id ~ "\0" ~ userId;
                 if (rule.cooldown > 0)
@@ -148,8 +151,10 @@ NotificationInfo buildPromotedNotification(ref const(PromotionRule) rule,
     info.title = rule.name.length > 0 ? rule.name : label;
     info.message = label;
     string world = stringField(event.content, "worldName");
-    if (world.length > 0)
-        info.message ~= " — " ~ world;
+    string detail = event.type == EventType.statusChange
+        ? statusChangeLine(event.content) : world;
+    if (detail.length > 0)
+        info.message ~= " — " ~ detail;
 
     info.receivedAtUnix = event.receivedAt.toUnixTime!long();
     return info;
@@ -217,6 +222,19 @@ bool isSelfEvent(const(JSONValue) content)
     return false;
 }
 
+/// The status the friend is in after the event: the one a `status-change`
+/// moved to, or the status on the user object VRChat sends.
+string eventStatus(const(JSONValue) content)
+{
+    string status = stringField(content, "currentStatus");
+    if (status.length > 0)
+        return status;
+    if (content.type == JSONType.object)
+        if (const(JSONValue)* user = "user" in content)
+            return stringField(*user, "status");
+    return null;
+}
+
 bool contains(const(string)[] list, string value)
 {
     foreach (string item; list)
@@ -274,6 +292,19 @@ unittest
     VRCEvent other = mk("avatar-change", "usr_bob");
     other.content["isSelf"] = JSONValue(false);
     assert(rules.match(other, t0));
+    assert(rules.replace(parseJSON(`[{"id":"a","events":["friend-delete"]}]`)) is null);
+
+    // A status filter holds on the status a friend moved to.
+    assert(rules.replace(parseJSON(`[{"id":"s","events":["status-change"],"statuses":["join me"]}]`)) is null);
+    VRCEvent busy = mk("status-change", "usr_bob");
+    busy.content["currentStatus"] = JSONValue("busy");
+    assert(rules.match(busy, t0) is null);
+    VRCEvent join = mk("status-change", "usr_bob");
+    join.content["currentStatus"] = JSONValue("join me");
+    join.content["currentStatusDescription"] = JSONValue("say hi");
+    hit = rules.match(join, t0);
+    assert(hit);
+    assert(buildPromotedNotification(*hit, join, 2).message == "Status Change — join me — say hi");
     assert(rules.replace(parseJSON(`[{"id":"a","events":["friend-delete"]}]`)) is null);
 
     // Validation is all or nothing.

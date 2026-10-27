@@ -422,17 +422,16 @@ void cmdRun(ref Config config)
             );
         }
 
-        // Drop avatar-noise raws when they bring no new info: either we
-        // already produced a synthetic for them, or nothing in our cached
-        // friend state actually moved (VRChat re-emits friend-update /
-        // friend-location even when no observable property changed).
+        // Drop avatar-noise raws when they bring no new info: nothing in our
+        // cached friend state moved that a synthetic does not already report
+        // (VRChat re-emits friend-update / friend-location even when no
+        // observable property changed).
         // A picture change alone does not count: it follows the avatar for
         // anyone without an icon set, so it redraws the roster without
         // earning a row in the log.
         // Also drop traveling friend-locations; currently no use for saving it.
         bool suppressRaw = isTraveling
-            || (isAvatarNoiseEvent(event.type)
-                && (synthetics.length > 0 || friendsChanged.loggable == false));
+            || (isAvatarNoiseEvent(event.type) && friendsChanged.loggable == false);
         if (suppressRaw)
         {
             logTrace("suppressed raw %s (synthetics=%d loggable=%s traveling=%s)",
