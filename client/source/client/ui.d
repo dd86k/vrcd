@@ -28,6 +28,7 @@ import client.connection : PROTOCOL_BOOP, PROTOCOL_MODERATION, PROTOCOL_PROFILES
 import client.gui : wasClick, requestRepaint;
 import client.state;
 import client.stream : tlsAvailable;
+import client.theme;
 import client.utils : openFolder, openBrowser;
 
 /// Active tab selection. The tab set itself lives in client.state, with the
@@ -318,7 +319,7 @@ private void drawTabButton(mu_Context* ctx, AppState* state, string label, Tab t
     {
         // Draw highlight behind the button area.
         mu_Rect r = mu_layout_next(ctx);
-        mu_draw_rect(ctx, r, mu_Color(60, 80, 120, 255));
+        mu_draw_rect(ctx, r, selectedBg);
         mu_draw_control_text(ctx, label, r, MU_COLOR_TEXT, MU_OPT_ALIGNCENTER);
 
         // Make it clickable.
@@ -360,10 +361,10 @@ private void drawTabBadge(mu_Context* ctx, mu_Rect tabRect, size_t count)
     if (w < h)
         w = h;
     mu_Rect pill = mu_Rect(tabRect.x + tabRect.w - w - 4, tabRect.y + 4, w, h);
-    mu_draw_rect(ctx, pill, mu_Color(200, 50, 50, 255));
+    mu_draw_rect(ctx, pill, badgeBg);
     // Safe cast: mu_draw_text copies the text into the command queue.
     mu_draw_text(ctx, ctx.style.font, cast(string) text,
-        mu_Vec2(pill.x + (w - textW) / 2, pill.y + 2), mu_Color(255, 255, 255, 255));
+        mu_Vec2(pill.x + (w - textW) / 2, pill.y + 2), white);
 }
 
 bool filterPopupOpen;
@@ -511,8 +512,6 @@ private void drawFeedTab(mu_Context* ctx, AppState* state, int scrollDelta)
 
     // Column widths: date, type, user, detail (detail fills remaining space).
     static immutable int[1] fullCol = [-1];
-    enum lineColor = mu_Color(50, 50, 60, 255);
-    enum hoverColor = mu_Color(60, 60, 80, 255);
 
     mu_begin_panel(ctx, "FeedPanel");
 
@@ -532,15 +531,15 @@ private void drawFeedTab(mu_Context* ctx, AppState* state, int scrollDelta)
         int h = headerRect.h;
 
         mu_draw_control_text(ctx, "Date", mu_Rect(x, y, 150, h), MU_COLOR_TEXT, 0);
-        mu_draw_rect(ctx, mu_Rect(x + 149, y, 1, h), lineColor);
+        mu_draw_rect(ctx, mu_Rect(x + 149, y, 1, h), divider);
         x += 150;
 
         mu_draw_control_text(ctx, "Type", mu_Rect(x, y, 120, h), MU_COLOR_TEXT, 0);
-        mu_draw_rect(ctx, mu_Rect(x + 119, y, 1, h), lineColor);
+        mu_draw_rect(ctx, mu_Rect(x + 119, y, 1, h), divider);
         x += 120;
 
         mu_draw_control_text(ctx, "User", mu_Rect(x, y, 150, h), MU_COLOR_TEXT, 0);
-        mu_draw_rect(ctx, mu_Rect(x + 149, y, 1, h), lineColor);
+        mu_draw_rect(ctx, mu_Rect(x + 149, y, 1, h), divider);
         x += 150;
 
         mu_draw_control_text(ctx, "Detail", mu_Rect(x, y, headerRect.w - (x - headerRect.x), h), MU_COLOR_TEXT, 0);
@@ -548,7 +547,7 @@ private void drawFeedTab(mu_Context* ctx, AppState* state, int scrollDelta)
 
     // Horizontal separator under header.
     mu_layout_row(ctx, 1, fullCol.ptr, 1);
-    mu_draw_rect(ctx, mu_layout_next(ctx), lineColor);
+    mu_draw_rect(ctx, mu_layout_next(ctx), divider);
 
     // Get search query; reset page if it changed.
     string searchQuery = searchStr();
@@ -594,7 +593,7 @@ private void drawFeedTab(mu_Context* ctx, AppState* state, int scrollDelta)
 
                 // Highlight on hover.
                 if (mouseOver && !ctx.mouse_down)
-                    mu_draw_rect(ctx, rowRect, hoverColor);
+                    mu_draw_rect(ctx, rowRect, hoverBg);
 
                 // Click to open detail (only on mouseup, not during drag scroll).
                 if (wasClick && mouseOver)
@@ -612,15 +611,15 @@ private void drawFeedTab(mu_Context* ctx, AppState* state, int scrollDelta)
                 int y = rowRect.y;
 
                 mu_draw_control_text(ctx, entry.receivedAt, mu_Rect(x, y, 150, h), MU_COLOR_TEXT, 0);
-                mu_draw_rect(ctx, mu_Rect(x + 149, y, 1, h), lineColor);
+                mu_draw_rect(ctx, mu_Rect(x + 149, y, 1, h), divider);
                 x += 150;
 
                 mu_draw_control_text(ctx, prettyEventType(entry.eventType), mu_Rect(x, y, 120, h), MU_COLOR_TEXT, 0);
-                mu_draw_rect(ctx, mu_Rect(x + 119, y, 1, h), lineColor);
+                mu_draw_rect(ctx, mu_Rect(x + 119, y, 1, h), divider);
                 x += 120;
 
                 mu_draw_control_text(ctx, entry.user, mu_Rect(x, y, 150, h), MU_COLOR_TEXT, 0);
-                mu_draw_rect(ctx, mu_Rect(x + 149, y, 1, h), lineColor);
+                mu_draw_rect(ctx, mu_Rect(x + 149, y, 1, h), divider);
                 x += 150;
 
                 int detailX = x;
@@ -640,7 +639,7 @@ private void drawFeedTab(mu_Context* ctx, AppState* state, int scrollDelta)
 
                 // Row separator.
                 mu_layout_row(ctx, 1, fullCol.ptr, 1);
-                mu_draw_rect(ctx, mu_layout_next(ctx), lineColor);
+                mu_draw_rect(ctx, mu_layout_next(ctx), divider);
             }
             filteredCount++;
         }
@@ -682,7 +681,6 @@ private void drawFeedDetail(mu_Context* ctx, AppState* state, int scrollDelta)
 
     static immutable int[1] fullCol = [-1];
     static immutable int[2] labelValCols = [120, -1];
-    enum lineColor = mu_Color(50, 50, 60, 255);
 
     FeedEntry* e = &state.selectedFeedEntry;
 
@@ -715,7 +713,7 @@ private void drawFeedDetail(mu_Context* ctx, AppState* state, int scrollDelta)
 
     // Separator.
     mu_layout_row(ctx, 1, fullCol.ptr, 1);
-    mu_draw_rect(ctx, mu_layout_next(ctx), lineColor);
+    mu_draw_rect(ctx, mu_layout_next(ctx), divider);
 
     // Summary fields.
     if (e.receivedAt.length > 0)
@@ -778,7 +776,7 @@ private void drawFeedDetail(mu_Context* ctx, AppState* state, int scrollDelta)
         
         // Raw content fields (parsed from JSON).
         mu_layout_row(ctx, 1, fullCol.ptr, 1);
-        mu_draw_rect(ctx, mu_layout_next(ctx), lineColor);
+        mu_draw_rect(ctx, mu_layout_next(ctx), divider);
 
         mu_layout_row(ctx, 1, fullCol.ptr, 0);
         mu_label(ctx, "Content");
@@ -908,7 +906,7 @@ private void drawFetchOlderRow(mu_Context* ctx, AppState* state, int height, boo
     {
         // Disabled-looking label inside a button-shaped rect.
         mu_Rect r = mu_layout_next(ctx);
-        mu_draw_rect(ctx, r, mu_Color(40, 40, 50, 255));
+        mu_draw_rect(ctx, r, disabledBg);
         mu_draw_control_text(ctx, label, r, MU_COLOR_TEXT, MU_OPT_ALIGNCENTER);
     }
 }
@@ -1007,7 +1005,7 @@ private void drawFeedPagination(mu_Context* ctx, AppState* state)
         {
             // Highlight current page.
             mu_Rect r = mu_layout_next(ctx);
-            mu_draw_rect(ctx, r, mu_Color(60, 80, 120, 255));
+            mu_draw_rect(ctx, r, selectedBg);
             mu_draw_control_text(ctx, pageBuf.ptr, r, MU_COLOR_TEXT, MU_OPT_ALIGNCENTER, cast(int) s.length);
             mu_Id id = mu_get_id(ctx, &page, page.sizeof);
             mu_update_control(ctx, id, r, 0);
@@ -1085,7 +1083,7 @@ private void sectionHeader(mu_Context* ctx, string label)
     mu_layout_row(ctx, 1, fullCol.ptr, 0);
     mu_label(ctx, label);
     mu_layout_row(ctx, 1, fullCol.ptr, 1);
-    mu_draw_rect(ctx, mu_layout_next(ctx), mu_Color(60, 60, 70, 255));
+    mu_draw_rect(ctx, mu_layout_next(ctx), headingRule);
 }
 
 /// A label whose value can be copied to the clipboard on click.
@@ -1098,7 +1096,7 @@ private void clickableValue(mu_Context* ctx, AppState* state, string text)
     bool mouseOver = mu_mouse_over(ctx, r) != 0;
 
     if (mouseOver && !ctx.mouse_down)
-        mu_draw_rect(ctx, r, mu_Color(50, 60, 80, 255));
+        mu_draw_rect(ctx, r, hoverBg);
 
     mu_draw_control_text(ctx, text, r, MU_COLOR_TEXT, 0);
 
@@ -1152,7 +1150,7 @@ private void activityButton(mu_Context* ctx, string label, MonoTime since)
     if (x1 > r.x + r.w)
         x1 = r.x + r.w;
     if (x1 > x0)
-        mu_draw_rect(ctx, mu_Rect(x0, r.y + r.h - BAR_H, x1 - x0, BAR_H), mu_Color(100, 150, 230, 255));
+        mu_draw_rect(ctx, mu_Rect(x0, r.y + r.h - BAR_H, x1 - x0, BAR_H), progressFill);
 }
 
 /// Two-tap destructive button that never places Confirm where the first
@@ -1607,26 +1605,14 @@ private void drawSelfStatusSection(mu_Context* ctx, AppState* state)
         state.friendsRefreshRetryAfter = 0;
     }
 
-    // Textbox. mu_textbox shows what's in the buffer, so an empty buffer
-    // simply shows nothing; we overlay a placeholder string when empty
-    // and unfocused. Use the _raw form so we own the rect for the overlay.
-    {
-        char* tbBuf = state.statusDescriptionInput.ptr;
-        mu_Id tbId = mu_get_id(ctx, &tbBuf, tbBuf.sizeof);
-        mu_Rect tbRect = mu_layout_next(ctx);
-        mu_textbox_raw(ctx, tbBuf,
-            cast(int) state.statusDescriptionInput.length, tbId, tbRect, 0);
-        // VRChat caps status_description at 32 code points; the REST API
-        // responds with HTTP 400 if you send more (observed with 34 chars).
-        // VRChat's own client also strips emoji on input - the backend is
-        // almost certainly MySQL utf8 (3-byte max), not utf8mb4, so any
-        // code point >= U+10000 (4-byte UTF-8) is silently dropped on their
-        // end. Strip them here too, then truncate to 32 code points.
-        sanitizeStatusInput(state.statusDescriptionInput[], 32);
-        if (state.statusDescriptionInput[0] == '\0' && ctx.focus != tbId)
-            mu_draw_control_text(ctx, "Enter a custom status...",
-                tbRect, MU_COLOR_TEXT, 0);
-    }
+    hintTextbox(ctx, state.statusDescriptionInput, "Enter a custom status...");
+    // VRChat caps status_description at 32 code points; the REST API
+    // responds with HTTP 400 if you send more (observed with 34 chars).
+    // VRChat's own client also strips emoji on input - the backend is
+    // almost certainly MySQL utf8 (3-byte max), not utf8mb4, so any
+    // code point >= U+10000 (4-byte UTF-8) is silently dropped on their
+    // end. Strip them here too, then truncate to 32 code points.
+    sanitizeStatusInput(state.statusDescriptionInput[], 32);
 
     // Clear ("X"): empties the textbox and drops any pending status draft.
     // The user then commits the empty description via Update, same as any
@@ -1688,7 +1674,7 @@ private void drawSelfStatusSection(mu_Context* ctx, AppState* state)
         const(char)[] line = sformat(errBuf, "Status update failed: %s",
             state.statusUpdateError);
         mu_draw_text(ctx, ctx.style.font, cast(string) line,
-            mu_Vec2(er.x, er.y + 4), mu_Color(220, 70, 70, 255));
+            mu_Vec2(er.x, er.y + 4), red);
     }
 }
 
@@ -1826,8 +1812,6 @@ package void drawSelfStatusPopup(mu_Context* ctx, AppState* state)
 private void drawStatusPopupRow(mu_Context* ctx, AppState* state,
     string label, string value)
 {
-    enum mu_Color rowHover  = mu_Color(55, 62, 82, 255);
-    enum mu_Color rowActive = mu_Color(60, 80, 120, 255);
 
     // Fixed width: -1 ("remaining") resolves to 0 inside an AUTOSIZE popup
     // (its body width starts at 0 and grows from content), which would make
@@ -1849,9 +1833,9 @@ private void drawStatusPopupRow(mu_Context* ctx, AppState* state,
 
     // Background: active wins over hover.
     if (active)
-        mu_draw_rect(ctx, row, rowActive);
+        mu_draw_rect(ctx, row, selectedBg);
     else if (hovered)
-        mu_draw_rect(ctx, row, rowHover);
+        mu_draw_rect(ctx, row, hoverBg);
 
     // Badge (clickable too, since the whole row is one target).
     int badgeW = 28;
@@ -1876,9 +1860,6 @@ private void drawStatusPopupRow(mu_Context* ctx, AppState* state,
 /// so dragging on the row (or the left gutter) scrolls the panel instead.
 private void drawFriendCard(mu_Context* ctx, AppState* state, ref FriendInfo f)
 {
-    enum mu_Color cardBg    = mu_Color(38, 42, 52, 255);
-    enum mu_Color cardHover = mu_Color(55, 62, 82, 255);
-
     static immutable int[2] indentCols = [14, -1];
     mu_layout_row(ctx, 2, indentCols.ptr, 56);
     mu_layout_next(ctx); // left gutter,  empty, scrollable drag area
@@ -1887,7 +1868,7 @@ private void drawFriendCard(mu_Context* ctx, AppState* state, ref FriendInfo f)
     bool mouseOver = mu_mouse_over(ctx, r) != 0;
 
     // Card background with hover highlight (suppressed while dragging).
-    mu_draw_rect(ctx, r, (mouseOver && ctx.mouse_down == 0) ? cardHover : cardBg);
+    mu_draw_rect(ctx, r, (mouseOver && ctx.mouse_down == 0) ? hoverBg : cardBg);
 
     // Status accent strip on the left edge.
     mu_draw_rect(ctx, mu_Rect(r.x, r.y, 4, r.h), statusColor(f.status));
@@ -1930,10 +1911,10 @@ private mu_Color sourceColor(EventSource source)
 {
     final switch (source)
     {
-        case EventSource.server:        return mu_Color( 70, 140, 220, 255); // blue
-        case EventSource.local:         return mu_Color(160,  90, 220, 255); // purple
-        case EventSource.dropaportal:   return mu_Color( 54, 215, 192, 255); // teal (accent color)
-        case EventSource.system:        return mu_Color( 90,  90, 100, 255); // gray
+        case EventSource.server:        return blue; // blue
+        case EventSource.local:         return purple; // purple
+        case EventSource.dropaportal:   return teal; // teal (accent color)
+        case EventSource.system:        return grey; // gray
     }
 }
 
@@ -1942,12 +1923,12 @@ private mu_Color statusColor(string status)
 {
     switch (status)
     {
-        case "active":  return mu_Color(70, 200, 90, 255);
-        case "join me": return mu_Color(70, 140, 220, 255);
-        case "ask me":  return mu_Color(220, 170, 60, 255);
-        case "busy":    return mu_Color(220, 70, 70, 255);
-        case "offline": return mu_Color(120, 120, 120, 255);
-        default:        return mu_Color(120, 120, 120, 255);
+        case "active":  return green;
+        case "join me": return blue;
+        case "ask me":  return amber;
+        case "busy":    return red;
+        case "offline": return greyLight;
+        default:        return greyLight;
     }
 }
 
@@ -1981,7 +1962,6 @@ private void drawProfileTab(mu_Context* ctx, AppState* state, int scrollDelta)
 {
     static immutable int[1] fullCol = [-1];
     static immutable int[2] labelValCols = [120, -1];
-    enum lineColor = mu_Color(50, 50, 60, 255);
 
     ProfileView view = state.profileSubject();
 
@@ -2003,7 +1983,7 @@ private void drawProfileTab(mu_Context* ctx, AppState* state, int scrollDelta)
     drawProfileHeader(ctx, state, view);
 
     mu_layout_row(ctx, 1, fullCol.ptr, 1);
-    mu_draw_rect(ctx, mu_layout_next(ctx), lineColor);
+    mu_draw_rect(ctx, mu_layout_next(ctx), divider);
 
     // Why the page is thinner than it will be, when it is.
     final switch (view.state) with (ProfileState)
@@ -2133,7 +2113,6 @@ private void drawProfileHeader(mu_Context* ctx, AppState* state, ref ProfileView
 {
     enum int faceSize = 128;
     enum int lineStep = 26;
-    enum mu_Color dimColor = mu_Color(150, 155, 165, 255);
 
     int[2] cols = [faceSize + ctx.style.spacing, -1];
     mu_layout_row(ctx, 2, cols.ptr, faceSize);
@@ -2174,7 +2153,7 @@ private void drawProfileHeader(mu_Context* ctx, AppState* state, ref ProfileView
         who[nWho++] = "VRChat Staff";
     if (view.profile.troll)
         who[nWho++] = "Flagged";
-    line(joinPieces(whoBuf, who[0 .. nWho], " . "), dimColor);
+    line(joinPieces(whoBuf, who[0 .. nWho], " . "), textDim);
 
     char[128] whereBuf = void;
     string[2] where;
@@ -2183,7 +2162,7 @@ private void drawProfileHeader(mu_Context* ctx, AppState* state, ref ProfileView
         where[nWhere++] = prettyStatus(view.status);
     if (view.platform.length > 0)
         where[nWhere++] = prettyPlatform(view.platform);
-    line(joinPieces(whereBuf, where[0 .. nWhere], " . "), dimColor);
+    line(joinPieces(whereBuf, where[0 .. nWhere], " . "), textDim);
 
     line(view.statusDescription, ctx.style.colors[MU_COLOR_TEXT]);
 }
@@ -2209,7 +2188,7 @@ private void drawProfileFace(mu_Context* ctx, AppState* state, ref ProfileView v
         int iconId = getIconId(key);
         if (iconId > 0)
         {
-            mu_draw_icon(ctx, iconId, r, mu_Color(255, 255, 255, 255));
+            mu_draw_icon(ctx, iconId, r, white);
             return;
         }
         if ((key in state.failedImages) is null)
@@ -2220,7 +2199,7 @@ private void drawProfileFace(mu_Context* ctx, AppState* state, ref ProfileView v
     // The initial stays under the picture in both senses: somebody with no
     // picture and somebody whose picture is still coming down the link look
     // the same for a moment, and the page does not move when it lands.
-    mu_draw_rect(ctx, r, mu_Color(52, 58, 72, 255));
+    mu_draw_rect(ctx, r, faceBg);
 
     string name = view.displayName;
     if (name.length == 0)
@@ -2479,7 +2458,6 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
     static immutable int[1] fullCol    = [-1];
     static immutable int[2] headerCols = [-130, 120];
     enum int actionSize = 64;   // square, and big enough to hit in VR
-    enum lineColor = mu_Color(50, 50, 60, 255);
 
     if (state.boopOpen)
     {
@@ -2545,7 +2523,7 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
             // The head line doubles as the top of the entry: the spine is
             // drawn at the end, once the rows below have given it a height.
             mu_layout_row(ctx, 1, fullCol.ptr, 0);
-            int entryTop = notifLine(ctx, head, notifMetaColor).y;
+            int entryTop = notifLine(ctx, head, textDim).y;
 
             // An empty line is a hole rather than a blank: a friend request
             // carries no message, and most group notices carry no sender.
@@ -2560,7 +2538,7 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
                 {
                     bool over = mu_mouse_over(ctx, fromRect) != 0;
                     if (over && ctx.mouse_down == 0)
-                        mu_draw_box(ctx, fromRect, mu_Color(90, 110, 150, 255));
+                        mu_draw_box(ctx, fromRect, hoverEdge);
                     if (wasClick && over)
                         openGroup(state, n.info.senderUserId,
                             from == "View group" ? null : from.idup);
@@ -2654,7 +2632,7 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
                     // that is Confirm. A red Cancel reads as the dangerous
                     // one and inverts the whole point of arming.
                     const(char)[] cancelLabel;
-                    if (iconButton(ctx, ActionIcon.cross, actionPlainTint,
+                    if (iconButton(ctx, ActionIcon.cross, iconPlain,
                         "Cancel", cancelLabel))
                         state.armedConfirm = ArmedConfirm.init;
 
@@ -2798,7 +2776,7 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
             mu_Rect separator = mu_layout_next(ctx);
             mu_draw_rect(ctx, mu_Rect(separator.x, entryTop, notifSpineWidth,
                 separator.y - entryTop), notifAccent(n.info.notificationType));
-            mu_draw_rect(ctx, separator, lineColor);
+            mu_draw_rect(ctx, separator, divider);
         }
 
         // Apply optimistic removals.
@@ -2813,11 +2791,6 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
 /// and the gap everything else in the entry is inset by to clear it.
 private enum int notifSpineWidth = 4;
 private enum int notifSpineGap   = 8;
-
-/// Ink for the type-and-date line. Dimmer than the rest: it is the label on
-/// the entry, not the content of it, and three lines of identical grey was
-/// the thing that made an entry hard to take in at a glance.
-private enum mu_Color notifMetaColor = mu_Color(140, 145, 155, 255);
 
 /// Colour of an entry's spine, by what kind of notification it is.
 ///
@@ -2840,23 +2813,23 @@ private mu_Color notifAccent(string notifType)
     switch (notifType)
     {
         case "friendRequest":
-            return mu_Color(70, 200, 90, 255);      // green, someone new
+            return green;      // green, someone new
         case "invite", "requestInvite",
              "requestInviteResponse", "inviteResponse":
-            return mu_Color(74, 158, 255, 255);     // blue, somewhere to be
+            return blue;     // blue, somewhere to be
         case "votetokick", "instance.closed":
-            return mu_Color(220, 70, 70, 255);      // red, something ending
+            return red;      // red, something ending
         case "boop", "message":
-            return mu_Color(220, 170, 60, 255);     // amber, someone talking
+            return amber;     // amber, someone talking
         case "vrcd.promoted":
-            return mu_Color(60, 190, 190, 255);     // teal, asked for by a rule
+            return teal;     // teal, asked for by a rule
         default:
             break;
     }
 
     if (notifType.startsWith("group"))
-        return mu_Color(160, 90, 220, 255);         // purple, as the feed
-    return mu_Color(90, 90, 100, 255);              // grey, unlisted
+        return purple;         // purple, as the feed
+    return grey;              // grey, unlisted
 }
 
 /// One line of a notification entry: text inset past the spine, in whatever
@@ -2946,9 +2919,6 @@ private bool hasOwnDismiss(ref const(NotificationInfo) info)
     return false;
 }
 
-/// Ink for an icon that is neither a yes nor a no.
-private enum mu_Color actionPlainTint = mu_Color(205, 210, 220, 255);
-
 /// VRChat's built-in emoji. Not API data -- no listing, no artwork -- only
 /// names the game knows, which a boop takes as `default_<name>`. Mirrors
 /// `BOOP_EMOJI` in the web front-end.
@@ -3013,7 +2983,6 @@ private bool isBoopResponse(ref const(NotificationResponse) response)
 private void drawBoopPage(mu_Context* ctx, AppState* state, int scrollDelta)
 {
     static immutable int[1] fullCol = [-1];
-    enum mu_Color selectedColor = mu_Color(90, 140, 220, 255);
 
     mu_begin_panel(ctx, "BoopPanel");
     applyScroll(ctx, scrollDelta);
@@ -3075,7 +3044,7 @@ private void drawBoopPage(mu_Context* ctx, AppState* state, int scrollDelta)
                 requestRepaint();
             }
             if (state.boopEmojiId == f.fileId)
-                mu_draw_box(ctx, ctx.last_rect, selectedColor);
+                mu_draw_box(ctx, ctx.last_rect, toggleOnEdge);
         }
     }
 
@@ -3108,7 +3077,7 @@ private void drawBoopPage(mu_Context* ctx, AppState* state, int scrollDelta)
             requestRepaint();
         }
         if (state.boopEmojiId == id)
-            mu_draw_box(ctx, ctx.last_rect, selectedColor);
+            mu_draw_box(ctx, ctx.last_rect, toggleOnEdge);
     }
 
     mu_end_panel(ctx);
@@ -3123,16 +3092,16 @@ private mu_Color iconTint(ActionIcon icon)
     final switch (icon)
     {
         case ActionIcon.check:
-            return mu_Color(110, 210, 120, 255);
+            return iconYes;
         case ActionIcon.cross:
         case ActionIcon.ban:
-            return mu_Color(225, 100, 100, 255);
+            return iconNo;
         case ActionIcon.trash:
         case ActionIcon.bellSlash:
         case ActionIcon.join:
         case ActionIcon.reply:
         case ActionIcon.dots:
-            return actionPlainTint;
+            return iconPlain;
     }
 }
 
@@ -3203,7 +3172,7 @@ private void drawInventoryTab(mu_Context* ctx, AppState* state, int scrollDelta)
         if (state.invSection == section)
         {
             mu_Rect r = mu_layout_next(ctx);
-            mu_draw_rect(ctx, r, mu_Color(60, 80, 120, 255));
+            mu_draw_rect(ctx, r, selectedBg);
             mu_draw_control_text(ctx, invSectionLabels[i], r, MU_COLOR_TEXT, MU_OPT_ALIGNCENTER);
         }
         else if (mu_button(ctx, invSectionLabels[i]))
@@ -3355,7 +3324,7 @@ private bool imageCell(mu_Context* ctx, AppState* state, mu_Container* panel,
         int iconId = getIconId(key);
         if (iconId > 0)
         {
-            mu_draw_icon(ctx, iconId, r, mu_Color(255, 255, 255, 255));
+            mu_draw_icon(ctx, iconId, r, white);
         }
         else if (key in state.failedImages)
         {
@@ -3376,7 +3345,7 @@ private bool imageCell(mu_Context* ctx, AppState* state, mu_Container* panel,
     if (caption.length > 0)
     {
         mu_Rect cap = mu_Rect(r.x, r.y + r.h - 24, r.w, 24);
-        mu_draw_rect(ctx, cap, mu_Color(0, 0, 0, 170));
+        mu_draw_rect(ctx, cap, captionShade);
         // Safe cast: mu_draw_text copies the text into the command queue.
         mu_draw_control_text(ctx, cast(string) caption, cap, MU_COLOR_TEXT, MU_OPT_ALIGNCENTER);
     }
@@ -3397,7 +3366,7 @@ private void groupHeading(mu_Context* ctx, const(char)[] text)
 
     mu_layout_row(ctx, 1, fullCol.ptr, 34);
     mu_Rect head = mu_layout_next(ctx);
-    mu_draw_rect(ctx, head, mu_Color(45, 55, 75, 255));
+    mu_draw_rect(ctx, head, headingBg);
     // Safe cast: mu_draw_text copies the text into the command queue.
     mu_draw_control_text(ctx, cast(string) text, head, MU_COLOR_TEXT, 0);
 }
@@ -3590,7 +3559,7 @@ private void drawInventoryDetailPage(mu_Context* ctx, AppState* state, int scrol
         string key = imageKey(fileId, fileVersion, 0);
         int iconId = getIconId(key);
         if (iconId > 0)
-            mu_draw_icon(ctx, iconId, imgRect, mu_Color(255, 255, 255, 255));
+            mu_draw_icon(ctx, iconId, imgRect, white);
         else if (key in state.failedImages)
             mu_draw_control_text(ctx, "Image unavailable", imgRect, MU_COLOR_TEXT, MU_OPT_ALIGNCENTER);
         else
@@ -4160,12 +4129,6 @@ private void drawFriendListPage(mu_Context* ctx, AppState* state, int scrollDelt
     mu_end_panel(ctx);
 }
 
-/// Background for odd rows in management lists: a full-width band that
-/// binds a name to its buttons so the eye doesn't lose the row.
-private enum mu_Color manageRowBg = mu_Color(40, 44, 54, 255);
-/// Warm-tinted band for a row with an armed destructive confirmation.
-private enum mu_Color manageArmedBg = mu_Color(64, 44, 46, 255);
-
 /// Draw the zebra band behind the current row and return the first cell.
 /// Call right after mu_layout_row; the band spans the panel body width and
 /// widgets drawn afterwards land on top of it.
@@ -4177,7 +4140,7 @@ private mu_Rect manageRowBand(mu_Context* ctx, size_t index, mu_Color armed = mu
     if (armed != mu_Color.init)
         mu_draw_rect(ctx, mu_Rect(body_.x, cell.y, body_.w, cell.h + extraH), armed);
     else if (index % 2)
-        mu_draw_rect(ctx, mu_Rect(body_.x, cell.y, body_.w, cell.h + extraH), manageRowBg);
+        mu_draw_rect(ctx, mu_Rect(body_.x, cell.y, body_.w, cell.h + extraH), rowBand);
     return cell;
 }
 
@@ -4189,7 +4152,7 @@ private void manageNameCell(mu_Context* ctx, AppState* state, ref FriendInfo f,
 {
     bool mouseOver = mu_mouse_over(ctx, cell) != 0;
     if (mouseOver && ctx.mouse_down == 0)
-        mu_draw_rect(ctx, cell, mu_Color(50, 60, 80, 255));
+        mu_draw_rect(ctx, cell, hoverBg);
 
     mu_draw_control_text(ctx, f.displayName,
         mu_Rect(cell.x + padX, cell.y, cell.w - padX, cell.h), MU_COLOR_TEXT, 0);
@@ -4226,7 +4189,7 @@ private void drawFriendManageRow(mu_Context* ctx, AppState* state, ref FriendInf
         static immutable int[2] armedCols = [-260, -1];
         char[128] buffer = void;
         mu_layout_row(ctx, 2, armedCols.ptr, 56);
-        mu_Rect promptCell = manageRowBand(ctx, index, manageArmedBg,
+        mu_Rect promptCell = manageRowBand(ctx, index, rowArmed,
             56 + ctx.style.spacing);
         mu_draw_control_text(ctx,
             cast(string) sformat(buffer, "%s %s?",
@@ -4364,14 +4327,14 @@ private void drawGroupIcon(mu_Context* ctx, AppState* state, string fileId,
         int iconId = getIconId(key);
         if (iconId > 0)
         {
-            mu_draw_icon(ctx, iconId, r, mu_Color(255, 255, 255, 255));
+            mu_draw_icon(ctx, iconId, r, white);
             return;
         }
         if ((key in state.failedImages) is null)
             state.pendingImageRequests ~= ImageRequest(fileId, fileVersion, size);
     }
 
-    mu_draw_rect(ctx, r, mu_Color(52, 58, 72, 255));
+    mu_draw_rect(ctx, r, faceBg);
     if (name.length == 0)
         return;
 
@@ -4390,7 +4353,6 @@ private void drawGroupListPage(mu_Context* ctx, AppState* state, int scrollDelta
 {
     static immutable int[1] fullCol = [-1];
     enum int rowH = 64;
-    enum mu_Color dimColor = mu_Color(150, 155, 165, 255);
 
     mu_begin_panel(ctx, "GroupListPanel");
     applyScroll(ctx, scrollDelta);
@@ -4437,7 +4399,7 @@ private void drawGroupListPage(mu_Context* ctx, AppState* state, int scrollDelta
             textCell.x + textCell.w - iconCell.x, rowH);
         bool mouseOver = mu_mouse_over(ctx, whole) != 0;
         if (mouseOver && ctx.mouse_down == 0)
-            mu_draw_box(ctx, whole, mu_Color(90, 110, 150, 255));
+            mu_draw_box(ctx, whole, hoverEdge);
 
         mu_draw_text(ctx, ctx.style.font, g.name.length > 0 ? g.name : g.id,
             mu_Vec2(textCell.x + padX, textCell.y + 8), ctx.style.colors[MU_COLOR_TEXT]);
@@ -4452,7 +4414,7 @@ private void drawGroupListPage(mu_Context* ctx, AppState* state, int scrollDelta
         if (g.isRepresenting)
             sub[nSub++] = "Representing";
         mu_draw_text(ctx, ctx.style.font, cast(string) joinPieces(subBuf, sub[0 .. nSub], " . "),
-            mu_Vec2(textCell.x + padX, textCell.y + 34), dimColor);
+            mu_Vec2(textCell.x + padX, textCell.y + 34), textDim);
 
         if (wasClick && mouseOver)
             openGroup(state, g.id, g.name);
@@ -4472,8 +4434,6 @@ private void drawGroupDetailPage(mu_Context* ctx, AppState* state, int scrollDel
     static immutable int[2] labelValCols = [120, -1];
     enum int iconSize = 128;
     enum int lineStep = 26;
-    enum mu_Color dimColor = mu_Color(150, 155, 165, 255);
-    enum mu_Color lineColor = mu_Color(50, 50, 60, 255);
 
     string id = state.groupDetailId;
     GroupLookup found = state.groupSubject();
@@ -4528,13 +4488,13 @@ private void drawGroupDetailPage(mu_Context* ctx, AppState* state, int scrollDel
         marks[nMarks++] = "Verified";
     if (p.privacy == "private")
         marks[nMarks++] = "Private";
-    line(joinPieces(markBuf, marks[0 .. nMarks], " . "), dimColor);
+    line(joinPieces(markBuf, marks[0 .. nMarks], " . "), textDim);
 
     char[96] countBuf = void;
     if (members > 0)
         line(p.onlineMemberCount > 0
             ? sformat(countBuf, "%d members, %d online", members, p.onlineMemberCount)
-            : sformat(countBuf, "%d members", members), dimColor);
+            : sformat(countBuf, "%d members", members), textDim);
 
     string standing;
     if (member)
@@ -4555,7 +4515,7 @@ private void drawGroupDetailPage(mu_Context* ctx, AppState* state, int scrollDel
     line(standing, ctx.style.colors[MU_COLOR_TEXT]);
 
     mu_layout_row(ctx, 1, fullCol.ptr, 1);
-    mu_draw_rect(ctx, mu_layout_next(ctx), lineColor);
+    mu_draw_rect(ctx, mu_layout_next(ctx), divider);
 
     string why = groupsUnavailable(state);
     final switch (found.state) with (ProfileState)
@@ -4754,9 +4714,6 @@ private char[64] rulePickBuf = '\0';
 /// an empty user list is exactly what the server takes Anyone to mean.
 private bool ruleForSomeone;
 private MonoTime ruleSaveSince;
-
-private enum mu_Color toggleOnBg   = mu_Color(40, 70, 120, 255);
-private enum mu_Color toggleOnEdge = mu_Color(90, 140, 220, 255);
 
 /// A button standing for a choice that is in or out: the feed filter's
 /// checkbox, at a size a headset can hit.
@@ -5006,7 +4963,7 @@ private void drawPromotionRuleRow(mu_Context* ctx, AppState* state,
         static immutable int[2] armedCols = [-260, -1];
         char[128] buffer = void;
         mu_layout_row(ctx, 2, armedCols.ptr, 56);
-        mu_Rect promptCell = manageRowBand(ctx, index, manageArmedBg,
+        mu_Rect promptCell = manageRowBand(ctx, index, rowArmed,
             56 + ctx.style.spacing);
         mu_draw_control_text(ctx,
             cast(string) joinPieces(buffer, [ "Delete", ruleTitle(rule) ], " "),
@@ -5043,7 +5000,7 @@ private void drawPromotionRuleRow(mu_Context* ctx, AppState* state,
     mu_draw_control_text(ctx, ruleTitle(rule),
         mu_Rect(cell.x + padX, cell.y + 4, cell.w - padX, half - 4), MU_COLOR_TEXT, 0);
     mu_Color saved = ctx.style.colors[MU_COLOR_TEXT];
-    ctx.style.colors[MU_COLOR_TEXT] = rule.enabled ? notifMetaColor : mu_Color(100, 100, 110, 255);
+    ctx.style.colors[MU_COLOR_TEXT] = rule.enabled ? textDim : textDisabled;
     mu_draw_control_text(ctx, cast(string) ruleSummary(state, rule, summaryBuf),
         mu_Rect(cell.x + padX, cell.y + half, cell.w - padX, half - 4), MU_COLOR_TEXT, 0);
     ctx.style.colors[MU_COLOR_TEXT] = saved;
@@ -5072,6 +5029,26 @@ private string ruleDraftProblem(ref const(PromotionRule) draft)
     if (ruleForSomeone && draft.users.length == 0)
         return "Add at least one friend, or pick Anyone.";
     return null;
+}
+
+/// Textbox showing a dimmed `hint` while empty and unfocused. Returns the
+/// mu_textbox result flags.
+private int hintTextbox(mu_Context* ctx, char[] buf, const(char)* hint)
+{
+    char* p = buf.ptr;
+    mu_Id id = mu_get_id(ctx, &p, p.sizeof);
+    mu_Rect r = mu_layout_next(ctx);
+
+    int res = mu_textbox_raw(ctx, p, cast(int) buf.length, id, r, 0);
+
+    if (buf[0] == '\0' && ctx.focus != id)
+    {
+        mu_Color savedText = ctx.style.colors[MU_COLOR_TEXT];
+        ctx.style.colors[MU_COLOR_TEXT] = textHint;
+        mu_draw_control_text(ctx, hint, r, MU_COLOR_TEXT, 0);
+        ctx.style.colors[MU_COLOR_TEXT] = savedText;
+    }
+    return res;
 }
 
 private void toggleIn(ref string[] list, string value)
@@ -5137,7 +5114,7 @@ private void drawPromotionEditPage(mu_Context* ctx, AppState* state, int scrollD
     spacer(ctx, 10);
     mu_layout_row(ctx, 2, labelFieldCols.ptr, 40);
     mu_label(ctx, "Name (optional)");
-    mu_textbox(ctx, ruleNameBuf.ptr, cast(int) ruleNameBuf.length);
+    hintTextbox(ctx, ruleNameBuf, "Untitled rule");
 
     int[8] cols;
     int columns = buttonGridCols(ctx, cols, 220);
@@ -5280,7 +5257,7 @@ private void drawPromotionPickUserPage(mu_Context* ctx, AppState* state, int scr
     mu_layout_row(ctx, 1, fullCol.ptr, 0);
     mu_label(ctx, "Search");
     mu_layout_row(ctx, 1, fullCol.ptr, 40);
-    mu_textbox(ctx, rulePickBuf.ptr, cast(int) rulePickBuf.length);
+    hintTextbox(ctx, rulePickBuf, "Friend name");
 
     const(char)* nul = cast(const(char)*) memchr(rulePickBuf.ptr, '\0', rulePickBuf.length);
     const(char)[] query = rulePickBuf[0 .. nul ? nul - rulePickBuf.ptr : rulePickBuf.length];
@@ -5299,7 +5276,7 @@ private void drawPromotionPickUserPage(mu_Context* ctx, AppState* state, int scr
         mu_Rect cell = manageRowBand(ctx, shown++);
         bool mouseOver = mu_mouse_over(ctx, cell) != 0;
         if (mouseOver && ctx.mouse_down == 0)
-            mu_draw_rect(ctx, cell, mu_Color(50, 60, 80, 255));
+            mu_draw_rect(ctx, cell, hoverBg);
         mu_draw_control_text(ctx, f.displayName,
             mu_Rect(cell.x + padX, cell.y, cell.w - padX, cell.h), MU_COLOR_TEXT, 0);
         if (wasClick && mouseOver)
@@ -5412,7 +5389,7 @@ private void drawProfileRows(mu_Context* ctx, AppState* state)
             if (i == state.activeProfile)
             {
                 mu_Color prev = ctx.style.colors[MU_COLOR_BUTTON];
-                ctx.style.colors[MU_COLOR_BUTTON] = ctx.style.colors[MU_COLOR_BASEFOCUS];
+                ctx.style.colors[MU_COLOR_BUTTON] = selectedBg;
                 mu_button(ctx, name);
                 ctx.style.colors[MU_COLOR_BUTTON] = prev;
                 continue;
@@ -5713,7 +5690,7 @@ private void drawStatusBar(mu_Context* ctx, AppState* state)
     mu_Rect r = mu_layout_next(ctx);
     // NOTE: Consider changing statusbar color
     //       Worried about constrast
-    mu_draw_rect(ctx, r, mu_Color(20, 20, 25, 255));
+    mu_draw_rect(ctx, r, statusBarBg);
 
     // Show transient action-feedback flash when active.
     if (state.statusFlash && MonoTime.currTime < state.statusFlashEnd)

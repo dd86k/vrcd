@@ -37,6 +37,7 @@ import client.profiles : parseUserProfile;
 import client.renderer;
 import client.settings;
 import client.state;
+import client.theme : background, themeStyle;
 import client.ui;
 import client.utils;
 
@@ -399,7 +400,7 @@ int runGui(string host, ushort port, string secret, long sinceId,
     // Init UI context (heap-allocated since mu_Context is ~4 MB, far too
     // large for the stack and triggers __chkstk failures on Windows).
     mu_Context* uictx = new mu_Context();
-    mu_init(uictx);
+    mu_init(uictx, themeStyle());
     uictx.text_width  = &text_width;
     uictx.text_height = &text_height;
     uictx.get_clipboard = &get_clipboard;
@@ -1296,7 +1297,7 @@ private void eventLoop(mu_Context* uictx)
         wakeRequested = false;
 
         // Render UI
-        r_clear(mu_Color(30, 30, 35, 255));
+        r_clear(background);
         foreach (ref mu_Command cmd; mu_command_range(uictx))
         {
             switch (cmd.type)
