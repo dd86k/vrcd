@@ -22,20 +22,27 @@ Rules:
 - Folders and links are opened through SDL.
 - Disabling yt-dlp should now last across world loads.
 - No more join/leave notifications for yourself.
+- Groups (TOOLS > Groups): see your groups, represent one, choose who sees
+  you in it, toggle announcements, join or leave. A group notification opens
+  its group.
+- New theme. Text fields no longer blend into the background, and empty ones
+  show a hint.
 
 ### Server
 
 - Turns events matching the notification rules into notifications, kept in
-  the inbox. Your own avatar and profile changes never match.
+  the inbox.
 - New "status-change" event when a friend changes their status or status
   message.
 - Fix a location change being dropped from the log when the same update also
   changed an avatar or profile.
+- Member-side group actions, and a group list kept current from group events.
 
 ### Web
 
 - Notification rules (TOOLS > RULES), and NOTIFY WHEN ONLINE on a friend.
 - Browser alerts for rule notifications while the page is open (needs HTTPS).
+- Groups (TOOLS > GROUPS), same as the client.
 
 ### API
 
@@ -43,6 +50,8 @@ Rules:
   `promotions`), and `vrcd.promoted` entries in the inbox.
 - Protocol version 16: `set_promotions` takes a `request_id`.
 - Protocol version 17: `status-change` event, rules take `statuses`.
+- Protocol version 18: groups (`get_groups`, `get_group`, `group_action`,
+  `groups`).
 
 ## v0.4.1
 
