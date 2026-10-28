@@ -191,23 +191,28 @@ enum ProfileState
 }
 
 /// Result of one cache lookup.
-struct ProfileLookup
+struct LookupOf(T)
 {
     ProfileState state;
-    UserProfile profile;
+    T profile;
     string error;
 }
 
-/// Bounded profile cache. Main-thread only.
-struct ProfileCache
+/// ditto
+alias ProfileLookup = LookupOf!UserProfile;
+
+/// Bounded cache of fetched pages (profiles, groups). Main-thread only.
+struct CacheOf(T)
 {
+    private alias Lookup = LookupOf!T;
+
     /// Look one profile up.
     ///
     /// Params:
     ///   userId = VRChat user ID.
     ///   startFetch = Set when the caller has to ask vrcd-server for this
     ///                profile: nothing usable is held and nothing is on its way.
-    ProfileLookup lookup(string userId, out bool startFetch)
+    Lookup lookup(string userId, out bool startFetch)
     {
         long now = Clock.currTime.toUnixTime!long();
 
@@ -217,34 +222,34 @@ struct ProfileCache
             {
             case ready:
                 if (now - entry.stamp < PROFILE_TTL)
-                    return ProfileLookup(ready, entry.profile);
+                    return Lookup(ready, entry.profile);
                 // Stale, but still worth drawing: the page keeps what we have
                 // and the fetch started here lands under it. The entry stays
                 // `ready` with a fresh stamp so the next frame does not start
                 // a second fetch.
                 entry.stamp = now;
                 startFetch = true;
-                return ProfileLookup(ready, entry.profile);
+                return Lookup(ready, entry.profile);
 
             case failed:
                 if (now - entry.stamp < FAILURE_TTL)
-                    return ProfileLookup(failed, UserProfile.init, entry.error);
+                    return Lookup(failed, T.init, entry.error);
                 break; // Expired; ask again.
 
             case pending:
                 if (now - entry.stamp < REQUEST_TIMEOUT)
-                    return ProfileLookup(pending);
+                    return Lookup(pending);
                 break; // The answer never came; ask again.
             }
         }
 
         remember(userId, Entry(ProfileState.pending, now));
         startFetch = true;
-        return ProfileLookup(ProfileState.pending);
+        return Lookup(ProfileState.pending);
     }
 
     /// Store a fetched profile.
-    void store(string userId, UserProfile profile)
+    void store(string userId, T profile)
     {
         remember(userId, Entry(ProfileState.ready,
             Clock.currTime.toUnixTime!long(), profile));
@@ -254,7 +259,7 @@ struct ProfileCache
     void storeFailure(string userId, string error)
     {
         remember(userId, Entry(ProfileState.failed,
-            Clock.currTime.toUnixTime!long(), UserProfile.init, error));
+            Clock.currTime.toUnixTime!long(), T.init, error));
     }
 
     /// Forget one entry, back to holding nothing for it.
@@ -309,7 +314,7 @@ private:
         ProfileState state;
         /// When it was requested (pending), stored (ready), or failed.
         long stamp;
-        UserProfile profile;
+        T profile;
         string error;
     }
 
@@ -332,6 +337,9 @@ private:
         }
     }
 }
+
+/// Cache of fetched user profiles.
+alias ProfileCache = CacheOf!UserProfile;
 
 /// The profile page's subject: the roster half, the fetched half, and where
 /// that fetch stands.

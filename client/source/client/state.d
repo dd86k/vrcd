@@ -120,6 +120,10 @@ public import vrcd.friends : FriendInfo, InstanceGroup;
 public import client.profiles : BadgeInfo, ProfileCache, ProfileLookup,
     ProfileState, ProfileView, UserProfile;
 
+/// Groups: the list and the cache of group pages.
+public import client.groups : GroupAction, GroupCache, GroupEntry, GroupLookup,
+    GroupProfile, groupCode;
+
 /// Rules live on the server; the state holds the last set it broadcast.
 public import vrcd.promotions : PromotionRule;
 
@@ -150,7 +154,7 @@ struct ArmedConfirm
 
 /// Sub-pages of the TOOLS tab.
 enum ToolsPage { main, stripMetadata, friendList, muteList, blockList,
-    promotionRules, promotionEdit, promotionPickUser }
+    promotionRules, promotionEdit, promotionPickUser, groupList, groupDetail }
 
 /// Top-level tabs. The active one lives in the UI, but which tab a profile
 /// came from is part of where the app stands, like ToolsPage is.
@@ -413,6 +417,22 @@ struct AppState
     // Moderation/friendship actions queued by the UI, drained by gui.d.
     ModerationAction[] pendingModerationActions;
     bool moderationActionInFlight;
+
+    // Groups the user is in, from the server `groups` message.
+    GroupEntry[] groups;
+    bool groupsLoaded;
+    bool groupsLoading;
+    string groupsError;
+    bool refreshGroupsRequested;
+    // The group page's subject, and the tab it was opened from.
+    string groupDetailId;
+    string groupDetailName;
+    Tab groupReturnTab;
+    GroupCache groupPanes;
+    // Group IDs to fetch and actions to send, drained by gui.d.
+    string[] pendingGroupRequests;
+    GroupAction[] pendingGroupActions;
+    bool groupActionInFlight;
 
     // Notification promotion rules, as the server last broadcast them.
     PromotionRule[] promotionRules;
@@ -847,6 +867,30 @@ struct AppState
         if (startFetch)
             pendingProfileRequests ~= view.userId;
         return view;
+    }
+
+    /// The user's entry for a group, or null when not listed.
+    GroupEntry* findGroup(string groupId)
+    {
+        foreach (ref GroupEntry g; groups)
+        {
+            if (g.id == groupId)
+                return &g;
+        }
+        return null;
+    }
+
+    /// The open group page, queueing a fetch when nothing usable is held.
+    GroupLookup groupSubject()
+    {
+        if (groupDetailId.length == 0)
+            return GroupLookup.init;
+
+        bool startFetch;
+        GroupLookup found = groupPanes.lookup(groupDetailId, startFetch);
+        if (startFetch)
+            pendingGroupRequests ~= groupDetailId;
+        return found;
     }
 
     /// Remove a notification by its VRChat ID.

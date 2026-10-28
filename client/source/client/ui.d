@@ -24,7 +24,7 @@ import client.notifications : notifyEventLabels, feedEventLabels, feedFilterSect
 import client.imagecache : imageKey, getIconId;
 import client.renderer : window_width, window_height;
 import client.connection : PROTOCOL_BOOP, PROTOCOL_MODERATION, PROTOCOL_PROFILES,
-    PROTOCOL_PROMOTIONS, PROTOCOL_STATUS_RULES;
+    PROTOCOL_PROMOTIONS, PROTOCOL_STATUS_RULES, PROTOCOL_GROUPS;
 import client.gui : wasClick, requestRepaint;
 import client.state;
 import client.stream : tlsAvailable;
@@ -108,6 +108,22 @@ private void goBack(AppState* state)
         requestRepaint();
         return;
     }
+    // A group page goes back to wherever it was opened from: the group list,
+    // or another tab when a notification opened it.
+    if (activeTab == Tab.tools && state.toolsPage == ToolsPage.groupDetail)
+    {
+        state.groupDetailId = null;
+        state.armedConfirm = ArmedConfirm.init;
+        if (state.groupReturnTab != Tab.tools)
+        {
+            state.toolsPage = ToolsPage.main;
+            activeTab = state.groupReturnTab;
+        }
+        else
+            state.toolsPage = ToolsPage.groupList;
+        requestRepaint();
+        return;
+    }
     // The rule pages nest, and Back out of the friend picker landing on TOOLS
     // would throw the rule being edited away with it.
     if (activeTab == Tab.tools && (state.toolsPage == ToolsPage.promotionEdit
@@ -134,6 +150,21 @@ private void openProfile(AppState* state, string userId)
     activeTab = Tab.profile;
     // The click is answered: nothing on the page we are leaving, and nothing
     // on the one we are arriving at, gets to act on it too.
+    wasClick = false;
+    requestRepaint();
+}
+
+/// Open a group's page under TOOLS, remembering where to come back to.
+private void openGroup(AppState* state, string groupId, string name)
+{
+    if (groupId.length == 0)
+        return;
+    state.groupDetailId = groupId;
+    state.groupDetailName = name;
+    state.groupReturnTab = activeTab;
+    state.armedConfirm = ArmedConfirm.init;
+    state.toolsPage = ToolsPage.groupDetail;
+    activeTab = Tab.tools;
     wasClick = false;
     requestRepaint();
 }
@@ -2507,6 +2538,9 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
             const(char)[] from = n.info.senderName;
             if (from.length == 0 && n.info.title != label)
                 from = n.info.title;
+            // Still a way into the group when VRChat gave no title.
+            if (from.length == 0 && n.info.senderUserId.startsWith("grp_"))
+                from = "View group";
 
             // The head line doubles as the top of the entry: the spine is
             // drawn at the end, once the rows below have given it a height.
@@ -2518,7 +2552,19 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
             if (from.length > 0)
             {
                 mu_layout_row(ctx, 1, fullCol.ptr, 0);
-                notifLine(ctx, from, ctx.style.colors[MU_COLOR_TEXT]);
+                mu_Rect fromRect = notifLine(ctx, from, ctx.style.colors[MU_COLOR_TEXT]);
+
+                // The group is the sender of a group notification, so its
+                // line opens the group's page.
+                if (n.info.senderUserId.startsWith("grp_"))
+                {
+                    bool over = mu_mouse_over(ctx, fromRect) != 0;
+                    if (over && ctx.mouse_down == 0)
+                        mu_draw_box(ctx, fromRect, mu_Color(90, 110, 150, 255));
+                    if (wasClick && over)
+                        openGroup(state, n.info.senderUserId,
+                            from == "View group" ? null : from.idup);
+                }
             }
             if (n.info.message.length > 0)
             {
@@ -3759,6 +3805,8 @@ private void drawToolsTab(mu_Context* ctx, AppState* state, int scrollDelta)
         case ToolsPage.promotionRules:    drawPromotionRulesPage(ctx, state, scrollDelta);    return;
         case ToolsPage.promotionEdit:     drawPromotionEditPage(ctx, state, scrollDelta);     return;
         case ToolsPage.promotionPickUser: drawPromotionPickUserPage(ctx, state, scrollDelta); return;
+        case ToolsPage.groupList:         drawGroupListPage(ctx, state, scrollDelta);         return;
+        case ToolsPage.groupDetail:       drawGroupDetailPage(ctx, state, scrollDelta);       return;
     }
 
     static immutable int[1] fullCol  = [-1];
@@ -3787,6 +3835,14 @@ private void drawToolsTab(mu_Context* ctx, AppState* state, int scrollDelta)
         state.toolsPage = ToolsPage.blockList;
         if (state.moderationsLoaded == false)
             state.refreshModerationsRequested = true;
+    }
+
+    mu_layout_row(ctx, COLCOUNT, fullCol.ptr, 60);
+    if (clickButton(ctx, "Groups"))
+    {
+        state.toolsPage = ToolsPage.groupList;
+        if (state.groupsLoaded == false)
+            state.refreshGroupsRequested = true;
     }
 
     spacer(ctx);
@@ -4280,6 +4336,407 @@ private void drawModerationListPage(mu_Context* ctx, AppState* state, int scroll
     }
 
     if (state.moderationActionInFlight)
+    {
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        mu_label(ctx, "Working...");
+    }
+
+    mu_end_panel(ctx);
+}
+
+/// Why groups cannot be shown right now, or null when they can.
+private string groupsUnavailable(AppState* state)
+{
+    if (state.connected == false)
+        return "Not connected.";
+    if (state.serverProtocol < PROTOCOL_GROUPS)
+        return "Server too old for groups (needs protocol 18).";
+    return null;
+}
+
+/// A group icon, or the name's initial on a tile while there is none.
+private void drawGroupIcon(mu_Context* ctx, AppState* state, string fileId,
+    long fileVersion, string name, mu_Rect r, int size)
+{
+    if (fileId.length > 0 && fileVersion > 0)
+    {
+        string key = imageKey(fileId, fileVersion, size);
+        int iconId = getIconId(key);
+        if (iconId > 0)
+        {
+            mu_draw_icon(ctx, iconId, r, mu_Color(255, 255, 255, 255));
+            return;
+        }
+        if ((key in state.failedImages) is null)
+            state.pendingImageRequests ~= ImageRequest(fileId, fileVersion, size);
+    }
+
+    mu_draw_rect(ctx, r, mu_Color(52, 58, 72, 255));
+    if (name.length == 0)
+        return;
+
+    size_t n = 1;
+    try
+        n = stride(name, 0);
+    catch (UTFException)
+        n = 1;
+    if (n > name.length)
+        n = name.length;
+    mu_draw_control_text(ctx, name[0 .. n], r, MU_COLOR_TEXT, MU_OPT_ALIGNCENTER);
+}
+
+/// TOOLS > Groups: the groups you are in, each row opening its page.
+private void drawGroupListPage(mu_Context* ctx, AppState* state, int scrollDelta)
+{
+    static immutable int[1] fullCol = [-1];
+    enum int rowH = 64;
+    enum mu_Color dimColor = mu_Color(150, 155, 165, 255);
+
+    mu_begin_panel(ctx, "GroupListPanel");
+    applyScroll(ctx, scrollDelta);
+
+    mu_layout_row(ctx, 1, fullCol.ptr, 60);
+    if (clickButton(ctx, state.groupsLoading ? "Refreshing..." : "Refresh"))
+        state.refreshGroupsRequested = true;
+
+    string why = groupsUnavailable(state);
+    if (why)
+    {
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        mu_label(ctx, why);
+    }
+
+    if (state.groupsError.length > 0)
+    {
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        mu_label(ctx, state.groupsError);
+    }
+
+    if (state.groupsLoaded && state.groups.length == 0)
+    {
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        mu_label(ctx, "You are not in any group.");
+    }
+    else if (state.groupsLoaded == false && why is null && state.groupsError.length == 0)
+    {
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        mu_label(ctx, "Loading...");
+    }
+
+    int padX = ctx.style.padding;
+    foreach (size_t i, ref GroupEntry g; state.groups)
+    {
+        static immutable int[2] cols = [rowH, -1];
+        mu_layout_row(ctx, 2, cols.ptr, rowH);
+        mu_Rect iconCell = manageRowBand(ctx, i);
+        drawGroupIcon(ctx, state, g.iconFileId, g.iconVersion, g.name,
+            mu_Rect(iconCell.x + 4, iconCell.y + 4, rowH - 8, rowH - 8), 128);
+
+        mu_Rect textCell = mu_layout_next(ctx);
+        mu_Rect whole = mu_Rect(iconCell.x, iconCell.y,
+            textCell.x + textCell.w - iconCell.x, rowH);
+        bool mouseOver = mu_mouse_over(ctx, whole) != 0;
+        if (mouseOver && ctx.mouse_down == 0)
+            mu_draw_box(ctx, whole, mu_Color(90, 110, 150, 255));
+
+        mu_draw_text(ctx, ctx.style.font, g.name.length > 0 ? g.name : g.id,
+            mu_Vec2(textCell.x + padX, textCell.y + 8), ctx.style.colors[MU_COLOR_TEXT]);
+
+        char[128] subBuf = void;
+        char[24] countBuf = void;
+        string[3] sub;
+        size_t nSub;
+        string code = groupCode(g.shortCode, g.discriminator);
+        sub[nSub++] = code;
+        sub[nSub++] = cast(string) sformat(countBuf, "%d members", g.memberCount);
+        if (g.isRepresenting)
+            sub[nSub++] = "Representing";
+        mu_draw_text(ctx, ctx.style.font, cast(string) joinPieces(subBuf, sub[0 .. nSub], " . "),
+            mu_Vec2(textCell.x + padX, textCell.y + 34), dimColor);
+
+        if (wasClick && mouseOver)
+            openGroup(state, g.id, g.name);
+    }
+
+    mu_end_panel(ctx);
+}
+
+/// A group's page: what it is, then what you can do about being in it. The
+/// list entry is live and the fetched page is not, so representation and
+/// visibility come from the list when the group is listed.
+private void drawGroupDetailPage(mu_Context* ctx, AppState* state, int scrollDelta)
+{
+    import std.string : startsWith;
+
+    static immutable int[1] fullCol = [-1];
+    static immutable int[2] labelValCols = [120, -1];
+    enum int iconSize = 128;
+    enum int lineStep = 26;
+    enum mu_Color dimColor = mu_Color(150, 155, 165, 255);
+    enum mu_Color lineColor = mu_Color(50, 50, 60, 255);
+
+    string id = state.groupDetailId;
+    GroupLookup found = state.groupSubject();
+    GroupProfile p = found.profile;
+    GroupEntry* listed = state.findGroup(id);
+
+    string name = p.name;
+    if (name.length == 0 && listed)
+        name = listed.name;
+    if (name.length == 0)
+        name = state.groupDetailName.length > 0 ? state.groupDetailName : id;
+
+    // Once the list is in, it is the authority on membership. The page may
+    // predate a join or a leave made elsewhere.
+    bool member = state.groupsLoaded
+        ? listed !is null
+        : (found.state == ProfileState.ready && p.membershipStatus == "member");
+    bool representing = listed ? listed.isRepresenting : p.isRepresenting;
+    string visibility = listed ? listed.visibility : p.visibility;
+    string iconFileId = p.iconFileId.length > 0 ? p.iconFileId : (listed ? listed.iconFileId : null);
+    long iconVersion = p.iconFileId.length > 0 ? p.iconVersion : (listed ? listed.iconVersion : 0);
+    string ownerId = p.ownerId.length > 0 ? p.ownerId : (listed ? listed.ownerId : null);
+    long members = p.memberCount > 0 ? p.memberCount : (listed ? listed.memberCount : 0);
+
+    mu_begin_panel(ctx, "GroupDetailPanel");
+    applyScroll(ctx, scrollDelta);
+
+    // Header: icon on the left, who this is on the right.
+    int[2] headCols = [iconSize + ctx.style.spacing, -1];
+    mu_layout_row(ctx, 2, headCols.ptr, iconSize);
+    mu_Rect iconCell = mu_layout_next(ctx);
+    drawGroupIcon(ctx, state, iconFileId, iconVersion, name,
+        mu_Rect(iconCell.x, iconCell.y, iconSize, iconSize), 256);
+
+    mu_Rect textCell = mu_layout_next(ctx);
+    int y = textCell.y + 4;
+    void line(const(char)[] text, mu_Color color)
+    {
+        if (text.length == 0)
+            return;
+        mu_draw_text(ctx, ctx.style.font, cast(string) text, mu_Vec2(textCell.x, y), color);
+        y += lineStep;
+    }
+
+    line(name, ctx.style.colors[MU_COLOR_TEXT]);
+
+    char[160] markBuf = void;
+    string[4] marks;
+    size_t nMarks;
+    marks[nMarks++] = groupCode(p.shortCode, p.discriminator);
+    if (p.isVerified)
+        marks[nMarks++] = "Verified";
+    if (p.privacy == "private")
+        marks[nMarks++] = "Private";
+    line(joinPieces(markBuf, marks[0 .. nMarks], " . "), dimColor);
+
+    char[96] countBuf = void;
+    if (members > 0)
+        line(p.onlineMemberCount > 0
+            ? sformat(countBuf, "%d members, %d online", members, p.onlineMemberCount)
+            : sformat(countBuf, "%d members", members), dimColor);
+
+    string standing;
+    if (member)
+        standing = representing ? "Member . Representing" : "Member";
+    else if (p.membershipStatus == "requested")
+        standing = "Join requested";
+    else if (p.membershipStatus == "invited")
+        standing = "Invited";
+    else
+        switch (p.joinState)
+        {
+            case "open":    standing = "Open to join"; break;
+            case "request": standing = "Join by request"; break;
+            case "invite":  standing = "Invite only"; break;
+            case "closed":  standing = "Closed"; break;
+            default:
+        }
+    line(standing, ctx.style.colors[MU_COLOR_TEXT]);
+
+    mu_layout_row(ctx, 1, fullCol.ptr, 1);
+    mu_draw_rect(ctx, mu_layout_next(ctx), lineColor);
+
+    string why = groupsUnavailable(state);
+    final switch (found.state) with (ProfileState)
+    {
+    case pending:
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        mu_label(ctx, why ? why : "Loading group...");
+        break;
+
+    case failed:
+        char[192] errBuf = void;
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        mu_label(ctx, cast(string) sformat(errBuf, "Group unavailable: %s", found.error));
+        mu_layout_row(ctx, 1, fullCol.ptr, 60);
+        if (clickButton(ctx, "Retry"))
+        {
+            state.groupPanes.forget(id);
+            requestRepaint();
+        }
+        break;
+
+    case ready:
+        break;
+    }
+
+    if (p.description.length > 0)
+    {
+        spacer(ctx);
+        sectionHeader(ctx, "About");
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        mu_text(ctx, p.description);
+    }
+
+    if (p.rules.length > 0)
+    {
+        spacer(ctx);
+        sectionHeader(ctx, "Rules");
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        mu_text(ctx, p.rules);
+    }
+
+    if (p.links.length > 0)
+    {
+        spacer(ctx);
+        sectionHeader(ctx, "Links");
+        foreach (string link; p.links)
+        {
+            if (isWebLink(link))
+            {
+                mu_layout_row(ctx, 1, fullCol.ptr, 40);
+                if (clickButton(ctx, link))
+                    openBrowser(link);
+            }
+            else
+            {
+                mu_layout_row(ctx, 2, labelValCols.ptr, 0);
+                mu_label(ctx, "Link");
+                clickableValue(ctx, state, link);
+            }
+        }
+    }
+
+    spacer(ctx);
+    sectionHeader(ctx, "Details");
+
+    void detail(string label, string value)
+    {
+        if (value.length == 0)
+            return;
+        mu_layout_row(ctx, 2, labelValCols.ptr, 0);
+        mu_label(ctx, label);
+        clickableValue(ctx, state, value);
+    }
+
+    // ISO dates, cut to the day.
+    static string day(string iso)
+    {
+        return iso.length >= 10 ? iso[0 .. 10] : iso;
+    }
+
+    if (p.languages.length > 0)
+    {
+        char[128] langBuf = void;
+        detail("Languages", cast(string) joinPieces(langBuf, p.languages, ", "));
+    }
+    detail("Created", day(p.createdAt));
+    if (member)
+    {
+        detail("Joined", day(p.joinedAt));
+        if (p.roles.length > 0)
+        {
+            char[192] roleBuf = void;
+            detail("Roles", cast(string) joinPieces(roleBuf, p.roles, ", "));
+        }
+    }
+    detail("Group ID", id);
+
+    bool busy = state.groupActionInFlight || why !is null;
+    void queue(string action, string value = null)
+    {
+        if (busy)
+            return;
+        state.pendingGroupActions ~= GroupAction(id, action, value);
+        setStatusFlash(state, "  Working...");
+    }
+
+    if (member)
+    {
+        spacer(ctx);
+        sectionHeader(ctx, "Membership");
+
+        mu_layout_row(ctx, 1, fullCol.ptr, 60);
+        if (toggleButton(ctx, "Represent", representing))
+            queue(representing ? "unrepresent" : "represent");
+
+        // Subscription is only in the fetched page. Without it the toggle
+        // would not know which way it points.
+        if (p.hasMember)
+        {
+            mu_layout_row(ctx, 1, fullCol.ptr, 60);
+            if (toggleButton(ctx, "Announcements", p.isSubscribedToAnnouncements))
+                queue(p.isSubscribedToAnnouncements ? "unsubscribe" : "subscribe");
+        }
+
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        mu_label(ctx, "Who sees you in this group");
+        static immutable string[3] visValues = [ "visible", "friends", "hidden" ];
+        static immutable string[3] visLabels = [ "Everyone", "Friends", "Nobody" ];
+        int third = mu_get_current_container(ctx).body_.w / 3 - ctx.style.spacing;
+        int[3] cols = [third, third, -1];
+        mu_layout_row(ctx, 3, cols.ptr, 60);
+        foreach (size_t i, string value; visValues)
+        {
+            bool on = visibility == value;
+            if (toggleButton(ctx, visLabels[i], on) && on == false)
+                queue("visibility", value);
+        }
+    }
+    else
+    {
+        string label, action;
+        if (p.membershipStatus == "requested")
+        {
+            label = "Cancel Request";
+            action = "cancel_request";
+        }
+        else if (p.membershipStatus == "invited")
+        {
+            label = "Accept Invite";
+            action = "join";
+        }
+        else if (p.joinState == "open")
+        {
+            label = "Join";
+            action = "join";
+        }
+        else if (p.joinState == "request")
+        {
+            label = "Request to Join";
+            action = "join";
+        }
+
+        if (action.length > 0)
+        {
+            spacer(ctx);
+            mu_layout_row(ctx, 1, fullCol.ptr, 60);
+            if (clickButton(ctx, label))
+                queue(action);
+        }
+    }
+
+    // An owner cannot leave, VRChat wants ownership handed over first.
+    if (member && ownerId != state.selfUserId)
+    {
+        spacer(ctx);
+        sectionHeader(ctx, "Manage");
+        if (confirmButton(ctx, state, "leave", id, "Leave Group", "Confirm Leave"))
+            queue("leave");
+    }
+
+    if (state.groupActionInFlight)
     {
         mu_layout_row(ctx, 1, fullCol.ptr, 0);
         mu_label(ctx, "Working...");

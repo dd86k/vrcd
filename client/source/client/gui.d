@@ -32,6 +32,7 @@ import client.stream : loadTLS, Stream;
 import client.imagecache;
 import client.logwatcher;
 import client.notifications;
+import client.groups : parseGroupEntry, parseGroupProfile;
 import client.profiles : parseUserProfile;
 import client.renderer;
 import client.settings;
@@ -677,6 +678,7 @@ private void eventLoop(mu_Context* uictx)
                         // failed for a reason that no longer holds. Dropping
                         // those makes an open page fetch again on its own.
                         appState.profiles.dropUnresolved();
+                        appState.groupPanes.dropUnresolved();
                         // Don't reset dapPairState here. The server sends its
                         // dap_status snapshot right after auth_ok, so by the
                         // time we observe this `connected` transition the
@@ -719,6 +721,9 @@ private void eventLoop(mu_Context* uictx)
                         // Profiles already fetched stay readable; a request
                         // whose reply died with the socket does not.
                         appState.profiles.dropUnresolved();
+                        appState.groupsLoading = false;
+                        appState.groupActionInFlight = false;
+                        appState.groupPanes.dropUnresolved();
                     }
                     break;
             }
@@ -818,6 +823,20 @@ private void eventLoop(mu_Context* uictx)
                 conn.requestModerations();
                 appState.moderationsLoading = true;
                 appState.moderationsError = null;
+            }
+        }
+
+        // Handle the group list refresh request.
+        if (appState.refreshGroupsRequested)
+        {
+            appState.refreshGroupsRequested = false;
+            if (conn && appState.connected &&
+                conn.serverVersion >= PROTOCOL_GROUPS &&
+                appState.groupsLoading == false)
+            {
+                conn.requestGroups();
+                appState.groupsLoading = true;
+                appState.groupsError = null;
             }
         }
 
@@ -1145,6 +1164,25 @@ private void eventLoop(mu_Context* uictx)
             appState.pendingProfileRequests.length = 0;
         }
 
+        // Dispatch queued group page requests, answering here the ones that
+        // cannot be sent, on the same terms as profiles.
+        if (appState.pendingGroupRequests.length > 0)
+        {
+            bool canFetch = conn && appState.connected
+                && conn.serverVersion >= PROTOCOL_GROUPS;
+            foreach (string groupId; appState.pendingGroupRequests)
+            {
+                if (canFetch)
+                    conn.requestGroup(groupId);
+                else if (appState.connected == false)
+                    appState.groupPanes.storeFailure(groupId, "Not connected");
+                else
+                    appState.groupPanes.storeFailure(groupId,
+                        "Server too old for groups (needs protocol 18)");
+            }
+            appState.pendingGroupRequests.length = 0;
+        }
+
         // Drain queued content management actions.
         if (appState.pendingContentActions.length > 0)
         {
@@ -1214,6 +1252,18 @@ private void eventLoop(mu_Context* uictx)
                 }
             }
             appState.pendingModerationActions.length = 0;
+        }
+
+        // Drain queued group actions.
+        if (appState.pendingGroupActions.length > 0)
+        {
+            if (conn && appState.connected && conn.serverVersion >= PROTOCOL_GROUPS)
+            {
+                foreach (ref GroupAction act; appState.pendingGroupActions)
+                    conn.sendGroupAction(act.groupId, act.action, act.value);
+                appState.groupActionInFlight = true;
+            }
+            appState.pendingGroupActions.length = 0;
         }
 
         // Handle upload request from the inventory tab.
@@ -1916,6 +1966,18 @@ private void drainNetworkMessages()
                 applyUserReply(msg);
                 break;
 
+            case "groups":
+                applyGroupsSnapshot(msg);
+                break;
+
+            case "group":
+                applyGroupReply(msg);
+                break;
+
+            case "group_action_result":
+                applyGroupActionResult(msg);
+                break;
+
             case "delete_file_result", "delete_print_result",
                 "set_user_icon_result", "inventory_action_result":
                 applyContentActionResult(msgType, msg);
@@ -2262,6 +2324,115 @@ private void applyUserReply(JSONValue msg)
     else
         appState.profiles.storeFailure(userId, "Empty profile");
     requestRepaint();
+}
+
+/// Apply a `groups` message: a reply, a broadcast, or a failed refresh. A
+/// failure keeps the list on screen.
+private void applyGroupsSnapshot(JSONValue msg)
+{
+    appState.groupsLoading = false;
+
+    if (const(JSONValue)* v = "error" in msg)
+    {
+        appState.groupsError = v.type == JSONType.string ? v.str : "Unknown error";
+        requestRepaint();
+        return;
+    }
+
+    GroupEntry[] list;
+    if (const(JSONValue)* jgroups = "groups" in msg)
+    {
+        if (jgroups.type == JSONType.array)
+            foreach (const(JSONValue) v; jgroups.array)
+            {
+                GroupEntry e = parseGroupEntry(v);
+                if (e.id.length > 0)
+                    list ~= e;
+            }
+    }
+
+    appState.groups = list;
+    appState.groupsLoaded = true;
+    appState.groupsError = null;
+    requestRepaint();
+}
+
+/// Apply a `group` reply into the page cache.
+private void applyGroupReply(JSONValue msg)
+{
+    string groupId;
+    if (const(JSONValue)* v = "group_id" in msg)
+        if (v.type == JSONType.string)
+            groupId = v.str;
+    if (groupId.length == 0)
+        return;
+
+    const(JSONValue)* jok = "success" in msg;
+    const(JSONValue)* jgroup = "group" in msg;
+    if (jok is null || jok.type != JSONType.true_ || jgroup is null)
+    {
+        string errMsg;
+        if (const(JSONValue)* v = "error" in msg)
+            if (v.type == JSONType.string)
+                errMsg = v.str;
+        logWarn("group %s failed: %s", groupId, errMsg);
+        appState.groupPanes.storeFailure(groupId,
+            errMsg.length > 0 ? errMsg : "Group unavailable");
+        requestRepaint();
+        return;
+    }
+
+    appState.groupPanes.store(groupId, parseGroupProfile(*jgroup));
+    requestRepaint();
+}
+
+/// Apply a `group_action_result`: report it in the feed, and drop the cached
+/// page on success since its membership fields just went stale.
+private void applyGroupActionResult(JSONValue msg)
+{
+    appState.groupActionInFlight = false;
+
+    string action, groupId, name, membership, error;
+    if (const(JSONValue)* v = "action" in msg)            action = v.str;
+    if (const(JSONValue)* v = "group_id" in msg)          groupId = v.str;
+    if (const(JSONValue)* v = "name" in msg)              name = v.str;
+    if (const(JSONValue)* v = "membership_status" in msg) membership = v.str;
+    if (const(JSONValue)* v = "error" in msg)             error = v.str;
+    bool ok;
+    if (const(JSONValue)* v = "success" in msg)
+        ok = v.type == JSONType.true_;
+
+    if (name.length == 0)
+        name = groupId;
+
+    if (ok == false)
+    {
+        appState.addFeedEntry(0, "error", name, "Group " ~ action ~ " failed: " ~ error, timeNow(), "", false, EventSource.system);
+        requestRepaint();
+        return;
+    }
+
+    appState.groupPanes.forget(groupId);
+    appState.addFeedEntry(0, "system", name, groupActionLabel(action, membership),
+        timeNow(), "", false, EventSource.system);
+    requestRepaint();
+}
+
+/// Feed wording for a group action.
+private string groupActionLabel(string action, string membership)
+{
+    switch (action)
+    {
+        case "represent":      return "Representing";
+        case "unrepresent":    return "Stopped representing";
+        case "subscribe":      return "Announcements on";
+        case "unsubscribe":    return "Announcements off";
+        case "visibility":     return "Group visibility changed";
+        case "join":           return membership == "requested" ? "Requested to join" : "Joined group";
+        case "cancel_request": return "Join request cancelled";
+        case "leave":          return "Left group";
+        default:               return "Group action";
+    }
 }
 
 /// Apply a content management action result (delete/set icon/equip/...).

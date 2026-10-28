@@ -58,6 +58,10 @@ enum long PROTOCOL_PROMOTION_IDS = 16;
 /// that require a status (`statuses`).
 enum long PROTOCOL_STATUS_RULES = 17;
 
+/// Minimum server protocol version for groups (`get_groups`, `get_group`,
+/// `group_action`).
+enum long PROTOCOL_GROUPS = 18;
+
 /// How many events to ask a catch-up for.
 ///
 /// The feed keeps `FEED_CAPACITY` entries and back-fills the rest a page at a
@@ -316,6 +320,42 @@ class ServerConnection
         sendMessage(JSONValue([
             "type": JSONValue("get_moderations"),
         ]));
+    }
+
+    /// Request the user's groups. Server replies with `groups`, and
+    /// re-broadcasts it on change. Requires PROTOCOL_GROUPS.
+    void requestGroups()
+    {
+        logDebugging("requestGroups");
+        sendMessage(JSONValue([
+            "type": JSONValue("get_groups"),
+        ]));
+    }
+
+    /// Request one group's page. Server replies with `group`. Requires
+    /// PROTOCOL_GROUPS.
+    void requestGroup(string groupId)
+    {
+        logDebugging("requestGroup: %s", groupId);
+        sendMessage(JSONValue([
+            "type": JSONValue("get_group"),
+            "group_id": JSONValue(groupId),
+        ]));
+    }
+
+    /// Run a member-side group action. Server replies with
+    /// `group_action_result` and, on success, broadcasts `groups`.
+    void sendGroupAction(string groupId, string action, string value)
+    {
+        logDebugging("sendGroupAction: group=%s action=%s", groupId, action);
+        JSONValue msg = JSONValue([
+            "type": JSONValue("group_action"),
+            "group_id": JSONValue(groupId),
+            "action": JSONValue(action),
+        ]);
+        if (value.length > 0)
+            msg["value"] = JSONValue(value);
+        sendMessage(msg);
     }
 
     /// Request the pending notification snapshot. Server replies with
@@ -728,6 +768,8 @@ class ServerConnection
                 requestNotifications();
             if (serverVersion >= PROTOCOL_PROMOTIONS)
                 requestPromotions();
+            if (serverVersion >= PROTOCOL_GROUPS)
+                requestGroups();
             // Database counters. Present since the first protocol version, so
             // no gate; refreshed from the keepalive in the receive loop.
             requestStats();
