@@ -1,8 +1,3 @@
-    /* A group notification puts the group's own ID where a user ID goes and
-       sends no name with it. The title carries the row, and the row opens the
-       group. */
-    var fromUser = (entry.sender_user_id || "").indexOf("usr_") === 0;
-    var fromGroup = (entry.sender_user_id || "").indexOf("grp_") === 0;
 /* vrcd front-end.
  *
  * The page is a shell: a tab rail, a list column, and a detail pane. State
