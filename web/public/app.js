@@ -4072,7 +4072,7 @@ function rulePeople(body, draft, busy, max) {
         var q = draft.search.trim().toLowerCase();
         if (q === "") return;
         var picks = allFriends().filter(function (f) {
-            return rule.users.indexOf(f.userId) < 0 &&
+            return rule.users.indexOf(f.id) < 0 &&
                 (f.displayName || "").toLowerCase().indexOf(q) >= 0;
         }).slice(0, RULE_PICK_MAX);
         if (picks.length === 0) {
@@ -4087,7 +4087,7 @@ function rulePeople(body, draft, busy, max) {
             text.appendChild(el("div", "n", f.displayName));
             row.appendChild(text);
             row.onclick = function () {
-                rule.users.push(f.userId);
+                rule.users.push(f.id);
                 draft.search = "";
                 renderDetail();
             };
