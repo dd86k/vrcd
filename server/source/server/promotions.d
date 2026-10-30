@@ -2,9 +2,8 @@
 ///
 /// The server watches the stream whether or not a front-end is open, so a
 /// rule kept here fires for an unfriend at 4am; a rule kept in a front-end
-/// would only fire while somebody was looking. Rules are persisted in
-/// `server_state`. The notifications they produce are not: the events behind
-/// them are already in the log.
+/// would only fire while somebody was looking. Rules and the notifications
+/// they produce are both persisted in `server_state`.
 ///
 /// Copyright: dd86k <dd@dax.moe>
 /// License: BSD-3-Clause-Clear

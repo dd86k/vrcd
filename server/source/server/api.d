@@ -64,6 +64,9 @@ private enum int PROTOCOL_VERSION = 18;
 /// `server_state` key holding the promotion rules as a JSON array.
 private enum string PROMOTION_RULES_KEY = "promotion_rules";
 
+/// `server_state` key holding the promoted inbox entries.
+private enum string PROMOTED_NOTIFICATIONS_KEY = "promoted_notifications";
+
 /// Shortest gap between two re-seed passes. A pass paginates the whole
 /// friends list, so this is what keeps a reconnect storm -- or somebody
 /// leaning on the front-end's REFRESH -- from spending the rate limit.
@@ -105,6 +108,9 @@ class APIServer
     // One rule save at a time, so the running set, the stored set and the
     // order of the broadcasts agree.
     private Mutex promotionsSaveMutex;
+    // Saves the promoted entries one at a time, so an older copy never
+    // lands after a newer one.
+    private Mutex promotedSaveMutex;
     private WorldCache worldCache;
     private InstanceCache instanceCache;
     private UserProfileCache userProfiles;
@@ -158,8 +164,12 @@ class APIServer
         this.notificationsTracker = new NotificationsTracker();
         this.promotionRules = new PromotionRules();
         this.promotionsSaveMutex = new Mutex();
+        this.promotedSaveMutex = new Mutex();
         if (store)
+        {
             promotionRules.load(store.getState(PROMOTION_RULES_KEY));
+            notificationsTracker.loadPromoted(store.getState(PROMOTED_NOTIFICATIONS_KEY));
+        }
         this.userProfiles = new UserProfileCache();
         this.groupProfiles = new UserProfileCache();
         this.badgeImages = new BadgeImageService();
@@ -638,6 +648,7 @@ class APIServer
         NotificationInfo info = notificationsTracker.addPromoted(
             (long seq) => buildPromotedNotification(*rule, event, seq));
         logInfo("promoted %s to %s (rule %s)", event.typeRaw, info.id, rule.id);
+        savePromoted();
 
         JSONValue content = buildNotificationJSON(info);
         VRCEvent promoted = VRCEvent(EventType.unknown, "notification-promoted",
@@ -648,6 +659,16 @@ class APIServer
             ]).toString());
         broadcast(promoted, 0);
         broadcastNotificationsSnapshot();
+    }
+
+    /// Write the promoted inbox entries to the database.
+    void savePromoted()
+    {
+        if (store is null)
+            return;
+        synchronized (promotedSaveMutex)
+            store.setState(PROMOTED_NOTIFICATIONS_KEY,
+                notificationsTracker.buildPromotedState().toString());
     }
 
     /// Send the promotion rules to every authenticated client, so an edit
@@ -2458,7 +2479,10 @@ private class ClientHandler
                 result["error"] = JSONValue(action == "hide" ? "Already dismissed" : "Only dismiss applies");
             sendLine(result.toString() ~ "\n");
             if (removed)
+            {
+                server.savePromoted();
                 server.broadcastNotificationsSnapshot();
+            }
             return;
         }
 

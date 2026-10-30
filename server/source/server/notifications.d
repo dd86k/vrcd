@@ -9,7 +9,8 @@
 /// maintained from the events, re-broadcast on change. Deliberately not
 /// persisted to the database: VRChat's listing is the source of truth for
 /// what is still pending, and a stored inbox would resurrect notifications
-/// answered while the server was down.
+/// answered while the server was down. Promoted entries are the exception:
+/// VRChat has never heard of them, so the database is their only copy.
 ///
 /// Copyright: dd86k <dd@dax.moe>
 /// License: BSD-3-Clause-Clear
@@ -123,6 +124,52 @@ class NotificationsTracker
                 promoted = promoted[$ - PROMOTED_MAX .. $].dup;
             return info;
         }
+    }
+
+    /// Promoted entries and the last ID number handed out, as saved to the
+    /// database. The number is kept so a restart does not reuse IDs a
+    /// browser has already alerted on.
+    JSONValue buildPromotedState()
+    {
+        synchronized (mtx)
+        {
+            JSONValue[] items;
+            items.reserve(promoted.length);
+            foreach (ref NotificationInfo info; promoted)
+                items ~= buildNotificationJSON(info);
+            return JSONValue([
+                "seq": JSONValue(promotedSeq),
+                "notifications": JSONValue(items),
+            ]);
+        }
+    }
+
+    /// Restore what buildPromotedState saved. A value that no longer parses
+    /// is dropped.
+    void loadPromoted(string persisted)
+    {
+        if (persisted.length == 0)
+            return;
+        try
+        {
+            JSONValue state = parseJSON(persisted);
+            if (state.type != JSONType.object)
+                return;
+            NotificationInfo[] list = parseNotificationsMessage(state);
+            long seq;
+            if (const(JSONValue)* v = "seq" in state)
+                if (v.type == JSONType.integer)
+                    seq = v.integer;
+            sortOldestFirst(list);
+            if (list.length > PROMOTED_MAX)
+                list = list[$ - PROMOTED_MAX .. $];
+            synchronized (mtx)
+            {
+                promoted = list;
+                promotedSeq = seq;
+            }
+        }
+        catch (JSONException) {}
     }
 
     /// Take entries out by ID (an answer observed on the wire, or one made
@@ -268,6 +315,20 @@ unittest
     t.replaceAll([ mkInfo("not_a", 100) ]);
     snap = t.buildNotificationsMessage();
     assert(snap["notifications"][1]["id"].str == "user_notification_1");
+
+    // Saved and loaded into a fresh tracker, the entry and the ID count
+    // both come back. VRChat's own inbox does not.
+    NotificationsTracker reloaded = new NotificationsTracker();
+    reloaded.loadPromoted(t.buildPromotedState().toString());
+    snap = reloaded.buildNotificationsMessage();
+    assert(snap["notifications"].array.length == 1);
+    assert(snap["notifications"][0]["id"].str == "user_notification_1");
+    added = reloaded.addPromoted((long seq) =>
+        mkInfo("user_notification_" ~ (seq == 2 ? "2" : "?"), 400));
+    assert(added.id == "user_notification_2");
+    reloaded.loadPromoted("not json");
+    reloaded.loadPromoted(`[1,2]`);
+    assert(reloaded.buildNotificationsMessage()["notifications"].array.length == 2);
 
     assert(t.remove([ "user_notification_1" ]));
     assert(t.remove([ "user_notification_1" ]) == false);
