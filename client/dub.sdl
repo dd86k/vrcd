@@ -7,7 +7,7 @@ license "BSD-3-Clause-Clear"
 
 dependency "bindbc-sdl" version="==2.4.2"
 dependency "ddlogger" repository="git+https://github.com/dd86k/ddlogger.git" version="dcab663a80d496c1d3c7fee4c406ed7f763e5fdb"
-dependency "ddui" repository="git+https://github.com/dd86k/ddui.git" version="b89172370942af639af8625a3f5a3978166f47a4"
+dependency "ddui" repository="git+https://github.com/dd86k/ddui.git" version="c9bff8942f85fbb282e5b9e3a3f74db213031ccf"
 
 # Needed when adding configurations
 mainSourceFile "source/client/main.d"
