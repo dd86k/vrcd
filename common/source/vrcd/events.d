@@ -36,7 +36,7 @@ immutable FeedEventType[] feedEventTypes = [
     FeedEventType("Active",            ["friend-active"],                                 true),
     FeedEventType("Friend Add",        ["friend-add"],                                    true),
     FeedEventType("Friend Remove",     ["friend-delete"],                                 true),
-    FeedEventType("Friend Update",     ["friend-update"],                                 true),
+    FeedEventType("Friend Update",     ["friend-update"],                                 false),
     FeedEventType("Friend Location",   ["friend-location"],                               true),
     // VRChat WS, self
     FeedEventType("Update",            ["user-update"],                                   true),

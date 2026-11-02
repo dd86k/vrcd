@@ -626,12 +626,7 @@ private void drawFeedTab(mu_Context* ctx, AppState* state, int scrollDelta)
                 int detailW = rowRect.w - (x - rowRect.x);
                 string detailText = entry.detail;
                 string swatchStatus;
-                if (entry.eventType == "friend-update")
-                {
-                    swatchStatus = entry.detail;
-                    detailText = null;
-                }
-                else if (entry.eventType == "status-change")
+                if (entry.eventType == "status-change")
                     swatchStatus = splitStatusLine(entry.detail, detailText);
                 if (swatchStatus.length > 0)
                 {
