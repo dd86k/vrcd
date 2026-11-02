@@ -625,15 +625,24 @@ private void drawFeedTab(mu_Context* ctx, AppState* state, int scrollDelta)
                 int detailX = x;
                 int detailW = rowRect.w - (x - rowRect.x);
                 string detailText = entry.detail;
-                if (entry.eventType == "friend-update" && entry.detail.length > 0)
+                string swatchStatus;
+                if (entry.eventType == "friend-update")
+                {
+                    swatchStatus = entry.detail;
+                    detailText = null;
+                }
+                else if (entry.eventType == "status-change")
+                    swatchStatus = splitStatusLine(entry.detail, detailText);
+                if (swatchStatus.length > 0)
                 {
                     enum int SWATCH = 14;
                     enum int SWATCH_MARGIN = 4;
                     mu_draw_rect(ctx, mu_Rect(detailX + SWATCH_MARGIN, y + (h - SWATCH) / 2, SWATCH, SWATCH),
-                        statusColor(entry.detail));
+                        statusColor(swatchStatus));
                     detailX += SWATCH_MARGIN + SWATCH + 4;
                     detailW -= SWATCH_MARGIN + SWATCH + 4;
-                    detailText = prettyStatus(entry.detail);
+                    if (detailText.length == 0)
+                        detailText = prettyStatus(swatchStatus);
                 }
                 mu_draw_control_text(ctx, detailText, mu_Rect(detailX, y, detailW, h), MU_COLOR_TEXT, 0);
 
@@ -5742,6 +5751,41 @@ private void applyScroll(mu_Context* ctx, int scrollDelta)
     if (maxScroll < 0) maxScroll = 0;
     if (panel.scroll.y > maxScroll)
         panel.scroll.y = maxScroll;
+}
+
+/// Status a `status-change` feed line starts with, or null, putting the
+/// message after it in `message` (whole line when no status matched).
+private string splitStatusLine(string line, out string message)
+{
+    static immutable string[] statuses = [ "active", "join me", "ask me", "busy" ];
+    enum string SEP = " — ";
+    message = line;
+    foreach (string s; statuses)
+    {
+        if (line.length < s.length || line[0 .. s.length] != s)
+            continue;
+        string rest = line[s.length .. $];
+        if (rest.length == 0)
+        {
+            message = null;
+            return s;
+        }
+        if (rest.length >= SEP.length && rest[0 .. SEP.length] == SEP)
+        {
+            message = rest[SEP.length .. $];
+            return s;
+        }
+    }
+    return null;
+}
+
+unittest
+{
+    string m;
+    assert(splitStatusLine("ask me — hi", m) == "ask me" && m == "hi");
+    assert(splitStatusLine("busy", m) == "busy" && m.length == 0);
+    assert(splitStatusLine("just text", m) is null && m == "just text");
+    assert(splitStatusLine("busybody", m) is null && m == "busybody");
 }
 
 /// Map VRChat status enum values to readable names.
