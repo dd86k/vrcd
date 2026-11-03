@@ -33,12 +33,17 @@ jobs:
         with:
           compiler: ldc-latest
 
-      # dub.selections.json pins every dependency, so it is the cache key: the
-      # git dependencies are clones that would otherwise be re-fetched per run.
+      # Keyed on the dub.sdl files, which pin every dependency. dub.selections.json
+      # is untracked, so hashing it gives a constant key that never refreshes.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.dub
-          key: dub-${{ runner.os }}-${{ hashFiles('dub.selections.json') }}
+          key: dub-${{ runner.os }}-${{ hashFiles('dub.sdl', '*/dub.sdl') }}
+
+      # Verbose to log the HTTP status when a registry fetch fails. -s for the
+      # subpackages, which is where every dependency is declared.
+      - name: Fetch dub packages
+        run: dub upgrade --missing-only -s -v
 
       - name: Test server
         run: dub test :server
@@ -81,7 +86,10 @@ jobs:
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/AppData/Local/dub
-          key: dub-${{ runner.os }}-${{ hashFiles('dub.selections.json') }}
+          key: dub-${{ runner.os }}-${{ hashFiles('dub.sdl', '*/dub.sdl') }}
+
+      - name: Fetch dub packages
+        run: dub upgrade --missing-only -s -v
 
       - name: Test client
         run: dub test :client
@@ -109,7 +117,10 @@ jobs:
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/AppData/Local/dub
-          key: dub-${{ runner.os }}-${{ hashFiles('dub.selections.json') }}
+          key: dub-${{ runner.os }}-${{ hashFiles('dub.sdl', '*/dub.sdl') }}
+
+      - name: Fetch dub packages
+        run: dub upgrade --missing-only -s -v
 
       - name: Build
         run: dub build :pipehelper --build=release
@@ -140,7 +151,10 @@ jobs:
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/AppData/Local/dub
-          key: dub-${{ runner.os }}-package-${{ hashFiles('dub.selections.json') }}
+          key: dub-${{ runner.os }}-package-${{ hashFiles('dub.sdl', '*/dub.sdl') }}
+
+      - name: Fetch dub packages
+        run: dub upgrade --missing-only -s -v
 
       # Keyed on the script, since that is where the pinned versions live: a
       # bump changes the hash and re-downloads, anything else reuses the zips.
@@ -202,7 +216,10 @@ jobs:
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.dub
-          key: dub-${{ runner.os }}-package-${{ hashFiles('dub.selections.json') }}
+          key: dub-${{ runner.os }}-package-${{ hashFiles('dub.sdl', '*/dub.sdl') }}
+
+      - name: Fetch dub packages
+        run: dub upgrade --missing-only -s -v
 
       - name: Install AppImage tooling
         run: |
@@ -291,7 +308,10 @@ jobs:
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.dub
-          key: dub-alpine-${{ hashFiles('dub.selections.json') }}
+          key: dub-alpine-${{ hashFiles('dub.sdl', '*/dub.sdl') }}
+
+      - name: Fetch dub packages
+        run: dub upgrade --missing-only -s -v
 
       # Tests run against shared libc, which is the point: this is the only job
       # that runs vrcd code on musl at all.
