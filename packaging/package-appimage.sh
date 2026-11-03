@@ -10,7 +10,10 @@ VERSION="$(cat "${SCRIPT_DIR}/VERSION")"
 BINARY="${SCRIPT_DIR}/client/vrcd_client"
 SERVER_BINARY="${SCRIPT_DIR}/server/vrcd_server"
 OUTPUT="${SCRIPT_DIR}/vrcd-client-${VERSION}-x86_64.AppImage"
-ICON="${SCRIPT_DIR}/res/vrcd-logo.png"
+# Desktop entry, icon, and AppStream metadata are the Flatpak's: one app ID,
+# the one the client sets as SDL_HINT_APP_ID.
+APP_ID="io.github.dd86k.vrcd"
+META_DIR="${SCRIPT_DIR}/packaging/flatpak"
 # Windows build of the :pipehelper subpackage ("Open in VRChat" IPC on
 # Linux). Built separately on Windows; bundled when present.
 PIPEHELPER_EXE="${PIPEHELPER_EXE:-${SCRIPT_DIR}/pipehelper/vrcd-pipehelper.exe}"
@@ -91,26 +94,19 @@ else
     echo "         \"Open in VRChat\" IPC will fall back to self-invite" >&2
 fi
 
-# Desktop entry
-cat > "${APPDIR}/vrcd-client.desktop" <<EOF
-[Desktop Entry]
-Name=vrcd Client
-Exec=vrcd_client
-Icon=vrcd-client
-Type=Application
-Categories=Utility;
-EOF
-
-# Icon (linuxdeploy expects it named to match Icon= field)
-cp "${ICON}" "${APPDIR}/vrcd-client.png"
+# appimagetool looks for <desktop file name>.appdata.xml only.
+mkdir -p "${APPDIR}/usr/share/metainfo"
+cp "${META_DIR}/${APP_ID}.desktop" "${APPDIR}/${APP_ID}.desktop"
+cp "${META_DIR}/${APP_ID}.png" "${APPDIR}/${APP_ID}.png"
+cp "${META_DIR}/${APP_ID}.metainfo.xml" "${APPDIR}/usr/share/metainfo/${APP_ID}.appdata.xml"
 
 echo "==> Bundling libraries with linuxdeploy..."
 run_tool linuxdeploy \
     --appdir "${APPDIR}" \
     --executable "${APPDIR}/usr/bin/vrcd_client" \
     --executable "${APPDIR}/usr/bin/vrcd_server" \
-    --desktop-file "${APPDIR}/vrcd-client.desktop" \
-    --icon-file "${APPDIR}/vrcd-client.png"
+    --desktop-file "${APPDIR}/${APP_ID}.desktop" \
+    --icon-file "${APPDIR}/${APP_ID}.png"
 
 # Fail loudly rather than shipping an AppImage that dies on a missing SDL3:
 # linuxdeploy reports a library it could not deploy as a warning and carries on.
