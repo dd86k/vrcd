@@ -38,12 +38,19 @@ import client.renderer;
 import client.settings;
 import client.state;
 import client.theme : background, themeStyle;
+import client.tray;
 import client.ui;
 import client.utils;
 
 /// Custom SDL event type for network wake-ups.
 /// __gshared: accessed by network thread (pushWakeEvent) and timer thread.
 private __gshared uint networkEventType;
+
+/// SDL event type for tray menu presses, see client.tray.
+private __gshared uint trayEventType;
+
+/// App icon, kept for the tray. Null when none was found.
+private SDL_Surface *appIcon;
 
 /// Timer callback ID.
 private SDL_TimerID timerID;
@@ -267,7 +274,7 @@ private bool loadSDLLibraries()
 
 int runGui(string host, ushort port, string secret, long sinceId,
     bool hostExplicit, bool portExplicit, bool secretExplicit, bool sinceExplicit,
-    bool hardwareAccel)
+    bool hardwareAccel, bool trayIcon)
 {
     // Load saved settings; CLI args override the active profile for this run.
     saved = loadSettings();
@@ -308,6 +315,9 @@ int runGui(string host, ushort port, string secret, long sinceId,
     // Load picture metadata setting into appState (bool -> int).
     appState.insertPictureMetadata = cast(int) saved.insertPictureMetadata;
 
+    // --tray turns the tray on for this run, the setting turns it on for good.
+    appState.trayEnabled = cast(int) (saved.tray || trayIcon);
+
     // Attempt to load OpenSSL for TLS support.
     loadTLS();
 
@@ -329,6 +339,8 @@ int runGui(string host, ushort port, string secret, long sinceId,
     // human-readable name shown to the user, into SDL_HINT_APP_ID.
     SDL_SetHint(SDL_HINT_APP_ID, "io.github.dd86k.vrcd");
     SDL_SetHint(SDL_HINT_APP_NAME, "vrcd");
+    // Closing the window quits or hides to the tray, the event loop decides.
+    SDL_SetHint(SDL_HINT_QUIT_ON_LAST_WINDOW_CLOSE, "0");
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) == false)
     {
         // SDL's own box needs a video driver too, so this is the one startup
@@ -408,6 +420,7 @@ int runGui(string host, ushort port, string secret, long sinceId,
 
     // Register custom SDL event for network wake-ups.
     networkEventType = SDL_RegisterEvents(1);
+    trayEventType = SDL_RegisterEvents(1);
 
     // Start 1-second timer for periodic status bar refresh.
     timerID = SDL_AddTimer(1000, &timerCallback, null);
@@ -453,6 +466,13 @@ private void eventLoop(mu_Context* uictx)
         bool gotEvent;
         if (hasMomentum || appState.isOpening())
             gotEvent = SDL_WaitEventTimeout(&e, 16);   // ~60 fps
+        else if (trayNeedsPolling && trayActive())
+        {
+            // Tray menu presses are only seen while SDL pumps events, which
+            // a blocking wait does not do on its own before SDL 3.4.
+            do gotEvent = SDL_WaitEventTimeout(&e, 50);
+            while (gotEvent == false);
+        }
         else
             gotEvent = SDL_WaitEvent(&e);
 
@@ -466,6 +486,21 @@ private void eventLoop(mu_Context* uictx)
             {
                 case SDL_EVENT_QUIT:
                     running = false;
+                    break;
+
+                case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+                    if (trayActive())
+                        SDL_HideWindow(window);
+                    else
+                        running = false;
+                    break;
+
+                case SDL_EVENT_WINDOW_SHOWN:
+                    traySetWindowVisible(true);
+                    break;
+
+                case SDL_EVENT_WINDOW_HIDDEN:
+                    traySetWindowVisible(false);
                     break;
 
                 // SDL3 gives each window change its own event type instead of
@@ -642,6 +677,13 @@ private void eventLoop(mu_Context* uictx)
                     // Handle custom network event and timer event.
                     if (e.type == networkEventType)
                         drainNetworkMessages();
+                    else if (e.type == trayEventType)
+                    {
+                        if (e.user.code == TrayAction.quit)
+                            running = false;
+                        else if (e.user.code == TrayAction.toggle)
+                            showWindow(windowHidden());
+                    }
                     break;
             }
             gotEvent = SDL_PollEvent(&e);
@@ -1044,6 +1086,8 @@ private void eventLoop(mu_Context* uictx)
         if (logWatcher)
             logWatcher.writeMetadata = appState.insertPictureMetadata != 0;
 
+        syncTray();
+
         // Handle test notification request from Settings tab.
         if (appState.testNotifyRequested)
         {
@@ -1274,6 +1318,10 @@ private void eventLoop(mu_Context* uictx)
             doInventoryUpload();
         }
 
+        // Hidden to the tray. Showing the window sends an event that redraws.
+        if (windowHidden())
+            continue;
+
         // Build UI
         mu_begin(uictx);
         drawFullWindow(uictx, &appState, pendingScrollY);
@@ -1338,6 +1386,9 @@ private void guiCleanup()
     saveSettings(saved);
     destroyFont();
     destroy_renderer();
+    trayDestroy();
+    if (appIcon)
+        SDL_DestroySurface(appIcon);
     SDL_DestroyWindow(window);
     TTF_Quit();
     SDL_Quit();
@@ -2758,7 +2809,8 @@ private void checkPlayerJoining(JSONValue msg, string user)
     }
 }
 
-/// Set the window icon from the first artwork found on disk.
+/// Set the window icon from the first artwork found on disk, and keep it as
+/// `appIcon` for the tray.
 ///
 /// The path used to be relative to the working directory, which is the
 /// repository root when the client is started from a shell and the home
@@ -2803,7 +2855,7 @@ private void setWindowIcon(SDL_Window *window)
         }
 
         SDL_SetWindowIcon(window, icon);
-        SDL_DestroySurface(icon); // SDL keeps its own copy
+        appIcon = icon; // the tray takes its own copy too
         logInfo("Window icon: %s", candidate);
         return;
     }
@@ -2811,6 +2863,46 @@ private void setWindowIcon(SDL_Window *window)
     logWarn("No window icon found, looked in:");
     foreach (string candidate; candidates)
         logWarn("  %s", candidate);
+}
+
+/// Whether the main window is hidden to the tray.
+private bool windowHidden()
+{
+    return (SDL_GetWindowFlags(window) & SDL_WINDOW_HIDDEN) != 0;
+}
+
+/// Show, unminimize and raise the main window when `visible`, else hide it.
+private void showWindow(bool visible)
+{
+    if (visible == false)
+    {
+        SDL_HideWindow(window);
+        return;
+    }
+    SDL_ShowWindow(window);
+    if (SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED)
+        SDL_RestoreWindow(window);
+    SDL_RaiseWindow(window);
+}
+
+/// Create or remove the tray icon to match the Settings toggle.
+private void syncTray()
+{
+    if (appState.trayEnabled && trayActive() == false)
+    {
+        string err = trayCreate(appIcon, trayEventType, windowHidden() == false);
+        appState.trayError = err;
+        // Unticked so a retry is one press, not a loop every frame.
+        if (err)
+            appState.trayEnabled = 0;
+    }
+    else if (appState.trayEnabled == 0 && trayActive())
+    {
+        trayDestroy();
+        // Nothing else could bring it back.
+        if (windowHidden())
+            showWindow(true);
+    }
 }
 
 /// Log platform, video driver, and library versions at startup.
@@ -3304,6 +3396,7 @@ private void doSaveSettings()
 
     // Picture metadata setting (int -> bool).
     s.insertPictureMetadata = appState.insertPictureMetadata != 0;
+    s.tray = appState.trayEnabled != 0;
 
     // The event cursor survives without being restored here: buffersToProfile
     // leaves it alone, and the profile array it wrote into is the same one

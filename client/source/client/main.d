@@ -115,6 +115,7 @@ int startvrcd(string[] args)
     bool verbose;
     bool cliMode;
     bool hardwareAccel;
+    bool trayIcon;
     bool showVersion;
     string logFilePath;
 
@@ -128,6 +129,7 @@ int startvrcd(string[] args)
         "verbose|v",  "Enable verbose logging", &verbose,
         "cli",        "CLI mode (no GUI)", &cliMode,
         "hardware",   "Allow hardware-accelerated framebuffer (default: software)", &hardwareAccel,
+        "tray",       "Show a system tray icon, closing the window hides it", &trayIcon,
         "log-file|L", "Append log output to file", &logFilePath,
         "version",    "Show version information and exit", &showVersion,
     );
@@ -188,7 +190,8 @@ int startvrcd(string[] args)
     logDebugging("main: host=%s port=%d sinceId=%d sinceSet=%s verbose=%s hardware=%s",
         host, port, sinceId, sinceSet, verbose, hardwareAccel);
 
-    try return runGui(host, port, secret, sinceId, hostSet, postSet, secretSet, sinceSet, hardwareAccel);
+    try return runGui(host, port, secret, sinceId, hostSet, postSet, secretSet, sinceSet,
+        hardwareAccel, trayIcon);
     catch (Exception ex)
     {
         // File logger or console logger can pick this up

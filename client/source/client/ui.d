@@ -5557,6 +5557,20 @@ private void drawRestOfSettings(mu_Context* ctx, AppState* state)
     mu_label(ctx, "Insert picture metadata");
     mu_checkbox(ctx, "", &state.insertPictureMetadata);
 
+    // Section: Window.
+    spacer(ctx);
+    sectionHeader(ctx, "Window");
+
+    mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
+    mu_label(ctx, "Tray icon (close hides)");
+    mu_checkbox(ctx, "", &state.trayEnabled);
+    if (state.trayError.length)
+    {
+        mu_layout_row(ctx, 2, labelFieldCols.ptr, 0);
+        mu_label(ctx, "Tray unavailable");
+        mu_label(ctx, state.trayError);
+    }
+
     // Section: VR notifications.
     spacer(ctx);
     sectionHeader(ctx, "VR Notifications");

@@ -557,6 +557,10 @@ struct AppState
     // Picture metadata insertion toggle (int for mu_checkbox compatibility).
     int insertPictureMetadata = 1;
 
+    // System tray toggle (int for mu_checkbox compatibility).
+    int trayEnabled;
+    string trayError;   // why the last attempt to create the tray failed
+
     // Tools tab
     ToolsPage toolsPage;
     string[] droppedFiles;  // strip metadata queue (also inventory upload source)

@@ -12,9 +12,15 @@ vrcd-client [options]
       --since    Catch-up from event ID
   -v, --verbose  Enable trace logging
       --cli      CLI mode (stream events to stdout)
+      --tray     System tray icon, closing the window hides it
 ```
 
 Settings are persisted to `~/.config/vrcd/settings.json` (Linux) or `%APPDATA%/vrcd/settings.json` (Windows).
+
+The tray icon is off by default. `--tray` turns it on for one run, and
+Settings > Window turns it on for good. On Linux it needs GTK 3 and
+libayatana-appindicator3 (or libappindicator3), and on GNOME the AppIndicator
+extension. Without them the setting reports the tray as unavailable.
 
 ### "Open in VRChat"
 

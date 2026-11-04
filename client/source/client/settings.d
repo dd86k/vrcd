@@ -84,6 +84,9 @@ struct Settings
     // Picture metadata
     bool insertPictureMetadata = true;
 
+    // System tray icon, closing the window hides it
+    bool tray;
+
     // Feed tab filter (which event types appear in the feed list).
     bool[feedEventLabels.length] feedEventVisible = feedEventDefaultVisible;
     bool feedShowSelfEvents;
@@ -338,6 +341,8 @@ Settings loadSettings()
         if (const(JSONValue) *jinsert_picture_metadata = "insert_picture_metadata" in json)
             if (jinsert_picture_metadata.type == JSONType.true_)
                 s.insertPictureMetadata = true;
+        if (const(JSONValue) *jtray = "tray" in json)
+            s.tray = jtray.type == JSONType.true_;
         if (const(JSONValue) *jfeed_show_self_events = "feed_show_self_events" in json)
             if (jfeed_show_self_events.type == JSONType.true_)
                 s.feedShowSelfEvents = true;
@@ -396,6 +401,7 @@ void saveSettings(Settings s)
         json["feed_event_visible"] = feedArr;
         json["insert_picture_metadata"] = s.insertPictureMetadata;
         json["feed_show_self_events"] = s.feedShowSelfEvents;
+        json["tray"] = s.tray;
 
         write(path, json.toPrettyString());
         logInfo("Settings saved to %s", path);
