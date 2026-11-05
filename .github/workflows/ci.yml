@@ -104,38 +104,6 @@ jobs:
       - name: Type-check server
         run: dub build :server -b syntax
 
-  build-pipehelper:
-    name: Build pipehelper (Windows)
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: dlang-community/setup-dlang@a6f7969b8b5dc3ff448c30f2c6749150795814f3 # v2
-        with:
-          compiler: dmd-latest
-
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/AppData/Local/dub
-          key: dub-${{ runner.os }}-${{ hashFiles('dub.sdl', '*/dub.sdl') }}
-
-      - name: Fetch dub packages
-        run: dub upgrade --missing-only -s -v
-
-      - name: Build
-        run: dub build :pipehelper --build=release
-
-      # Named for the platform it runs on, not the one that needs it: the file
-      # is a Windows executable, and a Linux client is what runs it (inside the
-      # game's Proton prefix). Downloading it on its own is for a .deb install,
-      # where it goes next to vrcd_client or in ~/.config/vrcd. The AppImage
-      # carries its own copy.
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: vrcd-pipehelper-windows-x86_64
-          path: pipehelper/vrcd-pipehelper.exe
-          if-no-files-found: error
-
   package-windows:
     name: Package (Windows)
     runs-on: windows-latest
@@ -195,7 +163,6 @@ jobs:
     # earlier than Ubuntu 25.04, and the AppImage needs it because it builds
     # -c static, so the floor moves to this image's glibc with the SDL3 port.
     runs-on: ubuntu-26.04
-    needs: build-pipehelper
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -207,7 +174,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libsdl3-dev libsdl3-ttf-dev libsdl3-image-dev libsqlite3-dev \
-            patchelf desktop-file-utils file
+            patchelf desktop-file-utils file lld
 
       - uses: dlang-community/setup-dlang@a6f7969b8b5dc3ff448c30f2c6749150795814f3 # v2
         with:
@@ -230,10 +197,20 @@ jobs:
           sudo mv linuxdeploy-x86_64.AppImage appimagetool-x86_64.AppImage /usr/local/bin/
 
       # The Windows build of the pipe helper, for "Open in VRChat" on Linux.
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      # Cross-built here so the AppImage bundles it without a Windows job.
+      - name: Build pipehelper
+        run: ./pipehelper/build.sh
+
+      # Named for the platform it runs on, not the one that needs it: the file
+      # is a Windows executable, and a Linux client is what runs it (inside the
+      # game's Proton prefix). Downloading it on its own is for a .deb install,
+      # where it goes next to vrcd_client or in ~/.config/vrcd. The AppImage
+      # carries its own copy.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: vrcd-pipehelper-windows-x86_64
-          path: pipehelper
+          path: pipehelper/vrcd-pipehelper.exe
+          if-no-files-found: error
 
       - name: Build AppImage
         # GitHub runners have no FUSE, so the tools cannot mount themselves;

@@ -15,7 +15,7 @@ OUTPUT="${SCRIPT_DIR}/vrcd-client-${VERSION}-x86_64.AppImage"
 APP_ID="io.github.dd86k.vrcd"
 META_DIR="${SCRIPT_DIR}/packaging/flatpak"
 # Windows build of the :pipehelper subpackage ("Open in VRChat" IPC on
-# Linux). Built separately on Windows; bundled when present.
+# Linux). Built by pipehelper/build.sh, bundled when present.
 PIPEHELPER_EXE="${PIPEHELPER_EXE:-${SCRIPT_DIR}/pipehelper/vrcd-pipehelper.exe}"
 
 # CLI flag for compiler; env var DC is also respected natively by dub
