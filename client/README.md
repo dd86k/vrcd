@@ -34,7 +34,8 @@ On Windows this works out of the box. On Linux the pipe lives in the game's
 wineserver, which runs inside a pressure-vessel container, so the write has
 to come from a Wine process attached to that same wineserver. Only one extra
 piece is needed for that: place a Windows build of `vrcd-pipehelper.exe` (the
-`pipehelper` subpackage) next to the client binary, or in `~/.config/vrcd/`.
+`pipehelper` subpackage, cross-built from Linux with `pipehelper/build.sh`) next
+to the client binary, or in `~/.config/vrcd/`.
 The AppImage bundles the helper and installs it to `~/.config/vrcd/` on
 launch.
 

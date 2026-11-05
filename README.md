@@ -84,11 +84,18 @@ first connected client. After connecting, you should be good to go!
 
 The pipehelper subpackage is used to make "Open in VRChat" button work.
 
-You'll need to make a Windows build of pipehelper with `dub build :pipehelper`
-in Windows, and place `vrcd-pipehelper.exe` next to the `vrcd_client` executable
-or in `~/.config/vrcd`. No Steam launch options are needed: the client runs the
-helper with the Proton build VRChat itself is running under, against the game's
-prefix, which attaches it to the wineserver holding the launch pipe.
+To make it work, you need a Windows build of it.
+
+- From Linux, `pipehelper/build.sh` cross-builds
+  `pipehelper/vrcd-pipehelper.exe` with LDC and lld-link (no Windows SDK needed).
+- On Windows, `dub build :pipehelper` does the same.
+
+Then, place `vrcd-pipehelper.exe` next to the `vrcd_client` executable or in
+`~/.config/vrcd`.
+
+No Steam launch options are needed: the client runs the helper with the Proton
+build VRChat itself is running under, against the game's prefix, which attaches
+it to the wineserver holding the launch pipe.
 
 If the helper is missing, or the IPC attempt fails, the client falls back
 to a server-side self-invite.
