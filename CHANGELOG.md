@@ -27,6 +27,8 @@ Rules:
   its group.
 - New theme. Text fields no longer blend into the background, and empty ones
   show a hint.
+- Feed filters: All On and All Off moved to the top, and Close is visible
+  again at the bottom.
 
 ### Server
 

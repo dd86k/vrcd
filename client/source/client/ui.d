@@ -409,8 +409,8 @@ private void drawFeedSearchBar(mu_Context* ctx)
 
 /// Draw the filter popup as a standalone window.
 ///
-/// Layout: a scroll panel containing sections of large checkbox rows
-/// (VR-friendly hit targets) plus a sticky bottom bar with bulk actions.
+/// Layout: bulk toggles on top, a scroll panel of large checkbox rows
+/// (VR-friendly hit targets), and Close pinned at the bottom.
 private void drawFeedFilterPopup(mu_Context* ctx, AppState* state, int scrollDelta)
 {
     if (filterPopupOpen == false)
@@ -428,12 +428,28 @@ private void drawFeedFilterPopup(mu_Context* ctx, AppState* state, int scrollDel
         mu_bring_to_front(ctx, pc);
 
         enum int rowH = 36;       // big touch target for VR
-        enum int btnRowH = 50;    // sticky bottom bar
+        enum int btnRowH = 50;    // bulk toggles and Close
         static immutable int[1] fullCol = [-1];
 
         bool changed;
 
-        // Scroll region: fills the popup minus the sticky bottom bar
+        int half = pc.body_.w / 2;
+        int[2] toggleCols = [half, -1];
+        mu_layout_row(ctx, 2, toggleCols.ptr, btnRowH);
+        if (mu_button(ctx, "All On"))
+        {
+            state.feedEventVisible[] = 1;
+            feedPage = 0;
+            changed = true;
+        }
+        if (mu_button(ctx, "All Off"))
+        {
+            state.feedEventVisible[] = 0;
+            feedPage = 0;
+            changed = true;
+        }
+
+        // Scroll region: fills the popup minus the Close row
         // (and the inter-row spacing the layout inserts between them).
         mu_layout_row(ctx, 1, fullCol.ptr, -(btnRowH + ctx.style.spacing));
         mu_begin_panel(ctx, "FilterScroll");
@@ -476,21 +492,7 @@ private void drawFeedFilterPopup(mu_Context* ctx, AppState* state, int scrollDel
 
         mu_end_panel(ctx);
 
-        // Sticky bottom bar
-        static immutable int[3] btnCols = [-2, -2, -1];
-        mu_layout_row(ctx, 3, btnCols.ptr, btnRowH);
-        if (mu_button(ctx, "All On"))
-        {
-            state.feedEventVisible[] = 1;
-            feedPage = 0;
-            changed = true;
-        }
-        if (mu_button(ctx, "All Off"))
-        {
-            state.feedEventVisible[] = 0;
-            feedPage = 0;
-            changed = true;
-        }
+        mu_layout_row(ctx, 1, fullCol.ptr, btnRowH);
         if (mu_button(ctx, "Close"))
             filterPopupOpen = false;
 
