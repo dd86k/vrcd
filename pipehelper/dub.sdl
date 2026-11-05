@@ -7,8 +7,17 @@ copyright "Copyright © 2026, dd86k <dd@dax.moe>"
 license "BSD-3-Clause-Clear"
 
 # No druntime and no C runtime: main.d brings its own entry point, which is
-# what lets build.sh cross-build it from Linux.
-buildOptions "betterC"
-dflags "-checkaction=halt"
-libs "kernel32" "shell32" platform="windows"
-lflags "/NODEFAULTLIB" "/SUBSYSTEM:CONSOLE" "/ENTRY:mainCRTStartup" platform="windows"
+# what lets build.sh cross-build it from Linux. The system libraries are
+# lflags because DMD turns libs into /DEFAULTLIB, which /NODEFAULTLIB drops.
+configuration "application" {
+	buildOptions "betterC"
+	dflags "-checkaction=halt"
+	lflags "/NODEFAULTLIB" "/SUBSYSTEM:CONSOLE" "/ENTRY:mainCRTStartup" platform="windows"
+	lflags "kernel32.lib" "shell32.lib" platform="windows"
+}
+
+# Full runtimes for dub test. As a library, dub generates the test runner.
+configuration "unittest" {
+	targetType "library"
+	excludedSourceFiles "source/main.d"
+}
