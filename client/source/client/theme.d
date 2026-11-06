@@ -58,6 +58,8 @@ enum mu_Color textDim       = mu_Color(150, 155, 165, 255);
 enum mu_Color textDisabled  = mu_Color(100, 100, 110, 255);
 /// Hint inside an empty textbox.
 enum mu_Color textHint      = mu_Color(110, 112, 125, 255);
+/// Text that opens something when pressed, drawn underlined.
+enum mu_Color linkText      = mu_Color(120, 170, 240, 255);
 /// Icon that is neither a yes nor a no.
 enum mu_Color iconPlain     = mu_Color(205, 210, 220, 255);
 /// Icon for a yes.

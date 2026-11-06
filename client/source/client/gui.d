@@ -33,7 +33,7 @@ import client.imagecache;
 import client.logwatcher;
 import client.notifications;
 import client.groups : parseGroupEntry, parseGroupProfile;
-import client.profiles : parseUserProfile;
+import client.profiles : parseUserProfile, testProfile;
 import client.renderer;
 import client.settings;
 import client.state;
@@ -1198,7 +1198,10 @@ private void eventLoop(mu_Context* uictx)
                 && conn.serverVersion >= PROTOCOL_PROFILES;
             foreach (string userId; appState.pendingProfileRequests)
             {
-                if (canFetch)
+                // The injected test sender is invented, like its moderations.
+                if (userId.startsWith("usr_test_"))
+                    appState.profiles.store(userId, testProfile(userId));
+                else if (canFetch)
                     conn.requestUser(userId);
                 else if (appState.connected == false)
                     appState.profiles.storeFailure(userId, "Not connected");

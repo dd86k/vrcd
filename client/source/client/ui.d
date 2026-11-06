@@ -2181,13 +2181,19 @@ private void drawProfileHeader(mu_Context* ctx, AppState* state, ref ProfileView
 private void drawProfileFace(mu_Context* ctx, AppState* state, ref ProfileView view,
     mu_Rect r)
 {
+    drawFace(ctx, state, view.imageFileId, view.imageVersion, view.displayName, r);
+}
+
+/// A face by file ID and version into r, or the initial of name on a tile
+/// while there is no picture.
+private void drawFace(mu_Context* ctx, AppState* state, string fileId,
+    long fileVersion, string name, mu_Rect r)
+{
     // The size the server is asked for. Twice the drawn size, since the same
     // thumbnail feeds the roster rows and a face scaled up looks worse than
     // one scaled down.
     enum int faceThumbnailSize = 256;
 
-    string fileId = view.imageFileId;
-    long fileVersion = view.imageVersion;
     if (fileId.length > 0 && fileVersion > 0)
     {
         string key = imageKey(fileId, fileVersion, faceThumbnailSize);
@@ -2207,7 +2213,6 @@ private void drawProfileFace(mu_Context* ctx, AppState* state, ref ProfileView v
     // the same for a moment, and the page does not move when it lands.
     mu_draw_rect(ctx, r, faceBg);
 
-    string name = view.displayName;
     if (name.length == 0)
         return;
 
@@ -2399,7 +2404,7 @@ unittest
 ///
 ///   +------------------------------------------+
 ///   |# Type . Date                             |
-///   |# From                                    |  (friendRequest)
+///   |# From                                    |
 ///   |# Message                                 |
 ///   |# [check] [trash] [ban]  Accept           |
 ///   +------------------------------------------+
@@ -2415,6 +2420,10 @@ unittest
 /// A line with nothing in it is skipped rather than drawn blank -- a friend
 /// request carries no message, most group notices carry no sender, and an
 /// empty row reads as a missing one.
+///
+/// A sender is drawn as a link: a person opens their profile, a group its
+/// page. A friend request draws its sender as a card instead (see
+/// drawSenderCard), since that is a stranger and who they are is the question.
 ///
 /// The buttons carry icons instead of words: a word wide enough to read is
 /// a button too wide to sit beside three others, and these are the same
@@ -2531,24 +2540,33 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
             mu_layout_row(ctx, 1, fullCol.ptr, 0);
             int entryTop = notifLine(ctx, head, textDim).y;
 
+            // The sender opens their page: the group's for a group
+            // notification, the profile for a person.
+            bool isGroup = n.info.senderUserId.startsWith("grp_");
+            bool isUser = n.info.senderUserId.startsWith("usr_");
+
+            // A friend request is a stranger asking in, so who they are goes
+            // inline. Other senders are a name drawn as a link.
+            if (isUser && n.info.notificationType == "friendRequest")
+                drawSenderCard(ctx, state, n.info);
             // An empty line is a hole rather than a blank: a friend request
             // carries no message, and most group notices carry no sender.
-            if (from.length > 0)
+            else if (from.length > 0)
             {
                 mu_layout_row(ctx, 1, fullCol.ptr, 0);
-                mu_Rect fromRect = notifLine(ctx, from, ctx.style.colors[MU_COLOR_TEXT]);
-
-                // The group is the sender of a group notification, so its
-                // line opens the group's page.
-                if (n.info.senderUserId.startsWith("grp_"))
+                if (isGroup || isUser)
                 {
-                    bool over = mu_mouse_over(ctx, fromRect) != 0;
-                    if (over && ctx.mouse_down == 0)
-                        mu_draw_box(ctx, fromRect, hoverEdge);
-                    if (wasClick && over)
-                        openGroup(state, n.info.senderUserId,
-                            from == "View group" ? null : from.idup);
+                    if (notifLink(ctx, from))
+                    {
+                        if (isGroup)
+                            openGroup(state, n.info.senderUserId,
+                                from == "View group" ? null : from.idup);
+                        else
+                            openProfile(state, n.info.senderUserId);
+                    }
                 }
+                else
+                    notifLine(ctx, from, ctx.style.colors[MU_COLOR_TEXT]);
             }
             if (n.info.message.length > 0)
             {
@@ -2848,16 +2866,124 @@ private mu_Color notifAccent(string notifType)
 private mu_Rect notifLine(mu_Context* ctx, const(char)[] text, mu_Color color)
 {
     mu_Rect r = mu_layout_next(ctx);
-    if (text.length == 0)
-        return r;
+    drawInk(ctx, text,
+        mu_Rect(r.x + notifSpineGap, r.y, r.w - notifSpineGap, r.h), color);
+    return r;
+}
 
+/// A friend request's sender as a card: face, name, a line from their profile,
+/// and a View profile link. The whole card opens the profile. Its height is
+/// fixed so the buttons below stay put while the profile loads.
+private void drawSenderCard(mu_Context* ctx, AppState* state,
+    ref const(NotificationInfo) info)
+{
+    enum int lineStep = 26;
+    enum int faceSize = 3 * lineStep;
+
+    bool startFetch;
+    ProfileLookup found = state.profiles.lookup(info.senderUserId, startFetch);
+    if (startFetch)
+        state.pendingProfileRequests ~= info.senderUserId;
+
+    string name = info.senderName;
+    if (name.length == 0)
+        name = found.profile.displayName;
+    if (name.length == 0)
+        name = info.senderUserId;
+
+    int pad = ctx.style.padding;
+    int[2] cols = [notifSpineGap + pad + faceSize + ctx.style.spacing, -1];
+    mu_layout_row(ctx, 2, cols.ptr, faceSize);
+    mu_Rect faceCell = mu_layout_next(ctx);
+    mu_Rect textCell = mu_layout_next(ctx);
+    mu_Rect card = mu_Rect(faceCell.x + notifSpineGap, faceCell.y,
+        textCell.x + textCell.w - faceCell.x - notifSpineGap, faceSize);
+
+    bool over = mu_mouse_over(ctx, card) != 0;
+    if (over && ctx.mouse_down == 0)
+        mu_draw_rect(ctx, card, hoverBg);
+
+    drawFace(ctx, state, found.profile.imageFileId, found.profile.imageVersion,
+        name, mu_Rect(card.x + pad, card.y, faceSize, faceSize));
+
+    mu_Rect line = mu_Rect(textCell.x, textCell.y, textCell.w, lineStep);
+    mu_draw_control_text(ctx, name, line, MU_COLOR_TEXT, 0);
+
+    char[192] sumBuf = void;
+    line.y += lineStep;
+    drawInk(ctx, senderSummary(found, sumBuf), line, textDim);
+
+    line.y += lineStep;
+    drawUnderlined(ctx, "View profile", line, linkText);
+
+    if (wasClick && over)
+        openProfile(state, info.senderUserId);
+}
+
+/// One line on a notification sender from their profile (trust rank,
+/// pronouns, join date, flags), written into buf, or where its fetch stands.
+private const(char)[] senderSummary(ref ProfileLookup found,
+    return ref char[192] buf)
+{
+    final switch (found.state) with (ProfileState)
+    {
+        case pending: return "Loading profile...";
+        case failed:  return found.error.length > 0 ? found.error : "No profile";
+        case ready:   break;
+    }
+
+    char[48] joinedBuf = void;
+    string[5] pieces;
+    size_t n;
+    if (found.profile.trustRank.length > 0)
+        pieces[n++] = found.profile.trustRank;
+    if (found.profile.pronouns.length > 0)
+        pieces[n++] = found.profile.pronouns;
+    if (found.profile.dateJoined.length > 0)
+        pieces[n++] = cast(string) sformat(joinedBuf, "Joined %s",
+            found.profile.dateJoined);
+    if (found.profile.moderator)
+        pieces[n++] = "VRChat Staff";
+    if (found.profile.troll)
+        pieces[n++] = "Flagged";
+    return joinPieces(buf, pieces[0 .. n], " . ");
+}
+
+/// Text in the given colour, clipped to r, padded like a label.
+private void drawInk(mu_Context* ctx, const(char)[] text, mu_Rect r,
+    mu_Color color)
+{
+    if (text.length == 0)
+        return;
     mu_Color saved = ctx.style.colors[MU_COLOR_TEXT];
     ctx.style.colors[MU_COLOR_TEXT] = color;
-    mu_draw_control_text(ctx, cast(string) text,
-        mu_Rect(r.x + notifSpineGap, r.y, r.w - notifSpineGap, r.h),
-        MU_COLOR_TEXT, 0);
+    mu_draw_control_text(ctx, cast(string) text, r, MU_COLOR_TEXT, 0);
     ctx.style.colors[MU_COLOR_TEXT] = saved;
-    return r;
+}
+
+/// Text drawn as a link into r: link colour and a rule under it.
+private void drawUnderlined(mu_Context* ctx, const(char)[] text, mu_Rect r,
+    mu_Color color)
+{
+    drawInk(ctx, text, r, color);
+    int tw = ctx.text_width(ctx.style.font, text.ptr, cast(int) text.length);
+    int th = ctx.text_height(ctx.style.font);
+    int x = r.x + ctx.style.padding;
+    int w = tw < r.w - ctx.style.padding ? tw : r.w - ctx.style.padding;
+    mu_draw_rect(ctx, mu_Rect(x, r.y + (r.h + th) / 2, w, 1), color);
+}
+
+/// A notification line drawn as a link, inset past the spine. Whether it was
+/// clicked.
+private bool notifLink(mu_Context* ctx, const(char)[] text)
+{
+    mu_Rect r = mu_layout_next(ctx);
+    mu_Rect inner = mu_Rect(r.x + notifSpineGap, r.y, r.w - notifSpineGap, r.h);
+    bool over = mu_mouse_over(ctx, inner) != 0;
+    if (over && ctx.mouse_down == 0)
+        mu_draw_rect(ctx, inner, hoverBg);
+    drawUnderlined(ctx, text, inner, linkText);
+    return wasClick && over;
 }
 
 /// The dismiss for one notification. Which endpoint that is depends on the
@@ -3941,9 +4067,9 @@ private NotificationInfo testNotification()
     NotificationInfo test;
     test.id = "test_" ~ stamp;
     // An invented sender, so the row draws its Block button and the
-    // arm-and-confirm can be walked through. The "usr_test_" prefix keeps the
-    // moderation inside the client (see the drain in gui.d): there is nobody
-    // behind this ID for VRChat to be asked about.
+    // arm-and-confirm can be walked through. The "usr_test_" prefix keeps its
+    // moderation and profile inside the client (see the drains in gui.d):
+    // there is nobody behind this ID for VRChat to be asked about.
     test.senderUserId = "usr_test_" ~ stamp;
     test.senderName = "TestUser";
     test.receivedAtUnix = now;

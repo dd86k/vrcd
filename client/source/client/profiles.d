@@ -179,6 +179,29 @@ UserProfile parseUserProfile(ref JSONValue user)
     return profile;
 }
 
+/// Invented profile for the injected test sender, filling every field the
+/// inbox summary and the profile page draw. No picture, nothing to fetch.
+UserProfile testProfile(string userId)
+{
+    UserProfile profile;
+    profile.userId            = userId;
+    profile.displayName       = "TestUser";
+    profile.status            = "active";
+    profile.statusDescription = "Synthetic status";
+    profile.bio               = "Synthetic profile for the test notification.\n"
+        ~ "Nobody is behind this ID.";
+    profile.bioLinks          = [ "https://example.com" ];
+    profile.pronouns          = "they/them";
+    profile.note              = "Synthetic note";
+    profile.platform          = "standalonewindows";
+    profile.location          = "private";
+    profile.dateJoined        = "2019-04-01";
+    profile.trustRank         = "Known User";
+    profile.languages         = [ "eng", "fra" ];
+    profile.troll             = true;
+    return profile;
+}
+
 /// Where a lookup stands.
 enum ProfileState
 {
