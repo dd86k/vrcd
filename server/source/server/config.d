@@ -91,6 +91,8 @@ struct Config
     string importVRCXPath;
     /// Import to undo at startup. CLI only.
     long undoImportId;
+    /// Scenario file to serve in place of VRChat (see server.mock). CLI only.
+    string mockPath;
     /// Directory for the downloaded-image cache (gallery, icons, prints...).
     string imageCachePath;
     /// Image cache size cap in MiB. Oldest entries are evicted past this.

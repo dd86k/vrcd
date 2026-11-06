@@ -24,6 +24,8 @@ vrcd-test-*
 *.obj
 *.lst
 *.json
+# Mock scenarios (vrcd-server --mock) are fixtures, not configs
+!/server/mock/*.json
 
 *.log
 *.db

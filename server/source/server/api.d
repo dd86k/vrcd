@@ -693,6 +693,14 @@ class APIServer
                 client.sendLine(client is origin ? originLine : line);
     }
 
+    /// Replace the inbox with `list` and push it to every client, for when
+    /// there is no VRChat to seed it from (see server.mock).
+    void replaceNotifications(NotificationInfo[] list)
+    {
+        if (notificationsTracker.replaceAll(list))
+            broadcastNotificationsSnapshot();
+    }
+
     /// Seed or re-seed the server-side inbox from VRChat's two listings: v1
     /// carries friend requests and invites, v2 everything VRChat added since,
     /// and neither endpoint returns the other's notifications. Broadcasts the

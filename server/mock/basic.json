@@ -1,0 +1,133 @@
+{
+    "self": {
+        "id": "usr_00000000-0000-4000-8000-000000000000",
+        "displayName": "Mock Self",
+        "status": "active",
+        "statusDescription": "testing things",
+        "bio": "A scenario user. Nobody here is real.",
+        "location": "wrld_00000000-0000-4000-8000-0000000000a1:10001~region(us)",
+        "platform": "standalonewindows"
+    },
+    "friends": [
+        {
+            "id": "usr_00000000-0000-4000-8000-000000000001",
+            "displayName": "Aster",
+            "status": "join me",
+            "statusDescription": "come hang",
+            "location": "wrld_00000000-0000-4000-8000-0000000000a1:10001~region(us)",
+            "worldName": "Quiet Harbor",
+            "platform": "standalonewindows"
+        },
+        {
+            "id": "usr_00000000-0000-4000-8000-000000000002",
+            "displayName": "Bramble",
+            "status": "active",
+            "location": "wrld_00000000-0000-4000-8000-0000000000a1:10001~region(us)",
+            "worldName": "Quiet Harbor",
+            "platform": "android"
+        },
+        {
+            "id": "usr_00000000-0000-4000-8000-000000000003",
+            "displayName": "Cinder",
+            "status": "busy",
+            "statusDescription": "do not disturb",
+            "location": "private",
+            "platform": "standalonewindows"
+        },
+        {
+            "id": "usr_00000000-0000-4000-8000-000000000004",
+            "displayName": "Dune",
+            "status": "active",
+            "location": "wrld_00000000-0000-4000-8000-0000000000b2:20002~hidden(usr_00000000-0000-4000-8000-000000000004)~region(eu)",
+            "worldName": "Lantern Market",
+            "platform": "standalonewindows"
+        },
+        {
+            "id": "usr_00000000-0000-4000-8000-000000000005",
+            "displayName": "Ember",
+            "status": "active",
+            "location": "offline",
+            "platform": "web"
+        },
+        {
+            "id": "usr_00000000-0000-4000-8000-000000000006",
+            "displayName": "Fennel",
+            "status": "offline",
+            "location": "offline"
+        },
+        {
+            "id": "usr_00000000-0000-4000-8000-000000000007",
+            "displayName": "Gale",
+            "status": "offline",
+            "location": "offline"
+        }
+    ],
+    "notifications": [
+        {
+            "id": "not_00000000-0000-4000-8000-000000000001",
+            "type": "friendRequest",
+            "senderUserId": "usr_00000000-0000-4000-8000-000000000099",
+            "senderUsername": "Stranger",
+            "message": "",
+            "created_at": "2026-11-06T12:00:00.000Z"
+        },
+        {
+            "id": "not_00000000-0000-4000-8000-000000000002",
+            "type": "invite",
+            "senderUserId": "usr_00000000-0000-4000-8000-000000000004",
+            "message": "",
+            "details": {
+                "worldId": "wrld_00000000-0000-4000-8000-0000000000b2:20002~region(eu)",
+                "worldName": "Lantern Market",
+                "inviteMessage": "stalls are open"
+            },
+            "created_at": "2026-11-06T12:05:00.000Z"
+        }
+    ],
+    "events": [
+        { "at": "-3h", "type": "friend-online", "content": {
+            "userId": "usr_00000000-0000-4000-8000-000000000006", "platform": "standalonewindows",
+            "location": "private" } },
+        { "at": "-2h30m", "type": "friend-offline", "content": {
+            "userId": "usr_00000000-0000-4000-8000-000000000006" } },
+        { "at": "-2h", "type": "friend-online", "content": {
+            "userId": "usr_00000000-0000-4000-8000-000000000001", "platform": "standalonewindows",
+            "location": "wrld_00000000-0000-4000-8000-0000000000a1:10001~region(us)",
+            "worldName": "Quiet Harbor" } },
+        { "at": "-1h45m", "type": "friend-online", "content": {
+            "userId": "usr_00000000-0000-4000-8000-000000000002", "platform": "android",
+            "location": "private" } },
+        { "at": "-1h30m", "type": "friend-location", "content": {
+            "userId": "usr_00000000-0000-4000-8000-000000000002",
+            "location": "wrld_00000000-0000-4000-8000-0000000000a1:10001~region(us)",
+            "worldName": "Quiet Harbor" } },
+        { "at": "-1h", "type": "avatar-change", "content": {
+            "userId": "usr_00000000-0000-4000-8000-000000000001",
+            "currentAvatar": "avtr_00000000-0000-4000-8000-0000000000c1" } },
+        { "at": "-45m", "type": "status-change", "content": {
+            "userId": "usr_00000000-0000-4000-8000-000000000003",
+            "previousStatus": "active", "currentStatus": "busy",
+            "currentStatusDescription": "do not disturb" } },
+        { "at": "-30m", "type": "friend-active", "content": {
+            "userId": "usr_00000000-0000-4000-8000-000000000005", "platform": "web" } },
+        { "at": "-20m", "type": "friend-location", "content": {
+            "userId": "usr_00000000-0000-4000-8000-000000000004",
+            "location": "wrld_00000000-0000-4000-8000-0000000000b2:20002~hidden(usr_00000000-0000-4000-8000-000000000004)~region(eu)",
+            "worldName": "Lantern Market" } },
+        { "at": "-10m", "type": "notification", "content": {
+            "id": "not_00000000-0000-4000-8000-000000000001", "type": "friendRequest",
+            "senderUserId": "usr_00000000-0000-4000-8000-000000000099",
+            "senderUsername": "Stranger" } },
+        { "at": "-5m", "type": "notification", "content": {
+            "id": "not_00000000-0000-4000-8000-000000000002", "type": "invite",
+            "senderUserId": "usr_00000000-0000-4000-8000-000000000004",
+            "senderUsername": "Dune" } },
+
+        { "at": "+10s", "type": "friend-online", "content": {
+            "userId": "usr_00000000-0000-4000-8000-000000000007", "platform": "android",
+            "location": "wrld_00000000-0000-4000-8000-0000000000a1:10001~region(us)",
+            "worldName": "Quiet Harbor" } },
+        { "at": "+20s", "type": "friend-offline", "content": {
+            "userId": "usr_00000000-0000-4000-8000-000000000002" } }
+    ]
+}

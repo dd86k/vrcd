@@ -7,6 +7,7 @@ module server.main;
 import core.sync.mutex : Mutex;
 import core.time : MonoTime, Duration, dur;
 
+import std.datetime.systime : SysTime, Clock;
 import std.getopt;
 import std.json;
 import std.stdio : stderr, writeln, writefln;
@@ -22,6 +23,7 @@ import server.dropaportal;
 import server.events;
 import server.friends;
 import server.instancecache;
+import server.mock;
 import server.ratelimit;
 import server.database;
 import server.stream;
@@ -111,9 +113,24 @@ void cmdRun(ref Config config)
     // Attempt to load OpenSSL for TLS support.
     loadTLS();
 
-    // Initialize database.
-    Database store = new Database(config.dbPath);
-    logInfo("Database loaded from '%s'", config.dbPath);
+    // Load the scenario before anything else, so a typo in it fails fast.
+    MockScenario scenario;
+    bool mock = config.mockPath.length > 0;
+    if (mock)
+    {
+        try scenario = loadScenario(config.mockPath);
+        catch (Exception e)
+        {
+            logError("Mock scenario '%s': %s", config.mockPath, e.msg);
+            exit(1);
+        }
+    }
+
+    // Initialize database. A mock run gets a fresh one in memory, which also
+    // gives it its own event epoch so a front-end does not mix the two up.
+    string dbPath = mock ? ":memory:" : config.dbPath;
+    Database store = new Database(dbPath);
+    logInfo("Database loaded from '%s'", dbPath);
 
     if (config.undoImportId)
     {
@@ -199,6 +216,28 @@ void cmdRun(ref Config config)
             logInfo("Server started, listening on %s:%d", config.listenAddr, config.listenPort);
         else
             logInfo("Server started, serving the front-end over stdio only");
+    }
+
+    if (mock)
+    {
+        SysTime start = Clock.currTime();
+        apiServer = new APIServer(config.listenAddr, config.listenPort, config.apiSecret, store, config.reseedInterval);
+        wireTransport(apiServer);
+        if (tlsCtx)
+            apiServer.setTLS(tlsCtx, config.tlsPort, config.tlsOnly);
+        applyScenario(scenario, apiServer, store, start);
+        apiServer.start();
+        announceStarted();
+        logInfo("Mock: serving '%s', VRChat is not contacted", config.mockPath);
+
+        startLiveEvents(scenario.live, start, (VRCEvent event) {
+            ingestEvent(event, apiServer, store, null, null);
+        });
+
+        installSignalHandlers();
+        while (g_running)
+            Thread.sleep(dur!"msecs"(1000));
+        finish();
     }
 
     if (headless)
@@ -342,139 +381,11 @@ void cmdRun(ref Config config)
     // spans an event. A real outage is longer than this by orders of magnitude.
     enum Duration RESEED_GAP_THRESHOLD = dur!"seconds"(15);
 
-    // WebSocket event listener and callback.
-    //
-    // Orchestrates: enrich -> tracker -> (maybe suppress raw) -> store/broadcast
-    // synthetics -> push friends snapshot. Suppression: when the tracker
-    // produces a synthetic avatar-change, the triggering raw event
-    // (friend-location/friend-update/user-update/user-location) is just noise
-    // so we drop it instead of polluting the log and the live feed.
+    // WebSocket event listener and callback. See ingestEvent.
     VRCWebSocket vrcws = new VRCWebSocket(authState.authToken,
     (VRCEvent event)
     {
-        logDebugging("event callback: type=%s", event.typeRaw);
-        FriendsTracker tracker = apiServer.getFriendsTracker();
-
-        tracker.enrichContent(event);
-        worldCache.enrichWorldName(event);
-
-        // Process event to see if a friend changed
-        EventChange friendsChanged = tracker.processEvent(event);
-        VRCEvent[] synthetics = tracker.takePendingSynthetics();
-
-        // Surface self world transitions to the DropAPortal sidecar.
-        // Filter raw events here so the sidecar stays self-contained.
-        // enqueueVisit is mutex-guarded and safe to call regardless of
-        // thread state, so no liveness check is needed.
-        if (event.type == EventType.userLocation)
-        {
-            string selfId = tracker.getSelfUserId();
-            string evUserId;
-            if (const(JSONValue)* v = "userId" in event.content)
-                if (v.type == JSONType.string)
-                    evUserId = v.str;
-            if (selfId.length > 0 && evUserId == selfId)
-            {
-                string location;
-                if (const(JSONValue)* v = "location" in event.content)
-                    if (v.type == JSONType.string)
-                        location = v.str;
-                string worldId = WorldCache.extractWorldId(location);
-                if (worldId.length > 0)
-                    dropaPortal.enqueueVisit(worldId, event.receivedAt.toUnixTime!long());
-            }
-        }
-
-        // A friend-location with location="traveling" is the first half of a
-        // world transition; the arrival event follows seconds later carrying
-        // the concrete instance. Persisting both produces feed doubles. Emit
-        // an ephemeral friend-traveling instead — broadcast live so clients
-        // can show a "Joining X" indicator, but never stored. Tracker state
-        // already absorbed the transient via processEvent above.
-        VRCEvent traveling;
-        bool isTraveling = false;
-        if (event.type == EventType.friendLocation)
-        {
-            if (const(JSONValue)* v = "location" in event.content)
-            {
-                if (v.type == JSONType.string && v.str == "traveling")
-                    isTraveling = true;
-            }
-        }
-        if (isTraveling)
-        {
-            JSONValue tc;
-            tc["userId"] = JSONValue("");
-            if (const(JSONValue)* v = "userId" in event.content)       tc["userId"] = *v;
-            if (const(JSONValue)* v = "displayName" in event.content)  tc["displayName"] = *v;
-            if (const(JSONValue)* v = "travelingToLocation" in event.content) tc["travelingToLocation"] = *v;
-            if (const(JSONValue)* v = "worldName" in event.content)    tc["worldName"] = *v;
-            if (const(JSONValue)* v = "world" in event.content)        tc["world"] = *v;
-            traveling = VRCEvent(
-                EventType.friendTraveling,
-                "friend-traveling",
-                tc,
-                event.receivedAt,
-                JSONValue([
-                    "type":    JSONValue("friend-traveling"),
-                    "content": JSONValue(tc.toString()),
-                ]).toString()
-            );
-        }
-
-        // Drop avatar-noise raws when they bring no new info: nothing in our
-        // cached friend state moved that a synthetic does not already report
-        // (VRChat re-emits friend-update / friend-location even when no
-        // observable property changed).
-        // A picture change alone does not count: it follows the avatar for
-        // anyone without an icon set, so it redraws the roster without
-        // earning a row in the log.
-        // Also drop traveling friend-locations; currently no use for saving it.
-        bool suppressRaw = isTraveling
-            || (isAvatarNoiseEvent(event.type) && friendsChanged.loggable == false);
-        if (suppressRaw)
-        {
-            logTrace("suppressed raw %s (synthetics=%d loggable=%s traveling=%s)",
-                event.typeRaw, synthetics.length, friendsChanged.loggable, isTraveling);
-        }
-        else
-        {
-            long eventId = store.storeEvent(event);
-            logTrace("[#%d %s] %s", eventId, event.typeRaw, event.content.toString());
-            apiServer.broadcast(event, eventId);
-            apiServer.processPromotions(event);
-        }
-
-        // Ephemeral broadcast: id=0 signals "not persisted, do not advance
-        // client high-water mark."
-        if (isTraveling)
-        {
-            logTrace("[#0 friend-traveling] %s", traveling.content.toString());
-            apiServer.broadcast(traveling, 0);
-        }
-
-        foreach (ref syn; synthetics)
-        {
-            long synId = store.storeEvent(syn);
-            logInfo("[#%d %s] %s", synId, syn.typeRaw, syn.content.toString());
-            apiServer.broadcast(syn, synId);
-            apiServer.processPromotions(syn);
-        }
-
-        // The inbox lives server-side: fold the event in and push the new
-        // snapshot, so a front-end connecting later still sees a request
-        // that arrived -- or stops seeing one answered -- while it was down.
-        if (isNotificationEvent(event.type))
-            apiServer.processNotificationEvent(event);
-
-        if (isGroupEvent(event.type))
-            apiServer.processGroupEvent(event);
-
-        if (friendsChanged.snapshot)
-            apiServer.broadcastFriendsSnapshot();
-
-        if (tracker.takePendingSelfChange())
-            apiServer.broadcastSelf();
+        ingestEvent(event, apiServer, store, worldCache, dropaPortal);
     });
     vrcws.setReconnectBackoff(config.reconnectInterval, config.reconnectMax);
     // This is the callback when the WS connection status changes
@@ -961,6 +872,144 @@ private int backfillInstancesLocked(JSONValue[] friendsArr,
     return fetched;
 }
 
+/// Take one VRChat event the way the live stream does: enrich it, update the
+/// roster, store and broadcast what is not noise, and fold it into the inbox
+/// and groups. `worldCache` and `dropaPortal` may be null.
+///
+/// Orchestrates: enrich -> tracker -> (maybe suppress raw) -> store/broadcast
+/// synthetics -> push friends snapshot. Suppression: when the tracker
+/// produces a synthetic avatar-change, the triggering raw event
+/// (friend-location/friend-update/user-update/user-location) is just noise
+/// so we drop it instead of polluting the log and the live feed.
+void ingestEvent(VRCEvent event, APIServer apiServer, Database store,
+    WorldCache worldCache, DropaPortal dropaPortal)
+{
+    logDebugging("ingestEvent: type=%s", event.typeRaw);
+    FriendsTracker tracker = apiServer.getFriendsTracker();
+
+    tracker.enrichContent(event);
+    if (worldCache)
+        worldCache.enrichWorldName(event);
+
+    // Process event to see if a friend changed
+    EventChange friendsChanged = tracker.processEvent(event);
+    VRCEvent[] synthetics = tracker.takePendingSynthetics();
+
+    // Surface self world transitions to the DropAPortal sidecar.
+    // Filter raw events here so the sidecar stays self-contained.
+    // enqueueVisit is mutex-guarded and safe to call regardless of
+    // thread state, so no liveness check is needed.
+    if (dropaPortal && event.type == EventType.userLocation)
+    {
+        string selfId = tracker.getSelfUserId();
+        string evUserId;
+        if (const(JSONValue)* v = "userId" in event.content)
+            if (v.type == JSONType.string)
+                evUserId = v.str;
+        if (selfId.length > 0 && evUserId == selfId)
+        {
+            string location;
+            if (const(JSONValue)* v = "location" in event.content)
+                if (v.type == JSONType.string)
+                    location = v.str;
+            string worldId = WorldCache.extractWorldId(location);
+            if (worldId.length > 0)
+                dropaPortal.enqueueVisit(worldId, event.receivedAt.toUnixTime!long());
+        }
+    }
+
+    // A friend-location with location="traveling" is the first half of a
+    // world transition; the arrival event follows seconds later carrying
+    // the concrete instance. Persisting both produces feed doubles. Emit
+    // an ephemeral friend-traveling instead — broadcast live so clients
+    // can show a "Joining X" indicator, but never stored. Tracker state
+    // already absorbed the transient via processEvent above.
+    VRCEvent traveling;
+    bool isTraveling = false;
+    if (event.type == EventType.friendLocation)
+    {
+        if (const(JSONValue)* v = "location" in event.content)
+        {
+            if (v.type == JSONType.string && v.str == "traveling")
+                isTraveling = true;
+        }
+    }
+    if (isTraveling)
+    {
+        JSONValue tc;
+        tc["userId"] = JSONValue("");
+        if (const(JSONValue)* v = "userId" in event.content)       tc["userId"] = *v;
+        if (const(JSONValue)* v = "displayName" in event.content)  tc["displayName"] = *v;
+        if (const(JSONValue)* v = "travelingToLocation" in event.content) tc["travelingToLocation"] = *v;
+        if (const(JSONValue)* v = "worldName" in event.content)    tc["worldName"] = *v;
+        if (const(JSONValue)* v = "world" in event.content)        tc["world"] = *v;
+        traveling = VRCEvent(
+            EventType.friendTraveling,
+            "friend-traveling",
+            tc,
+            event.receivedAt,
+            JSONValue([
+                "type":    JSONValue("friend-traveling"),
+                "content": JSONValue(tc.toString()),
+            ]).toString()
+        );
+    }
+
+    // Drop avatar-noise raws when they bring no new info: nothing in our
+    // cached friend state moved that a synthetic does not already report
+    // (VRChat re-emits friend-update / friend-location even when no
+    // observable property changed).
+    // A picture change alone does not count: it follows the avatar for
+    // anyone without an icon set, so it redraws the roster without
+    // earning a row in the log.
+    // Also drop traveling friend-locations; currently no use for saving it.
+    bool suppressRaw = isTraveling
+        || (isAvatarNoiseEvent(event.type) && friendsChanged.loggable == false);
+    if (suppressRaw)
+    {
+        logTrace("suppressed raw %s (synthetics=%d loggable=%s traveling=%s)",
+            event.typeRaw, synthetics.length, friendsChanged.loggable, isTraveling);
+    }
+    else
+    {
+        long eventId = store.storeEvent(event);
+        logTrace("[#%d %s] %s", eventId, event.typeRaw, event.content.toString());
+        apiServer.broadcast(event, eventId);
+        apiServer.processPromotions(event);
+    }
+
+    // Ephemeral broadcast: id=0 signals "not persisted, do not advance
+    // client high-water mark."
+    if (isTraveling)
+    {
+        logTrace("[#0 friend-traveling] %s", traveling.content.toString());
+        apiServer.broadcast(traveling, 0);
+    }
+
+    foreach (ref syn; synthetics)
+    {
+        long synId = store.storeEvent(syn);
+        logInfo("[#%d %s] %s", synId, syn.typeRaw, syn.content.toString());
+        apiServer.broadcast(syn, synId);
+        apiServer.processPromotions(syn);
+    }
+
+    // The inbox lives server-side: fold the event in and push the new
+    // snapshot, so a front-end connecting later still sees a request
+    // that arrived -- or stops seeing one answered -- while it was down.
+    if (isNotificationEvent(event.type))
+        apiServer.processNotificationEvent(event);
+
+    if (isGroupEvent(event.type))
+        apiServer.processGroupEvent(event);
+
+    if (friendsChanged.snapshot)
+        apiServer.broadcastFriendsSnapshot();
+
+    if (tracker.takePendingSelfChange())
+        apiServer.broadcastSelf();
+}
+
 // As per tradition, keep main() at the end of module
 int main(string[] args)
 {
@@ -1069,6 +1118,9 @@ int main(string[] args)
         "undo-import", "Undo an import by ID at startup (see the 'imports' command)", (string _, string val) {
             import std.conv : to;
             config.undoImportId = val.to!long;
+        },
+        "mock", "Serve a scenario file instead of connecting to VRChat (in-memory database)", (string _, string val) {
+            config.mockPath = val;
         },
         "version",  "Show version page and exit", &cliVersion,
         "help-config", "Show effective config paths and exit", &helpConfig,
