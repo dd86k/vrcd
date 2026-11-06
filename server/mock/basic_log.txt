@@ -1,0 +1,9 @@
+2026.11.06 12:00:00 Debug      -  User Authenticated: Mock Self (usr_00000000-0000-4000-8000-000000000000)
+2026.11.06 12:00:05 Debug      -  [Behaviour] Entering Room: Quiet Harbor
+2026.11.06 12:00:05 Debug      -  [Behaviour] Joining wrld_00000000-0000-4000-8000-0000000000a1:10001~region(us)
+2026.11.06 12:00:08 Debug      -  [Behaviour] OnPlayerJoined Aster (usr_00000000-0000-4000-8000-000000000001)
+2026.11.06 12:00:08 Debug      -  [Behaviour] OnPlayerJoined Bramble (usr_00000000-0000-4000-8000-000000000002)
+2026.11.06 12:00:08 Debug      -  [Behaviour] OnPlayerJoined Mock Self (usr_00000000-0000-4000-8000-000000000000)
+2026.11.06 12:04:12 Debug      -  [Behaviour] OnPlayerJoined Hollow (usr_00000000-0000-4000-8000-000000000008)
+2026.11.06 12:09:40 Debug      -  [Behaviour] OnPlayerJoined Ivy (usr_00000000-0000-4000-8000-000000000009)
+2026.11.06 12:15:02 Debug      -  [Behaviour] OnPlayerLeft Hollow (usr_00000000-0000-4000-8000-000000000008)

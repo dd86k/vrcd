@@ -73,6 +73,8 @@ private Thread netThread;
 
 /// Local VRChat log file watcher.
 private LogWatcher logWatcher;
+/// Log to replay once the first catch-up lands, or null. See --log-replay.
+private string logReplayPath;
 
 /// Server connection.
 /// __gshared: used by network thread after main thread finishes setup.
@@ -274,8 +276,10 @@ private bool loadSDLLibraries()
 
 int runGui(string host, ushort port, string secret, long sinceId,
     bool hostExplicit, bool portExplicit, bool secretExplicit, bool sinceExplicit,
-    bool hardwareAccel, bool trayIcon)
+    bool hardwareAccel, bool trayIcon, string logReplay)
 {
+    logReplayPath = logReplay;
+
     // Load saved settings; CLI args override the active profile for this run.
     saved = loadSettings();
     {
@@ -441,9 +445,14 @@ int runGui(string host, ushort port, string secret, long sinceId,
         ? "Starting server..." : "Connecting...";
     startLink(sinceId);
 
-    // Start log watcher for local VRChat player join/leave events.
+    // Start log watcher for local VRChat player join/leave events. A replay
+    // waits for the first catch-up instead: the feed is in arrival order, and
+    // a new server epoch clears it.
     logWatcher = new LogWatcher(msgQueue, networkEventType);
-    logWatcher.start();
+    if (logReplayPath.length > 0)
+        logWatcher.setReplay(logReplayPath);
+    else
+        logWatcher.start();
 
     // Run main event loop and clean up.
     eventLoop(uictx);
@@ -1510,6 +1519,11 @@ private void drainNetworkMessages()
                 }
                 appState.addFeedEntry(0, "system", "", caughtUpText, timeNow(), "", false, EventSource.system);
                 catchUpComplete = true;
+                if (logWatcher && logReplayPath.length > 0)
+                {
+                    logWatcher.start();
+                    logReplayPath = null;
+                }
                 break;
 
             case "events_reset":

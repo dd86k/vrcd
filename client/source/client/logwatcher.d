@@ -50,6 +50,7 @@ class LogWatcher
     shared bool writeMetadata = true;
     private MessageQueue queue;
     private uint sdlEventType;
+    private string replayPath; // See setReplay
 
     // Local state maintained from parsed log lines.
     private string currentLocation;
@@ -107,8 +108,21 @@ class LogWatcher
         }
     }
 
+    /// Parse `path` once, every line as new, in place of watching VRChat's logs.
+    /// Writes no picture metadata.
+    void setReplay(string path)
+    {
+        replayPath = path;
+    }
+
     private void run()
     {
+        if (replayPath.length > 0)
+        {
+            replay(replayPath);
+            return;
+        }
+
         string logDir = vrchatLogDir();
         logDebugging("LogWatcher: resolved log dir=%s", logDir);
         if (logDir is null || exists(logDir) == false)
@@ -135,6 +149,22 @@ class LogWatcher
             // Poll every second, matching VRCX.
             Thread.sleep(1.seconds);
         }
+    }
+
+    /// Parse every line of `path` as if VRChat had just written it.
+    private void replay(string path)
+    {
+        logInfo("LogWatcher: replaying %s", path);
+        try
+        {
+            File f = File(path, "r");
+            char[] buf;
+            while (f.readln(buf))
+                parseLine(cast(string) buf);
+            f.close();
+        }
+        catch (Exception e)
+            logError("Failed to replay log %s: %s", path, e.msg);
     }
 
     /// Poll all output_log files for new lines.
@@ -558,7 +588,8 @@ class LogWatcher
 
             // Write metadata in a background thread so the log watcher keeps up
             // with events while we wait for VRChat to release the file lock.
-            if (writeMetadata)
+            // A replayed log names pictures that are not ours to touch.
+            if (writeMetadata && replayPath.length == 0)
             {
                 string metaJson = buildMetadataJson();
                 queueMetadataWrite(localPath, metaJson);

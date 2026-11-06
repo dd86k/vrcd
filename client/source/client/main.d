@@ -118,6 +118,7 @@ int startvrcd(string[] args)
     bool trayIcon;
     bool showVersion;
     string logFilePath;
+    string logReplay;
 
     GetoptResult opts = void;
     try opts = getopt(args,
@@ -131,6 +132,7 @@ int startvrcd(string[] args)
         "hardware",   "Allow hardware-accelerated framebuffer (default: software)", &hardwareAccel,
         "tray",       "Show a system tray icon, closing the window hides it", &trayIcon,
         "log-file|L", "Append log output to file", &logFilePath,
+        "log-replay", "Replay a VRChat log file as new lines instead of watching VRChat's logs", &logReplay,
         "version",    "Show version information and exit", &showVersion,
     );
     catch (Exception ex)
@@ -191,7 +193,7 @@ int startvrcd(string[] args)
         host, port, sinceId, sinceSet, verbose, hardwareAccel);
 
     try return runGui(host, port, secret, sinceId, hostSet, postSet, secretSet, sinceSet,
-        hardwareAccel, trayIcon);
+        hardwareAccel, trayIcon, logReplay);
     catch (Exception ex)
     {
         // File logger or console logger can pick this up
