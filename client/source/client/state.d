@@ -182,6 +182,7 @@ struct NotificationEntry
 {
     NotificationInfo info;
     bool actionPending;    // true while waiting for server response
+    bool seen;             // shown while the inbox tab was open
 }
 
 /// A file entry from the VRChat files API (gallery, icon, sticker, emoji).
@@ -729,7 +730,18 @@ struct AppState
         NotificationEntry[] rebuilt;
         rebuilt.reserve(list.length);
         foreach (ref NotificationInfo info; list)
-            rebuilt ~= NotificationEntry(info);
+        {
+            NotificationEntry e = NotificationEntry(info);
+            foreach (ref NotificationEntry old; notifications)
+            {
+                if (old.info.id == info.id)
+                {
+                    e.seen = old.seen;
+                    break;
+                }
+            }
+            rebuilt ~= e;
+        }
         notifications = rebuilt;
     }
 
@@ -895,6 +907,25 @@ struct AppState
         if (startFetch)
             pendingGroupRequests ~= groupDetailId;
         return found;
+    }
+
+    /// Number of inbox entries not yet shown on the inbox tab.
+    size_t unseenNotifications()
+    {
+        size_t count;
+        foreach (ref NotificationEntry n; notifications)
+        {
+            if (n.seen == false)
+                count++;
+        }
+        return count;
+    }
+
+    /// Mark every inbox entry as seen.
+    void markNotificationsSeen()
+    {
+        foreach (ref NotificationEntry n; notifications)
+            n.seen = true;
     }
 
     /// Remove a notification by its VRChat ID.

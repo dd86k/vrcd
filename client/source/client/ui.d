@@ -339,10 +339,19 @@ private void drawTabButton(mu_Context* ctx, AppState* state, string label, Tab t
             activeTab = tab;
     }
 
-    // Same rule as the web front-end: the inbox counts pending entries, since
-    // the server's inbox only holds what is still there to answer.
-    if (tab == Tab.notifications && state.notifications.length > 0)
-        drawTabBadge(ctx, ctx.last_rect, state.notifications.length);
+    // Unread count, in memory only. Viewing the inbox marks all entries seen,
+    // including ones arriving while it stays open.
+    if (tab == Tab.notifications)
+    {
+        if (activeTab == tab)
+            state.markNotificationsSeen();
+        else
+        {
+            size_t unseen = state.unseenNotifications();
+            if (unseen > 0)
+                drawTabBadge(ctx, ctx.last_rect, unseen);
+        }
+    }
 }
 
 /// Count pill in the top-right corner of a tab button.
