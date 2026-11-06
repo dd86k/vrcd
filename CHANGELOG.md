@@ -29,6 +29,13 @@ Rules:
   show a hint.
 - Feed filters: All On and All Off moved to the top, and Close is visible
   again at the bottom.
+- Optional system tray icon (`--tray`, or Settings > Window).
+- "Friend Update" is hidden from the feed by default. Status changes show the
+  new status as a badge.
+- Inbox: a friend request shows who sent it inline, and other senders are
+  links to their profile or group.
+- Inbox: the tab badge counts unread notifications, cleared on viewing.
+- Inbox: newest or oldest first, remembered.
 
 ### Server
 
@@ -39,12 +46,19 @@ Rules:
 - Fix a location change being dropped from the log when the same update also
   changed an avatar or profile.
 - Member-side group actions, and a group list kept current from group events.
+- Notifications made by rules survive a restart.
 
 ### Web
 
 - Notification rules (TOOLS > RULES), and NOTIFY WHEN ONLINE on a friend.
 - Browser alerts for rule notifications while the page is open (needs HTTPS).
 - Groups (TOOLS > GROUPS), same as the client.
+
+### Packaging
+
+- The AppImage ships AppStream metadata.
+- The pipehelper is cross-built from Linux, so the AppImage bundles it and it
+  is available as its own download.
 
 ### API
 
