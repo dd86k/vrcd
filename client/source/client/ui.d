@@ -2480,7 +2480,7 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
     import std.string : startsWith;
 
     static immutable int[1] fullCol    = [-1];
-    static immutable int[2] headerCols = [-130, 120];
+    static immutable int[3] headerCols = [150, -130, 120];
     enum int actionSize = 64;   // square, and big enough to hit in VR
 
     if (state.boopOpen)
@@ -2504,9 +2504,14 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
         // mutate state.notifications while iterating it.
         string[] dismissedIds;
 
-        // Header row with "Dismiss all". Queues hide actions for every
-        // non-pending notification VRChat lets us dismiss.
-        mu_layout_row(ctx, 2, headerCols.ptr, 30);
+        // Header row: sort order, and "Dismiss all", which queues hide
+        // actions for every non-pending notification VRChat lets us dismiss.
+        mu_layout_row(ctx, 3, headerCols.ptr, 30);
+        if (mu_button(ctx, state.inboxNewestFirst ? "Newest first" : "Oldest first"))
+        {
+            state.inboxNewestFirst = !state.inboxNewestFirst;
+            state.saveSettingsRequested = true;
+        }
         mu_label(ctx, "");
         if (mu_button(ctx, "Dismiss all"))
         {
@@ -2519,8 +2524,13 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
             }
         }
 
-        foreach (ref NotificationEntry n; state.notifications)
+        // Pointer is safe: nothing below appends to the list.
+        size_t count = state.notifications.length;
+        foreach (size_t k; 0 .. count)
         {
+            NotificationEntry *n = &state.notifications[
+                state.inboxNewestFirst ? count - 1 - k : k];
+
             // Text block: type+date / from / message, each on its own row
             // across the full width.
             char[32] relBuf = void;

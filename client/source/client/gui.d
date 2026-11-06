@@ -311,6 +311,7 @@ int runGui(string host, ushort port, string secret, long sinceId,
     foreach (size_t i; 0 .. feedEventLabels.length)
         appState.feedEventVisible[i] = cast(int) saved.feedEventVisible[i];
     appState.feedShowSelfEvents = cast(int) saved.feedShowSelfEvents;
+    appState.inboxNewestFirst = saved.inboxNewestFirst;
 
     // Load picture metadata setting into appState (bool -> int).
     appState.insertPictureMetadata = cast(int) saved.insertPictureMetadata;
@@ -3396,6 +3397,7 @@ private void doSaveSettings()
     foreach (size_t i; 0 .. feedEventLabels.length)
         s.feedEventVisible[i] = appState.feedEventVisible[i] != 0;
     s.feedShowSelfEvents = appState.feedShowSelfEvents != 0;
+    s.inboxNewestFirst = appState.inboxNewestFirst;
 
     // Picture metadata setting (int -> bool).
     s.insertPictureMetadata = appState.insertPictureMetadata != 0;

@@ -91,6 +91,9 @@ struct Settings
     bool[feedEventLabels.length] feedEventVisible = feedEventDefaultVisible;
     bool feedShowSelfEvents;
 
+    // Inbox draws newest first (stored oldest first either way).
+    bool inboxNewestFirst;
+
     /// The profile in use. Never out of range: an empty list gets a default
     /// entry and an index past the end falls back to the first.
     ref Profile active()
@@ -346,6 +349,8 @@ Settings loadSettings()
         if (const(JSONValue) *jfeed_show_self_events = "feed_show_self_events" in json)
             if (jfeed_show_self_events.type == JSONType.true_)
                 s.feedShowSelfEvents = true;
+        if (const(JSONValue) *jinbox_newest_first = "inbox_newest_first" in json)
+            s.inboxNewestFirst = jinbox_newest_first.type == JSONType.true_;
     }
     catch (Exception e)
     {
@@ -401,6 +406,7 @@ void saveSettings(Settings s)
         json["feed_event_visible"] = feedArr;
         json["insert_picture_metadata"] = s.insertPictureMetadata;
         json["feed_show_self_events"] = s.feedShowSelfEvents;
+        json["inbox_newest_first"] = s.inboxNewestFirst;
         json["tray"] = s.tray;
 
         write(path, json.toPrettyString());

@@ -371,6 +371,9 @@ struct AppState
     int[feedEventLabels.length] feedEventVisible = 1;
     int feedShowSelfEvents;
 
+    /// Inbox tab draws newest first. Storage order stays oldest first.
+    bool inboxNewestFirst;
+
     // Id of the oldest server event loaded in feedEntries (long.max = none).
     // Oldest by time, which is the server's order, not the smallest id:
     // history can be stored after the events that follow it.
