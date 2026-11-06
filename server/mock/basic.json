@@ -3,18 +3,29 @@
     "self": {
         "id": "usr_00000000-0000-4000-8000-000000000000",
         "displayName": "Mock Self",
+        "userIcon": "https://api.vrchat.cloud/api/1/file/file_00000000-0000-4000-8000-000000000000/1/file",
         "status": "active",
         "statusDescription": "testing things",
         "bio": "A scenario user. Nobody here is real.",
+        "pronouns": "it/its",
+        "tags": [ "system_trust_trusted", "language_eng" ],
+        "date_joined": "2021-02-03",
         "location": "wrld_00000000-0000-4000-8000-0000000000a1:10001~region(us)",
         "platform": "standalonewindows"
     },
+    "images": "images",
     "friends": [
         {
             "id": "usr_00000000-0000-4000-8000-000000000001",
             "displayName": "Aster",
+            "userIcon": "https://api.vrchat.cloud/api/1/file/file_00000000-0000-4000-8000-000000000001/1/file",
             "status": "join me",
             "statusDescription": "come hang",
+            "bio": "Usually by the water.\nAsk about the boats.",
+            "pronouns": "they/them",
+            "bioLinks": [ "https://example.invalid/aster" ],
+            "tags": [ "system_trust_veteran", "language_eng", "language_fra" ],
+            "date_joined": "2019-04-12",
             "location": "wrld_00000000-0000-4000-8000-0000000000a1:10001~region(us)",
             "worldName": "Quiet Harbor",
             "platform": "standalonewindows"
@@ -22,6 +33,7 @@
         {
             "id": "usr_00000000-0000-4000-8000-000000000002",
             "displayName": "Bramble",
+            "userIcon": "https://api.vrchat.cloud/api/1/file/file_00000000-0000-4000-8000-000000000002/1/file",
             "status": "active",
             "location": "wrld_00000000-0000-4000-8000-0000000000a1:10001~region(us)",
             "worldName": "Quiet Harbor",
@@ -30,6 +42,7 @@
         {
             "id": "usr_00000000-0000-4000-8000-000000000003",
             "displayName": "Cinder",
+            "userIcon": "https://api.vrchat.cloud/api/1/file/file_00000000-0000-4000-8000-000000000003/1/file",
             "status": "busy",
             "statusDescription": "do not disturb",
             "location": "private",
@@ -38,6 +51,7 @@
         {
             "id": "usr_00000000-0000-4000-8000-000000000004",
             "displayName": "Dune",
+            "userIcon": "https://api.vrchat.cloud/api/1/file/file_00000000-0000-4000-8000-000000000004/1/file",
             "status": "active",
             "location": "wrld_00000000-0000-4000-8000-0000000000b2:20002~hidden(usr_00000000-0000-4000-8000-000000000004)~region(eu)",
             "worldName": "Lantern Market",
@@ -46,6 +60,7 @@
         {
             "id": "usr_00000000-0000-4000-8000-000000000005",
             "displayName": "Ember",
+            "userIcon": "https://api.vrchat.cloud/api/1/file/file_00000000-0000-4000-8000-000000000005/1/file",
             "status": "active",
             "location": "offline",
             "platform": "web"
@@ -61,6 +76,23 @@
             "displayName": "Gale",
             "status": "offline",
             "location": "offline"
+        }
+    ],
+    "users": [
+        {
+            "id": "usr_00000000-0000-4000-8000-000000000099",
+            "displayName": "Stranger",
+            "userIcon": "https://api.vrchat.cloud/api/1/file/file_00000000-0000-4000-8000-000000000099/1/file",
+            "status": "active",
+            "statusDescription": "new around here",
+            "bio": "Met you at the harbor.",
+            "tags": [ "system_trust_basic", "language_eng" ],
+            "date_joined": "2026-10-30",
+            "last_platform": "android",
+            "state": "online",
+            "location": "private",
+            "isFriend": false,
+            "friendRequestStatus": "incoming"
         }
     ],
     "notifications": [

@@ -14,12 +14,14 @@ import std.algorithm.mutation : SwapStrategy;
 import std.algorithm.sorting : sort;
 import std.conv : to;
 import std.datetime.systime : SysTime, Clock;
-import std.file : readText;
+import std.file : exists, isDir, read, readText;
+import std.path : absolutePath, buildPath, dirName;
 import std.json;
 
 import ddlogger;
 
 import server.api;
+import server.content : ImageResult, isValidFileId, sniffImageMime;
 import server.database;
 import server.events;
 import server.friends;
@@ -42,6 +44,10 @@ struct MockEvent
 /// - `self`: the signed-in user, shaped like VRChat's user object
 /// - `friends`: the roster, shaped like VRChat's friends listing
 /// - `notifications`, `notificationsV2`: the inbox, as VRChat's two listings
+/// - `users`: anyone a profile may be opened for, shaped like VRChat's user
+///   object. Self and the roster answer too, so this is for strangers and for
+///   fuller friend profiles.
+/// - `images`: folder of pictures named `<file id>.png`, relative to the file
 /// - `events`: `{"at": "-5m", "type": "friend-online", "content": {...}}`
 ///
 /// An event at or before zero is history, stored as is. One after zero is
@@ -55,6 +61,10 @@ struct MockScenario
     JSONValue[] friends;
     JSONValue[] notificationsV1;
     JSONValue[] notificationsV2;
+    /// Profiles by user ID, `users` winning over the roster and self.
+    JSONValue[string] users;
+    /// Absolute, or null when the file sets none.
+    string imageDir;
     /// Oldest first.
     MockEvent[] history;
     /// Soonest first.
@@ -90,6 +100,28 @@ MockScenario loadScenario(string path)
     s.friends = objectArray(root, "friends");
     s.notificationsV1 = objectArray(root, "notifications");
     s.notificationsV2 = objectArray(root, "notificationsV2");
+
+    if (s.self.type == JSONType.object)
+        addUser(s, s.self, "self");
+    foreach (size_t i, JSONValue entry; s.friends)
+    {
+        // The friends listing leaves this out, it being the listing.
+        JSONValue friend = entry;
+        if (("isFriend" in friend) is null)
+            friend["isFriend"] = JSONValue(true);
+        addUser(s, friend, "friends[" ~ i.to!string ~ "]");
+    }
+    foreach (size_t i, JSONValue entry; objectArray(root, "users"))
+        addUser(s, entry, "users[" ~ i.to!string ~ "]");
+
+    if (const(JSONValue)* v = "images" in root)
+    {
+        if (v.type != JSONType.string)
+            throw new Exception("'images' is not a string");
+        s.imageDir = absolutePath(v.str, dirName(absolutePath(path)));
+        if (exists(s.imageDir) == false || isDir(s.imageDir) == false)
+            throw new Exception("'images': not a folder: " ~ s.imageDir);
+    }
 
     foreach (size_t i, JSONValue entry; objectArray(root, "events"))
     {
@@ -160,6 +192,7 @@ void applyScenario(ref MockScenario s, APIServer server, Database store, SysTime
         store.storeEvent(event);
     }
 
+    server.setStandIn(new MockStandIn(s.users, s.imageDir));
     server.setVRChatStatus(true, null);
 
     logInfo("Mock: %d friend(s), %d notification(s), %d event(s), %d live",
@@ -259,6 +292,58 @@ JSONValue[] objectArray(JSONValue root, string key)
         if (entry.type != JSONType.object)
             throw new Exception(key ~ "[" ~ i.to!string ~ "] is not an object");
     return v.array;
+}
+
+/// Add `entry` to the profiles under its ID, `where` naming it in an error.
+void addUser(ref MockScenario s, JSONValue entry, string where)
+{
+    const(JSONValue)* id = "id" in entry;
+    if (id is null || id.type != JSONType.string || id.str.length == 0)
+        throw new Exception(where ~ ": 'id' is missing or not a string");
+    s.users[id.str] = entry;
+}
+
+/// Profiles and pictures from the scenario, for the server to answer with.
+class MockStandIn : StandIn
+{
+    /// Serve `users` by ID and pictures from `imageDir`, which may be null.
+    this(JSONValue[string] users, string imageDir)
+    {
+        this.users = users;
+        this.imageDir = imageDir;
+    }
+
+    JSONValue user(string userId)
+    {
+        if (JSONValue* v = userId in users)
+            return *v;
+        return JSONValue.init;
+    }
+
+    ImageResult image(string fileId)
+    {
+        ImageResult result;
+        // The ID lands in a path.
+        if (imageDir.length == 0 || isValidFileId(fileId) == false)
+        {
+            result.error = "Not in the mock scenario";
+            return result;
+        }
+        string path = buildPath(imageDir, fileId ~ ".png");
+        if (exists(path) == false)
+        {
+            result.error = "Not in the mock scenario";
+            return result;
+        }
+        result.data = cast(const(ubyte)[]) read(path);
+        result.mimeType = sniffImageMime(result.data);
+        result.success = true;
+        return result;
+    }
+
+private:
+    JSONValue[string] users;
+    string imageDir;
 }
 
 /// Roster name of a notification's sender, or null.

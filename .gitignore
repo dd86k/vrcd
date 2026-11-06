@@ -6,6 +6,8 @@ docs/
 /server/vrcd_server
 /server/vrcd-server-test-application
 /client/vrcd_client
+# Embedded server, copied beside the client
+/client/vrcd_server
 /client/vrcd-client-test-application
 /web/vrcd_web
 /web/web

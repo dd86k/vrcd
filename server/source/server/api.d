@@ -87,6 +87,15 @@ private enum int NOTIFICATION_SENDER_LOOKUPS = 12;
 /// map; the worker will swap it into the tracker and broadcast a snapshot.
 alias ReseedCallback = void delegate();
 
+/// Answers read requests in place of VRChat (see server.mock).
+interface StandIn
+{
+    /// VRChat user object for `userId`, or JSONValue.init when unknown.
+    JSONValue user(string userId);
+    /// Picture for a file at any version and size, or a failed result.
+    ImageResult image(string fileId);
+}
+
 /// TCP JSON-L API server for clients.
 class APIServer
 {
@@ -123,6 +132,7 @@ class APIServer
     private DropaPortalDelegator dapDelegator;
     private void delegate() dapPairTrigger;
     private RateLimitTracker rateLimiter;
+    private StandIn standIn; // See setStandIn
     private void* sslCtx;
     private ushort tlsPort;
     private bool tlsOnly;
@@ -201,6 +211,12 @@ class APIServer
     void setInstanceCache(InstanceCache ic)
     {
         instanceCache = ic;
+    }
+
+    /// Answer reads from `s` in place of VRChat. Set before the server starts.
+    void setStandIn(StandIn s)
+    {
+        standIn = s;
     }
 
     /// Set the HTTP client for proxying VRChat API calls.
@@ -2334,6 +2350,16 @@ private class ClientHandler
             return;
         }
 
+        if (server.standIn)
+        {
+            JSONValue user = server.standIn.user(userId);
+            if (user.type == JSONType.object)
+                sendUser(buildUserProfile(user), null);
+            else
+                sendUser(JSONValue.init, "Not in the mock scenario");
+            return;
+        }
+
         JSONValue cached;
         string cachedError;
         if (server.userProfiles.lookup(userId, cached, cachedError))
@@ -4140,7 +4166,9 @@ private class ClientHandler
         ]);
         try
         {
-            ImageResult image = requireContent().getImage(fileId, fileVersion, size);
+            ImageResult image = server.standIn ?
+                server.standIn.image(fileId) :
+                requireContent().getImage(fileId, fileVersion, size);
             resp["success"] = JSONValue(image.success);
             if (image.success)
             {
