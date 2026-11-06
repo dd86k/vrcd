@@ -118,7 +118,8 @@ int startvrcd(string[] args)
     bool trayIcon;
     bool showVersion;
     string logFilePath;
-    string logReplay;
+    DevOptions dev;
+    string size;
 
     GetoptResult opts = void;
     try opts = getopt(args,
@@ -132,7 +133,12 @@ int startvrcd(string[] args)
         "hardware",   "Allow hardware-accelerated framebuffer (default: software)", &hardwareAccel,
         "tray",       "Show a system tray icon, closing the window hides it", &trayIcon,
         "log-file|L", "Append log output to file", &logFilePath,
-        "log-replay", "Replay a VRChat log file as new lines instead of watching VRChat's logs", &logReplay,
+        "log-replay", "Replay a VRChat log file as new lines instead of watching VRChat's logs", &dev.logReplay,
+        "mock",       "Run the embedded server on a scenario file (vrcd_server --mock), saving no settings", &dev.mockScenario,
+        "screenshot", "Save one frame to a PNG file once caught up, then quit", &dev.screenshotPath,
+        "screenshot-delay", "Milliseconds to wait after catching up before the screenshot (default 1000)", &dev.screenshotDelayMs,
+        "page",       "Tab to open on (feed, online, notifications, inventory, tools, profile, settings)", &dev.page,
+        "size",       "Window size as WIDTHxHEIGHT", &size,
         "version",    "Show version information and exit", &showVersion,
     );
     catch (Exception ex)
@@ -156,6 +162,31 @@ int startvrcd(string[] args)
         );
         return 0;
     }
+
+    if (size.length > 0)
+    {
+        import std.format : formattedRead;
+        try
+        {
+            if (formattedRead(size, "%dx%d", dev.width, dev.height) != 2
+                || size.length > 0 || dev.width <= 0 || dev.height <= 0)
+                throw new Exception("expected WIDTHxHEIGHT");
+        }
+        catch (Exception)
+        {
+            stderr.writeln("error: --size: expected WIDTHxHEIGHT, e.g. 1100x700");
+            return 1;
+        }
+    }
+
+    // The server is started from wherever the client was, but say exactly
+    // which file in its log.
+    if (dev.mockScenario.length > 0)
+    {
+        import std.path : absolutePath;
+        dev.mockScenario = absolutePath(dev.mockScenario);
+    }
+
     // Set up logging.
     LogLevel logLevel = verbose ? LogLevel.trace : LogLevel.info;
     // Errors reach stderr regardless of --verbose: the log file is no help to
@@ -193,7 +224,7 @@ int startvrcd(string[] args)
         host, port, sinceId, sinceSet, verbose, hardwareAccel);
 
     try return runGui(host, port, secret, sinceId, hostSet, postSet, secretSet, sinceSet,
-        hardwareAccel, trayIcon, logReplay);
+        hardwareAccel, trayIcon, dev);
     catch (Exception ex)
     {
         // File logger or console logger can pick this up

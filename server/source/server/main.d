@@ -220,7 +220,7 @@ void cmdRun(ref Config config)
 
     if (mock)
     {
-        SysTime start = Clock.currTime();
+        SysTime start = scenario.now != SysTime.init ? scenario.now : Clock.currTime();
         apiServer = new APIServer(config.listenAddr, config.listenPort, config.apiSecret, store, config.reseedInterval);
         wireTransport(apiServer);
         if (tlsCtx)

@@ -19,6 +19,8 @@ __gshared SDL_Window* window;
 __gshared int window_width  = 960;
 __gshared int window_height = 640;
 __gshared float uiScale = 1.0f;
+/// UI scale to use whatever the display says, or 0 to follow the display.
+__gshared float forcedScale = 0.0f;
 
 __gshared SDL_Renderer* sdlRenderer;
 __gshared SDL_Texture*  screenTexture;
@@ -107,7 +109,7 @@ void initiate_renderer(bool hardwareAccel = false)
 /// Cheap when nothing moved, so it is safe to call every frame.
 void r_update_metrics()
 {
-    float scale = SDL_GetWindowDisplayScale(window);
+    float scale = forcedScale > 0.0f ? forcedScale : SDL_GetWindowDisplayScale(window);
     if ((scale > 0.0f) == false)
         scale = 1.0f;
     uiScale = scale;
@@ -624,6 +626,18 @@ void r_present()
     SDL_RenderTexture(sdlRenderer, screenTexture, null, null);
     SDL_RenderPresent(sdlRenderer);
     sweepCaches();
+}
+
+/// Write the last drawn frame to `path` as a PNG. False on failure, logged.
+bool r_save_png(string path)
+{
+    import sdl_image : IMG_SavePNG;
+    import std.string : toStringz;
+
+    if (IMG_SavePNG(surface, toStringz(path)))
+        return true;
+    logError("Could not save %s: %s", path, fromStringz( SDL_GetError() ));
+    return false;
 }
 
 // Primary font candidates, first one found becomes fonts[0] and defines the

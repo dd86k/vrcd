@@ -4,7 +4,20 @@
 /// License: BSD-3-Clause-Clearmodule client.utils;
 module client.utils;
 
+import std.datetime.systime : SysTime, Clock;
+
 import ddlogger;
+
+/// Time the clock is frozen at, or SysTime.init to follow the system clock.
+__gshared SysTime fixedNow;
+
+/// Current local time, or fixedNow when set (see --mock).
+SysTime clockNow()
+{
+    if (fixedNow != SysTime.init)
+        return fixedNow.toLocalTime();
+    return Clock.currTime();
+}
 
 /// Open a folder or URL with the system's default handler.
 /// NOTE: SDL_OpenURL wants file:// URIs but its xdg-open and ShellExecute

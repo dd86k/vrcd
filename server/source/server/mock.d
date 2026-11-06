@@ -37,6 +37,8 @@ struct MockEvent
 /// A scenario file, parsed.
 ///
 /// The file is a JSON object, every key optional:
+/// - `now`: ISO 8601 time the scenario happens at, for repeatable screenshots.
+///   Absent means the time the server started.
 /// - `self`: the signed-in user, shaped like VRChat's user object
 /// - `friends`: the roster, shaped like VRChat's friends listing
 /// - `notifications`, `notificationsV2`: the inbox, as VRChat's two listings
@@ -47,6 +49,8 @@ struct MockEvent
 /// moves the roster and the inbox too.
 struct MockScenario
 {
+    /// SysTime.init when the file sets none.
+    SysTime now;
     JSONValue self;
     JSONValue[] friends;
     JSONValue[] notificationsV1;
@@ -66,6 +70,15 @@ MockScenario loadScenario(string path)
         throw new Exception("scenario is not a JSON object");
 
     MockScenario s;
+
+    if (const(JSONValue)* v = "now" in root)
+    {
+        if (v.type != JSONType.string)
+            throw new Exception("'now' is not a string");
+        try s.now = SysTime.fromISOExtString(v.str);
+        catch (Exception ex)
+            throw new Exception("'now': " ~ ex.msg);
+    }
 
     if (const(JSONValue)* v = "self" in root)
     {
@@ -153,21 +166,22 @@ void applyScenario(ref MockScenario s, APIServer server, Database store, SysTime
         s.friends.length, inbox.length, s.history.length, s.live.length);
 }
 
-/// Send the live events to `ingest` on a background thread, each at `start`
-/// plus its offset.
+/// Send the live events to `ingest` on a background thread, each its offset
+/// from now, stamped with its offset from `start`.
 void startLiveEvents(MockEvent[] live, SysTime start, void delegate(VRCEvent) ingest)
 {
     if (live.length == 0)
         return;
 
+    SysTime began = Clock.currTime();
     Thread t = new Thread({
         foreach (ref MockEvent e; live)
         {
-            Duration wait = (start + e.offset) - Clock.currTime();
+            Duration wait = (began + e.offset) - Clock.currTime();
             if (wait > Duration.zero)
                 Thread.sleep(wait);
             logInfo("Mock: live %s", e.type);
-            ingest(makeEvent(e, Clock.currTime()));
+            ingest(makeEvent(e, start + e.offset));
         }
     });
     t.isDaemon = true;

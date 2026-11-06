@@ -208,6 +208,21 @@ private JSONValue profileToJSON(Profile p)
     return j;
 }
 
+/// When set, saveSettings does nothing (see --mock).
+__gshared bool settingsReadOnly;
+
+/// Settings for a first run: one profile, with an embedded server.
+Settings defaultSettings()
+{
+    // Nothing configured means nobody has set a server up, which is the
+    // case embedding exists for: launch, sign in to VRChat, done.
+    Settings s;
+    Profile p;
+    p.embeddedServer = true;
+    s.profiles = [ p ];
+    return s;
+}
+
 /// Load settings from disk. Returns defaults if file is missing or invalid.
 Settings loadSettings()
 {
@@ -216,13 +231,8 @@ Settings loadSettings()
 
     if (exists(path) == false)
     {
-        // Nothing configured means nobody has set a server up, which is the
-        // case embedding exists for: launch, sign in to VRChat, done.
         logDebugging("loadSettings: no settings file at %s, defaulting to an embedded server", path);
-        Profile p;
-        p.embeddedServer = true;
-        s.profiles = [ p ];
-        return s;
+        return defaultSettings();
     }
 
     logDebugging("loadSettings: reading %s", path);
@@ -367,6 +377,8 @@ Settings loadSettings()
 /// Save settings to disk.
 void saveSettings(Settings s)
 {
+    if (settingsReadOnly)
+        return;
     string path = settingsFilePath();
 
     try

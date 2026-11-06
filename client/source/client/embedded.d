@@ -85,8 +85,11 @@ class EmbeddedServer
     /// cookie jar under a directory of its own, which is what lets a second
     /// connection profile be a second VRChat account. Null leaves it on the
     /// server's own defaults.
+    ///
+    /// `extraArgs` go on the end of the command line, e.g. `--mock` and a
+    /// scenario.
     Stream start(string overridePath, bool verbose, string listenAddr = null,
-        string baseDir = null)
+        string baseDir = null, string[] extraArgs = null)
     {
         binaryPath = findBinary(overridePath);
         if (binaryPath is null)
@@ -104,6 +107,7 @@ class EmbeddedServer
             args ~= ["--listen", listenAddr];
         if (baseDir.length > 0)
             args ~= ["--basedir", baseDir];
+        args ~= extraArgs;
 
         logInfo("Starting embedded server: %s", binaryPath);
 

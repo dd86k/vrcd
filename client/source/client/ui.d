@@ -29,11 +29,17 @@ import client.gui : wasClick, requestRepaint;
 import client.state;
 import client.stream : tlsAvailable;
 import client.theme;
-import client.utils : openFolder, openBrowser;
+import client.utils : clockNow, openFolder, openBrowser;
 
 /// Active tab selection. The tab set itself lives in client.state, with the
 /// other page enums.
 private Tab activeTab = Tab.feed;
+
+/// Switch to `tab`, as pressing it in the tab bar would.
+void selectTab(Tab tab)
+{
+    activeTab = tab;
+}
 
 // Feed filter state
 private char[128] searchBuf = '\0';
@@ -1403,12 +1409,10 @@ private void gridCell(mu_Context* ctx, const(char)[] text, mu_Color lineColor, b
 /// Returns an empty slice for `unixTime == 0` (unknown).
 private const(char)[] formatRelative(long unixTime, char[] buf)
 {
-    import std.datetime : Clock;
-
     if (unixTime == 0)
         return null;
 
-    long diff = Clock.currTime.toUnixTime!long() - unixTime;
+    long diff = clockNow().toUnixTime!long() - unixTime;
     if (diff < 0)
         diff = 0;
 

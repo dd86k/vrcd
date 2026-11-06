@@ -73,8 +73,34 @@ private Thread netThread;
 
 /// Local VRChat log file watcher.
 private LogWatcher logWatcher;
+/// Options for working on the client without VRChat: a mock server, a
+/// replayed log, and a screenshot instead of a session.
+struct DevOptions
+{
+    /// Scenario for an embedded `vrcd_server --mock`, or null.
+    string mockScenario;
+    /// VRChat log to replay instead of watching the real ones, or null.
+    string logReplay;
+    /// PNG to save one frame to before quitting, or null.
+    string screenshotPath;
+    /// Tab the screenshot shows.
+    Tab page;
+    /// Window size in logical pixels, zero for the default.
+    int width, height;
+    /// How long to let the UI settle after the first catch-up.
+    int screenshotDelayMs = 1000;
+}
+
+private DevOptions dev;
+
 /// Log to replay once the first catch-up lands, or null. See --log-replay.
 private string logReplayPath;
+
+/// Set when a screenshot run ends without a picture.
+private bool screenshotFailed;
+
+/// How long a screenshot run waits for the server before giving up.
+private enum Duration SCREENSHOT_TIMEOUT = dur!"seconds"(30);
 
 /// Server connection.
 /// __gshared: used by network thread after main thread finishes setup.
@@ -276,12 +302,23 @@ private bool loadSDLLibraries()
 
 int runGui(string host, ushort port, string secret, long sinceId,
     bool hostExplicit, bool portExplicit, bool secretExplicit, bool sinceExplicit,
-    bool hardwareAccel, bool trayIcon, string logReplay)
+    bool hardwareAccel, bool trayIcon, DevOptions options)
 {
-    logReplayPath = logReplay;
+    dev = options;
+    logReplayPath = dev.logReplay;
 
     // Load saved settings; CLI args override the active profile for this run.
-    saved = loadSettings();
+    // A mock run starts from defaults and saves nothing, so the real settings,
+    // each profile's event cursor included, are left alone.
+    if (dev.mockScenario.length > 0)
+    {
+        saved = defaultSettings();
+        settingsReadOnly = true;
+        if (loadScenarioClock(dev.mockScenario) == false)
+            return 1;
+    }
+    else
+        saved = loadSettings();
     {
         Profile* p = &saved.active();
         if (hostExplicit)
@@ -364,11 +401,23 @@ int runGui(string host, ushort port, string secret, long sinceId,
     // Log startup environment info.
     logStartupInfo();
 
+    // A screenshot is drawn hidden and at scale 1, so the picture is the size
+    // asked for on any display.
+    bool shooting = dev.screenshotPath.length > 0;
+    if (dev.width > 0 && dev.height > 0)
+    {
+        window_width = dev.width;
+        window_height = dev.height;
+    }
+    if (shooting)
+        forcedScale = 1.0f;
+
     // Create window. SDL3 dropped the position arguments from the call, so
     // centering it is a separate step.
     window = SDL_CreateWindow("vrcd",
         window_width, window_height,
-        SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+        SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY |
+        (shooting ? SDL_WINDOW_HIDDEN : 0));
     if (window is null)
     {
         showCriticalMessage("vrcd: cannot create window", cast(string) fromStringz( SDL_GetError() ).idup);
@@ -382,7 +431,7 @@ int runGui(string host, ushort port, string secret, long sinceId,
     if ((contentScale > 0.0f) == false)
         contentScale = 1.0f;
     SDL_SetWindowMinimumSize(window, cast(int)(600 * contentScale), cast(int)(400 * contentScale));
-    if (contentScale != 1.0f)
+    if (contentScale != 1.0f && shooting == false)
         SDL_SetWindowSize(window,
             cast(int)(window_width * contentScale), cast(int)(window_height * contentScale));
     SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
@@ -454,11 +503,13 @@ int runGui(string host, ushort port, string secret, long sinceId,
     else
         logWatcher.start();
 
+    selectTab(dev.page);
+
     // Run main event loop and clean up.
     eventLoop(uictx);
     guiCleanup();
 
-    return 0;
+    return screenshotFailed ? 3 : 0;
 }
 
 /// Main event loop, split out to keep stack frames small (avoids
@@ -468,13 +519,19 @@ private void eventLoop(mu_Context* uictx)
     bool running = true;
     SDL_Event e = void;
 
+    // A screenshot run polls rather than blocks: nothing else would wake it
+    // once the settle delay is up.
+    bool shooting = dev.screenshotPath.length > 0;
+    MonoTime shotStarted = MonoTime.currTime;
+    MonoTime shotAt;
+
     while (running)
     {
         // When momentum or an activity indicator is live, use a short timeout
         // so we keep animating. Otherwise block until an event arrives (zero CPU).
         bool hasMomentum = (momentumVY > MOMENTUM_MIN || momentumVY < -MOMENTUM_MIN);
         bool gotEvent;
-        if (hasMomentum || appState.isOpening())
+        if (hasMomentum || appState.isOpening() || shooting)
             gotEvent = SDL_WaitEventTimeout(&e, 16);   // ~60 fps
         else if (trayNeedsPolling && trayActive())
         {
@@ -1332,7 +1389,8 @@ private void eventLoop(mu_Context* uictx)
         }
 
         // Hidden to the tray. Showing the window sends an event that redraws.
-        if (windowHidden())
+        // A screenshot is hidden on purpose and still draws.
+        if (windowHidden() && shooting == false)
             continue;
 
         // Build UI
@@ -1376,6 +1434,52 @@ private void eventLoop(mu_Context* uictx)
             }
         }
         r_present();
+
+        // The first frame past the settle delay is the one saved.
+        if (shooting)
+        {
+            MonoTime now = MonoTime.currTime;
+            if (catchUpComplete && shotAt == MonoTime.init)
+                shotAt = now + dur!"msecs"(dev.screenshotDelayMs);
+            if (shotAt != MonoTime.init && now >= shotAt)
+            {
+                if (r_save_png(dev.screenshotPath))
+                    logInfo("Screenshot saved to %s", dev.screenshotPath);
+                else
+                    screenshotFailed = true;
+                running = false;
+            }
+            else if (shotAt == MonoTime.init && now - shotStarted > SCREENSHOT_TIMEOUT)
+            {
+                logError("Screenshot: no catch-up from the server within %s", SCREENSHOT_TIMEOUT);
+                screenshotFailed = true;
+                running = false;
+            }
+        }
+    }
+}
+
+/// Freeze the clock at the scenario's `now`, when it has one. False, logged,
+/// when the file cannot be read.
+private bool loadScenarioClock(string path)
+{
+    import std.datetime.systime : SysTime;
+    import std.file : readText;
+
+    try
+    {
+        JSONValue root = parseJSON(readText(path));
+        if (root.type != JSONType.object)
+            return true; // The server says what is wrong with it
+        if (const(JSONValue)* v = "now" in root)
+            if (v.type == JSONType.string)
+                fixedNow = SysTime.fromISOExtString(v.str);
+        return true;
+    }
+    catch (Exception e)
+    {
+        logCritical("Mock scenario '%s': %s", path, e.msg);
+        return false;
     }
 }
 
@@ -3028,11 +3132,11 @@ private string formatTimestamp(string isoTimestamp)
 // This function is used for local log events, to be consistent with VRC events.
 private string timeNow()
 {
-    import std.datetime : Clock, SysTime;
-    
+    import std.datetime : SysTime;
+
     try
     {
-        SysTime t = Clock.currTime();
+        SysTime t = clockNow();
         return format!"%02d-%02d %02d:%02d:%02d"(t.month, t.day, t.hour, t.minute, t.second);
     }
     catch (Exception ex)
@@ -3108,8 +3212,11 @@ private bool startLink(long sinceId)
     if (prof.embeddedServer)
     {
         embedded = new EmbeddedServer();
+        string[] extraArgs;
+        if (dev.mockScenario.length > 0)
+            extraArgs = ["--mock", dev.mockScenario];
         embeddedStream = embedded.start(prof.serverPath, false,
-            prof.serverListen, prof.baseDir);
+            prof.serverListen, prof.baseDir, extraArgs);
         if (embeddedStream is null)
         {
             appState.serverStatus = embedded.lastError();
