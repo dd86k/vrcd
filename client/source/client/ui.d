@@ -537,7 +537,7 @@ private void drawFeedTab(mu_Context* ctx, AppState* state, int scrollDelta)
     {
         mu_layout_row(ctx, 1, fullCol.ptr, 0);
         mu_Rect headerRect = mu_layout_next(ctx);
-        int x = headerRect.x + 8; // leave gap matching the accent strip below
+        int x = headerRect.x + feedTagW;
         int y = headerRect.y;
         int h = headerRect.h;
 
@@ -613,11 +613,11 @@ private void drawFeedTab(mu_Context* ctx, AppState* state, int scrollDelta)
                     state.feedDetailOpen = true;
                 }
 
-                // Source accent strip on the left edge.
-                mu_draw_rect(ctx, mu_Rect(rowRect.x, rowRect.y, 4, rowRect.h), sourceColor(entry.source));
+                drawFeedTag(ctx, entry.source,
+                    mu_Rect(rowRect.x, rowRect.y, feedTagW, rowRect.h));
 
                 // Draw cell text at column offsets within the row rect.
-                int x = rowRect.x + 8; // leave gap after accent strip
+                int x = rowRect.x + feedTagW;
                 int h = rowRect.h;
                 int y = rowRect.y;
 
@@ -1921,16 +1921,53 @@ private void drawFriendCard(mu_Context* ctx, AppState* state, ref FriendInfo f)
         openProfile(state, f.userId);
 }
 
-/// Map feed event source to an accent colour for the row strip.
-private mu_Color sourceColor(EventSource source)
+/// Width of the feed's tag column, left of the date.
+private enum int feedTagW = 48;
+
+/// Draw the feed row tag into cell: the game, outlined when it came from the
+/// server and filled when it came from local logs.
+///
+/// Game and source are two separate things, so they get separate cues: the
+/// text says which game, the fill says where vrcd heard about it. Lightness
+/// survives colour blindness where hue does not.
+/// NOTE: The game is always VRChat until FeedEntry carries one.
+private void drawFeedTag(mu_Context* ctx, EventSource source, mu_Rect cell)
 {
+    string text;
+    mu_Color ink, edge, fill;
     final switch (source)
     {
-        case EventSource.server:        return blue; // blue
-        case EventSource.local:         return purple; // purple
-        case EventSource.dropaportal:   return teal; // teal (accent color)
-        case EventSource.system:        return grey; // gray
+        case EventSource.server:
+            text = "VRC";
+            ink = iconPlain;
+            edge = textDim;
+            break;
+        case EventSource.local:
+            text = "VRC";
+            ink = background;
+            fill = iconPlain;
+            break;
+        case EventSource.dropaportal:
+            text = "DAP";
+            ink = teal;
+            edge = teal;
+            break;
+        case EventSource.system:
+            text = "SYS";
+            ink = textHint;
+            break;
     }
+
+    int textW = ctx.text_width(ctx.style.font, text.ptr, cast(int) text.length);
+    int textH = ctx.text_height(ctx.style.font);
+    int h = textH + 4;
+    mu_Rect box = mu_Rect(cell.x + 4, cell.y + (cell.h - h) / 2, cell.w - 8, h);
+    if (fill.a)
+        mu_draw_rect(ctx, box, fill);
+    if (edge.a)
+        mu_draw_box(ctx, box, edge);
+    mu_draw_text(ctx, ctx.style.font, text,
+        mu_Vec2(box.x + (box.w - textW) / 2, box.y + 2), ink);
 }
 
 /// Map VRChat status to an accent colour for the friend card strip.
@@ -2837,11 +2874,10 @@ private enum int notifSpineGap   = 8;
 
 /// Colour of an entry's spine, by what kind of notification it is.
 ///
-/// Same idea as the feed's source strip: the colour is the first thing read
-/// and it answers "what is this" before any of the words do. Grouped by
-/// family rather than by exact type, since the list of types grows faster
-/// than a palette usefully can -- an unlisted `group.somethingNew` still
-/// lands on the group colour by prefix.
+/// The colour is the first thing read and it answers "what is this" before
+/// any of the words do. Grouped by family rather than by exact type, since
+/// the list of types grows faster than a palette usefully can -- an unlisted
+/// `group.somethingNew` still lands on the group colour by prefix.
 ///
 /// Invites are blue rather than the teal they used to be. Teal sat 42 degrees
 /// of hue from the green above it at much the same lightness, which is close
@@ -2871,7 +2907,7 @@ private mu_Color notifAccent(string notifType)
     }
 
     if (notifType.startsWith("group"))
-        return purple;         // purple, as the feed
+        return purple;     // purple, groups
     return grey;              // grey, unlisted
 }
 
