@@ -2744,10 +2744,18 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
             bool isGroup = n.info.senderUserId.startsWith("grp_");
             bool isUser = n.info.senderUserId.startsWith("usr_");
 
+            bool announcement = isGroup
+                && n.info.notificationType == "group.announcement"
+                && state.serverProtocol >= PROTOCOL_ANNOUNCEMENTS;
+
             // A friend request is a stranger asking in, so who they are goes
-            // inline. Other senders are a name drawn as a link.
+            // inline, and an announcement is there to be read, so its entry
+            // opens it. Other senders are a name drawn as a link.
             if (isUser && n.info.notificationType == "friendRequest")
                 drawSenderCard(ctx, state, n.info);
+            else if (announcement)
+                drawAnnouncementCard(ctx, state, n.info,
+                    from == "View group" ? null : from.idup);
             // An empty line is a hole rather than a blank: a friend request
             // carries no message, and most group notices carry no sender.
             else if (from.length > 0)
@@ -2767,18 +2775,7 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
                 else
                     notifLine(ctx, from, ctx.style.colors[MU_COLOR_TEXT]);
             }
-            // The row holds a line of the post at most, so that line opens
-            // the whole of it.
-            if (isGroup && n.info.notificationType == "group.announcement"
-                && state.serverProtocol >= PROTOCOL_ANNOUNCEMENTS)
-            {
-                mu_layout_row(ctx, 1, fullCol.ptr, 0);
-                if (notifLink(ctx, n.info.message.length > 0
-                    ? n.info.message : "Read announcement"))
-                    openAnnouncement(state, n.info.senderUserId,
-                        from == "View group" ? null : from.idup);
-            }
-            else if (n.info.message.length > 0)
+            if (n.info.message.length > 0 && announcement == false)
             {
                 mu_layout_row(ctx, 1, fullCol.ptr, 0);
                 notifLine(ctx, n.info.message, ctx.style.colors[MU_COLOR_TEXT]);
@@ -3127,6 +3124,54 @@ private void drawSenderCard(mu_Context* ctx, AppState* state,
 
     if (wasClick && over)
         openProfile(state, info.senderUserId);
+}
+
+/// A group announcement as a card: group icon, group name, the headline, and
+/// a Read announcement link. The whole card opens the announcement, whose
+/// page leads on to the group. `name` is the group's, or null.
+private void drawAnnouncementCard(mu_Context* ctx, AppState* state,
+    ref const(NotificationInfo) info, string name)
+{
+    enum int lineStep = 26;
+    enum int iconSize = 3 * lineStep;
+
+    GroupEntry* listed = state.findGroup(info.senderUserId);
+    if (name.length == 0 && listed)
+        name = listed.name;
+    if (name.length == 0)
+        name = info.senderUserId;
+
+    int pad = ctx.style.padding;
+    int[2] cols = [notifSpineGap + pad + iconSize + ctx.style.spacing, -1];
+    mu_layout_row(ctx, 2, cols.ptr, iconSize);
+    mu_Rect iconCell = mu_layout_next(ctx);
+    mu_Rect textCell = mu_layout_next(ctx);
+    mu_Rect card = mu_Rect(iconCell.x + notifSpineGap, iconCell.y,
+        textCell.x + textCell.w - iconCell.x - notifSpineGap, iconSize);
+
+    bool over = mu_mouse_over(ctx, card) != 0;
+    if (over && ctx.mouse_down == 0)
+        mu_draw_rect(ctx, card, hoverBg);
+
+    drawGroupIcon(ctx, state, listed ? listed.iconFileId : null,
+        listed ? listed.iconVersion : 0, name,
+        mu_Rect(card.x + pad, card.y, iconSize, iconSize), 128);
+
+    mu_Rect line = mu_Rect(textCell.x, textCell.y, textCell.w, lineStep);
+    drawInk(ctx, name, line, textDim);
+
+    // Bold the way the announcement page does it, there being one size of
+    // type.
+    line.y += lineStep;
+    string headline = info.message.length > 0 ? info.message : "New announcement";
+    drawInk(ctx, headline, line, white);
+    drawInk(ctx, headline, mu_Rect(line.x + 1, line.y, line.w, line.h), white);
+
+    line.y += lineStep;
+    drawUnderlined(ctx, "Read announcement", line, linkText);
+
+    if (wasClick && over)
+        openAnnouncement(state, info.senderUserId, name);
 }
 
 /// One line on a notification sender from their profile (trust rank,

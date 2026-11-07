@@ -839,6 +839,8 @@ function notifyCard(entry) {
        group. */
     var fromUser = (entry.sender_user_id || "").indexOf("usr_") === 0;
     var fromGroup = (entry.sender_user_id || "").indexOf("grp_") === 0;
+    var announcement = fromGroup &&
+        entry.notification_type === "group.announcement" && state.server_version >= 19;
     var who = entry.sender_name || (fromUser ? entry.sender_user_id : "") ||
         entry.title || "VRChat";
 
@@ -883,6 +885,10 @@ function notifyCard(entry) {
                 ? { kind: "friend", id: entry.sender_user_id }
                 : { kind: "person", id: entry.sender_user_id, name: who });
         };
+    // An announcement is there to be read, so its card opens it. The
+    // announcement leads on to the group.
+    else if (announcement)
+        head.onclick = function () { openAnnouncement(entry.sender_user_id, who); };
     else if (fromGroup)
         head.onclick = function () {
             select({ kind: "group", id: entry.sender_user_id, name: entry.title });
@@ -893,16 +899,9 @@ function notifyCard(entry) {
     // titles are often just the type over again ("Group Invite").
     if (entry.title && entry.title !== who && entry.title !== kind.label)
         card.appendChild(el("div", "ntitle", entry.title));
-    // The row holds a line of the post at most, so that line opens the whole
-    // of it.
-    if (fromGroup && entry.notification_type === "group.announcement" &&
-        state.server_version >= 19) {
-        var read = el("button", "msg read", entry.message || "Read announcement");
-        read.onclick = function () {
-            openAnnouncement(entry.sender_user_id, who);
-        };
-        card.appendChild(read);
-    } else if (entry.message) card.appendChild(el("div", "msg", entry.message));
+    if (announcement)
+        card.appendChild(el("div", "ntitle", entry.message || "New announcement"));
+    else if (entry.message) card.appendChild(el("div", "msg", entry.message));
     if (kind.note) card.appendChild(el("div", "note", kind.note));
 
     /* A v2 notification names its own buttons, and they are the only ones

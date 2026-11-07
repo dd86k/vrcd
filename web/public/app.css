@@ -247,10 +247,6 @@ button.head { cursor: pointer; }
    part of what they wrote, same as a bio. */
 .notify .msg { margin-top: .6rem; font-size: .9rem; overflow-wrap: anywhere;
     white-space: pre-wrap; }
-/* An announcement's line opens the whole post. */
-.notify button.msg { display: block; width: 100%; text-align: left; padding: 0;
-    background: none; border: 0; color: inherit; font-family: inherit;
-    cursor: pointer; text-decoration: underline; text-underline-offset: .2em; }
 .notify .note { margin-top: .6rem; color: var(--dim); font-size: .8rem; }
 /* Side by side while there is room. A v2 notification names its own buttons
    and can offer three or four, so they wrap onto a second line rather than
