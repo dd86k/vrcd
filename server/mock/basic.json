@@ -95,6 +95,95 @@
             "friendRequestStatus": "incoming"
         }
     ],
+    "moderations": [
+        { "id": "pmod_00000000-0000-4000-8000-000000000001", "type": "mute",
+          "targetUserId": "usr_00000000-0000-4000-8000-000000000098", "targetDisplayName": "Loud Neighbor" },
+        { "id": "pmod_00000000-0000-4000-8000-000000000002", "type": "block",
+          "targetUserId": "usr_00000000-0000-4000-8000-000000000097", "targetDisplayName": "Pest" }
+    ],
+    "groups": [
+        {
+            "id": "grp_00000000-0000-4000-8000-0000000000d1",
+            "name": "Harbor Watch",
+            "shortCode": "HARBR",
+            "discriminator": "0420",
+            "description": "Keeping an eye on the boats since 2022.",
+            "rules": "Be kind. No fishing off the pier.",
+            "links": [ "https://example.invalid/harbor" ],
+            "languages": [ "eng", "fra" ],
+            "iconUrl": "https://api.vrchat.cloud/api/1/file/file_00000000-0000-4000-8000-0000000000e1/1/file",
+            "bannerUrl": "https://api.vrchat.cloud/api/1/file/file_00000000-0000-4000-8000-0000000000e4/1/file",
+            "privacy": "default",
+            "joinState": "request",
+            "memberCount": 128,
+            "onlineMemberCount": 9,
+            "ownerId": "usr_00000000-0000-4000-8000-000000000001",
+            "createdAt": "2022-05-01T10:00:00.000Z",
+            "roles": [ { "id": "grol_00000000-0000-4000-8000-000000000001", "name": "Lookout" } ],
+            "myMember": {
+                "isRepresenting": true,
+                "isSubscribedToAnnouncements": true,
+                "visibility": "visible",
+                "joinedAt": "2023-01-15T18:00:00.000Z",
+                "membershipStatus": "member",
+                "roleIds": [ "grol_00000000-0000-4000-8000-000000000001" ]
+            }
+        },
+        {
+            "id": "grp_00000000-0000-4000-8000-0000000000d2",
+            "name": "Lantern Traders",
+            "shortCode": "LNTRN",
+            "discriminator": "1337",
+            "description": "Stall keepers of Lantern Market.",
+            "iconUrl": "https://api.vrchat.cloud/api/1/file/file_00000000-0000-4000-8000-0000000000e2/1/file",
+            "privacy": "default",
+            "joinState": "open",
+            "memberCount": 42,
+            "onlineMemberCount": 3,
+            "ownerId": "usr_00000000-0000-4000-8000-000000000004",
+            "createdAt": "2024-09-09T09:00:00.000Z",
+            "myMember": {
+                "isRepresenting": false,
+                "isSubscribedToAnnouncements": false,
+                "visibility": "friends",
+                "joinedAt": "2025-03-02T20:00:00.000Z",
+                "membershipStatus": "member"
+            }
+        },
+        {
+            "id": "grp_00000000-0000-4000-8000-0000000000d3",
+            "name": "Night Choir",
+            "shortCode": "CHOIR",
+            "discriminator": "0007",
+            "description": "Singing after midnight, UTC.",
+            "iconUrl": "https://api.vrchat.cloud/api/1/file/file_00000000-0000-4000-8000-0000000000e3/1/file",
+            "privacy": "default",
+            "joinState": "invite",
+            "memberCount": 17,
+            "onlineMemberCount": 0,
+            "ownerId": "usr_00000000-0000-4000-8000-000000000003",
+            "createdAt": "2025-12-24T23:00:00.000Z",
+            "membershipStatus": "invited"
+        }
+    ],
+    "notificationsV2": [
+        {
+            "id": "not_00000000-0000-4000-8000-000000000003",
+            "type": "group.invite",
+            "senderUserId": "grp_00000000-0000-4000-8000-0000000000d3",
+            "senderUsername": "Night Choir",
+            "title": "Group Invite",
+            "message": "You were invited to Night Choir",
+            "canDelete": false,
+            "createdAt": "2026-11-06T12:28:00.000Z",
+            "responses": [
+                { "type": "accept", "text": "Accept", "icon": "check", "data": "" },
+                { "type": "decline", "text": "Decline", "icon": "cancel", "data": "" },
+                { "type": "link", "text": "View Group", "data": "group:grp_00000000-0000-4000-8000-0000000000d3" }
+            ]
+        }
+    ],
+
     "notifications": [
         {
             "id": "not_00000000-0000-4000-8000-000000000001",
@@ -155,6 +244,11 @@
             "id": "not_00000000-0000-4000-8000-000000000002", "type": "invite",
             "senderUserId": "usr_00000000-0000-4000-8000-000000000004",
             "senderUsername": "Dune" } },
+        { "at": "-2m", "type": "notification-v2", "content": {
+            "id": "not_00000000-0000-4000-8000-000000000003", "type": "group.invite",
+            "senderUserId": "grp_00000000-0000-4000-8000-0000000000d3",
+            "senderUsername": "Night Choir",
+            "title": "Group Invite", "message": "You were invited to Night Choir" } },
 
         { "at": "+10s", "type": "friend-online", "content": {
             "userId": "usr_00000000-0000-4000-8000-000000000007", "platform": "android",

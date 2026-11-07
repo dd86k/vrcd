@@ -25,6 +25,7 @@ import server.content : ImageResult, isValidFileId, sniffImageMime;
 import server.database;
 import server.events;
 import server.friends;
+import server.groups : GroupsTracker, isMemberOf;
 import server.userimage : UserImage;
 import vrcd.notifications;
 
@@ -47,6 +48,9 @@ struct MockEvent
 /// - `users`: anyone a profile may be opened for, shaped like VRChat's user
 ///   object. Self and the roster answer too, so this is for strangers and for
 ///   fuller friend profiles.
+/// - `moderations`: mutes and blocks, as VRChat's player moderation listing
+/// - `groups`: full group objects. Those you are a member of make your list,
+///   the rest only answer when their pane is opened.
 /// - `images`: folder of pictures named `<file id>.png`, relative to the file
 /// - `events`: `{"at": "-5m", "type": "friend-online", "content": {...}}`
 ///
@@ -61,6 +65,9 @@ struct MockScenario
     JSONValue[] friends;
     JSONValue[] notificationsV1;
     JSONValue[] notificationsV2;
+    JSONValue[] moderations;
+    /// Group objects by group ID.
+    JSONValue[string] groups;
     /// Profiles by user ID, `users` winning over the roster and self.
     JSONValue[string] users;
     /// Absolute, or null when the file sets none.
@@ -100,6 +107,15 @@ MockScenario loadScenario(string path)
     s.friends = objectArray(root, "friends");
     s.notificationsV1 = objectArray(root, "notifications");
     s.notificationsV2 = objectArray(root, "notificationsV2");
+
+    s.moderations = objectArray(root, "moderations");
+    foreach (size_t i, JSONValue entry; objectArray(root, "groups"))
+    {
+        const(JSONValue)* id = "id" in entry;
+        if (id is null || id.type != JSONType.string || id.str.length == 0)
+            throw new Exception("groups[" ~ i.to!string ~ "]: 'id' is missing or not a string");
+        s.groups[id.str] = entry;
+    }
 
     if (s.self.type == JSONType.object)
         addUser(s, s.self, "self");
@@ -177,6 +193,15 @@ void applyScenario(ref MockScenario s, APIServer server, Database store, SysTime
 
     tracker.replaceAll(FriendsTracker.buildFriendMap(s.friends));
 
+    server.getModerationsTracker().replaceFromAPI(s.moderations);
+
+    GroupsTracker groups = server.getGroupsTracker();
+    // Empty, but marks the list loaded, which upsert needs.
+    groups.replaceFromAPI(null);
+    foreach (string id, ref JSONValue g; s.groups)
+        if (isMemberOf(g))
+            groups.upsert(g);
+
     // After the roster, which is where a sender's name comes from.
     NotificationInfo[] inbox;
     foreach (JSONValue entry; s.notificationsV1)
@@ -192,11 +217,11 @@ void applyScenario(ref MockScenario s, APIServer server, Database store, SysTime
         store.storeEvent(event);
     }
 
-    server.setStandIn(new MockStandIn(s.users, s.imageDir));
+    server.setStandIn(new MockStandIn(s.users, s.groups, s.imageDir));
     server.setVRChatStatus(true, null);
 
-    logInfo("Mock: %d friend(s), %d notification(s), %d event(s), %d live",
-        s.friends.length, inbox.length, s.history.length, s.live.length);
+    logInfo("Mock: %d friend(s), %d group(s), %d notification(s), %d event(s), %d live",
+        s.friends.length, s.groups.length, inbox.length, s.history.length, s.live.length);
 }
 
 /// Send the live events to `ingest` on a background thread, each its offset
@@ -306,16 +331,25 @@ void addUser(ref MockScenario s, JSONValue entry, string where)
 /// Profiles and pictures from the scenario, for the server to answer with.
 class MockStandIn : StandIn
 {
-    /// Serve `users` by ID and pictures from `imageDir`, which may be null.
-    this(JSONValue[string] users, string imageDir)
+    /// Serve `users` and `groups` by ID, and pictures from `imageDir`, which
+    /// may be null.
+    this(JSONValue[string] users, JSONValue[string] groups, string imageDir)
     {
         this.users = users;
+        this.groups = groups;
         this.imageDir = imageDir;
     }
 
     JSONValue user(string userId)
     {
         if (JSONValue* v = userId in users)
+            return *v;
+        return JSONValue.init;
+    }
+
+    JSONValue group(string groupId)
+    {
+        if (JSONValue* v = groupId in groups)
             return *v;
         return JSONValue.init;
     }
@@ -343,6 +377,7 @@ class MockStandIn : StandIn
 
 private:
     JSONValue[string] users;
+    JSONValue[string] groups;
     string imageDir;
 }
 

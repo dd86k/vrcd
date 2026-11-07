@@ -92,6 +92,8 @@ interface StandIn
 {
     /// VRChat user object for `userId`, or JSONValue.init when unknown.
     JSONValue user(string userId);
+    /// VRChat group object for `groupId`, or JSONValue.init when unknown.
+    JSONValue group(string groupId);
     /// Picture for a file at any version and size, or a failed result.
     ImageResult image(string fileId);
 }
@@ -199,6 +201,18 @@ class APIServer
     ModerationsTracker getModerationsTracker()
     {
         return moderationsTracker;
+    }
+
+    /// Access the groups tracker.
+    GroupsTracker getGroupsTracker()
+    {
+        return groupsTracker;
+    }
+
+    /// Why a VRChat call cannot be made: no HTTP client, or a mock run.
+    string noClientError()
+    {
+        return standIn ? "Read-only in mock" : "Server HTTP client not configured";
     }
 
     /// Set the world cache for resolving world names.
@@ -729,7 +743,7 @@ class APIServer
     {
         if (httpClient is null || apiMutex is null)
         {
-            error = "Server HTTP client not configured";
+            error = noClientError();
             return false;
         }
 
@@ -2370,7 +2384,7 @@ private class ClientHandler
 
         if (server.httpClient is null || server.apiMutex is null)
         {
-            sendUser(JSONValue.init, "Server HTTP client not configured");
+            sendUser(JSONValue.init, server.noClientError());
             return;
         }
 
@@ -2522,7 +2536,7 @@ private class ClientHandler
 
         if (server.httpClient is null || server.apiMutex is null)
         {
-            sendError("Server HTTP client not configured");
+            sendError(server.noClientError());
             return;
         }
 
@@ -2706,7 +2720,7 @@ private class ClientHandler
 
         if (server.httpClient is null || server.apiMutex is null)
         {
-            sendError("Server HTTP client not configured");
+            sendError(server.noClientError());
             return;
         }
 
@@ -2830,7 +2844,7 @@ private class ClientHandler
 
         if (server.httpClient is null || server.apiMutex is null)
         {
-            sendError("Server HTTP client not configured");
+            sendError(server.noClientError());
             return;
         }
 
@@ -3055,7 +3069,7 @@ private class ClientHandler
 
         if (server.httpClient is null || server.apiMutex is null)
         {
-            sendResult(false, "Server HTTP client not configured");
+            sendResult(false, server.noClientError());
             return;
         }
 
@@ -3262,9 +3276,16 @@ private class ClientHandler
             sendLine(result.toString() ~ "\n");
         }
 
+        // Loaded by the scenario.
+        if (server.standIn)
+        {
+            sendLine(server.moderationsTracker.buildModerationsMessage().toString() ~ "\n");
+            return;
+        }
+
         if (server.httpClient is null || server.apiMutex is null)
         {
-            sendModerationsError("Server HTTP client not configured");
+            sendModerationsError(server.noClientError());
             return;
         }
 
@@ -3366,7 +3387,7 @@ private class ClientHandler
 
         if (server.httpClient is null || server.apiMutex is null)
         {
-            sendResult(false, displayName, "Server HTTP client not configured");
+            sendResult(false, displayName, server.noClientError());
             return;
         }
 
@@ -3461,7 +3482,7 @@ private class ClientHandler
 
         if (server.httpClient is null || server.apiMutex is null)
         {
-            sendResult(false, displayName, "Server HTTP client not configured");
+            sendResult(false, displayName, server.noClientError());
             return;
         }
 
@@ -3528,9 +3549,16 @@ private class ClientHandler
             return;
         }
 
+        // Loaded by the scenario.
+        if (server.standIn)
+        {
+            sendLine(server.groupsTracker.buildGroupsMessage().toString() ~ "\n");
+            return;
+        }
+
         if (server.httpClient is null || server.apiMutex is null)
         {
-            sendGroupsError("Server HTTP client not configured");
+            sendGroupsError(server.noClientError());
             return;
         }
 
@@ -3600,6 +3628,16 @@ private class ClientHandler
             return;
         }
 
+        if (server.standIn)
+        {
+            JSONValue group = server.standIn.group(groupId);
+            if (group.type == JSONType.object)
+                sendGroup(buildGroupProfile(group), null);
+            else
+                sendGroup(JSONValue.init, "Not in the mock scenario");
+            return;
+        }
+
         JSONValue cached;
         string cachedError;
         if (server.groupProfiles.lookup(groupId, cached, cachedError))
@@ -3610,7 +3648,7 @@ private class ClientHandler
 
         if (server.httpClient is null || server.apiMutex is null)
         {
-            sendGroup(JSONValue.init, "Server HTTP client not configured");
+            sendGroup(JSONValue.init, server.noClientError());
             return;
         }
 
@@ -3734,7 +3772,7 @@ private class ClientHandler
 
         if (server.httpClient is null || server.apiMutex is null)
         {
-            sendResult(false, "Server HTTP client not configured");
+            sendResult(false, server.noClientError());
             return;
         }
 
