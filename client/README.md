@@ -13,7 +13,11 @@ vrcd-client [options]
   -v, --verbose  Enable trace logging
       --cli      CLI mode (stream events to stdout)
       --tray     System tray icon, closing the window hides it
+      --mock     Run on a scenario file, without VRChat (see below)
 ```
+
+For `--mock`, `--log-replay`, `--page` and `--screenshot`, see
+[Mocking and Screenshots](../README.md#mocking-and-screenshots).
 
 Settings are persisted to `~/.config/vrcd/settings.json` (Linux) or `%APPDATA%/vrcd/settings.json` (Windows).
 

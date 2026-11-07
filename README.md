@@ -169,6 +169,49 @@ dub build :web
 
 See [API.md](./API.md) for server-client API details.
 
+### Mocking and Screenshots
+
+The server can serve a fixed scenario instead of VRChat, so the front-ends can
+be worked on without a VRChat session, and the same screenshot comes out twice.
+The database is in memory and nothing is sent to VRChat: anything that would
+change something there answers "Read-only in mock".
+
+```bash
+# Every client page as a PNG under ./screenshots/ (builds first, -n skips that)
+tools/screenshots.sh
+# Only some pages, named or not
+tools/screenshots.sh feed inbox=notifications tools:groupList
+
+# Click around in a real window, settings are left alone
+client/vrcd_client --mock server/mock/basic.json --log-replay server/mock/basic_log.txt
+
+# The server on its own, listening as configured, for other front-ends
+server/vrcd_server --mock server/mock/basic.json
+```
+
+Client options for this:
+- `--mock FILE`: run the embedded server on a scenario. Default settings, none
+  saved, pictures kept out of the disk cache, and the clock frozen at the
+  scenario's `now`.
+- `--log-replay FILE`: read a VRChat log as new lines once caught up, instead
+  of watching the real ones.
+- `--page TARGET`: open on a tab (`feed`, `online`, `notifications`,
+  `inventory`, `tools`, `profile`, `settings`), a sub-page
+  (`inventory:prints`, `tools:muteList`), `user:ID` or `group:ID`.
+- `--screenshot FILE.png`, `--size WxH`, `--screenshot-delay MS`: save one
+  frame once caught up, then quit. The window is hidden and drawn at scale 1.
+
+Times are drawn in the local time zone, so set `TZ=UTC` for repeatable
+pictures (the script does).
+
+The scenario is [server/mock/basic.json](server/mock/basic.json), and its keys
+are described at the top of
+[server/source/server/mock.d](server/source/server/mock.d). In short: VRChat's
+own shapes for `self`, `friends`, `users`, `notifications`, `groups`,
+`moderations`, `files`, `prints` and `inventory`, plus `events` at offsets from
+`now` (`"at": "-5m"` is history, `"+10s"` arrives live). Pictures are
+`server/mock/images/<file id>.png`, linked from the data by VRChat image URLs.
+
 ### Packaging
 
 ```bash

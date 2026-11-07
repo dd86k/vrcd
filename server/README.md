@@ -29,8 +29,12 @@ vrcd-server [command] [options]
         --tls-verify-client  Require clients to present a valid certificate
         --tls-port        Separate port for TLS connections
         --tls-only        Disable plain TCP listener when TLS is active
+        --mock            Serve a scenario file instead of VRChat (see below)
         --version         Show version info
 ```
+
+`--mock` keeps everything in memory and never contacts VRChat, see
+[Mocking and Screenshots](../README.md#mocking-and-screenshots).
 
 Config/data paths default to:
 - **Linux:** `~/.config/vrcd` (config), `~/.local/share/vrcd` (data)
