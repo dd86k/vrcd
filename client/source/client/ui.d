@@ -35,10 +35,100 @@ import client.utils : clockNow, openFolder, openBrowser;
 /// other page enums.
 private Tab activeTab = Tab.feed;
 
-/// Switch to `tab`, as pressing it in the tab bar would.
-void selectTab(Tab tab)
+/// Where to open the UI at startup (see --page).
+struct PageSpec
 {
-    activeTab = tab;
+    Tab tab;
+    /// Under `tab` tools.
+    ToolsPage toolsPage;
+    /// Under `tab` inventory.
+    InvSection invSection;
+    /// Somebody's profile, or a group's page, when set.
+    string userId, groupId;
+}
+
+/// Parse a --page target: a tab ("feed"), a sub-page ("inventory:prints",
+/// "tools:muteList"), "user:<id>" or "group:<id>". Throws on anything else.
+PageSpec parsePageSpec(string text)
+{
+    import std.conv : to;
+    import std.string : indexOf;
+
+    PageSpec page;
+    ptrdiff_t colon = text.indexOf(':');
+    string head = colon < 0 ? text : text[0 .. colon];
+    string rest = colon < 0 ? null : text[colon + 1 .. $];
+
+    switch (head)
+    {
+        case "user":
+            if (rest.length == 0)
+                throw new Exception("user: needs a user ID");
+            page.tab = Tab.profile;
+            page.userId = rest;
+            return page;
+        case "group":
+            if (rest.length == 0)
+                throw new Exception("group: needs a group ID");
+            page.tab = Tab.tools;
+            page.toolsPage = ToolsPage.groupDetail;
+            page.groupId = rest;
+            return page;
+        default:
+    }
+
+    page.tab = head.to!Tab;
+    if (colon < 0)
+        return page;
+    switch (page.tab)
+    {
+        case Tab.inventory:
+            page.invSection = rest.to!InvSection;
+            break;
+        case Tab.tools:
+            page.toolsPage = rest.to!ToolsPage;
+            if (page.toolsPage == ToolsPage.groupDetail)
+                throw new Exception("tools:groupDetail: use group:<id>");
+            break;
+        default:
+            throw new Exception(head ~ " has no sub-pages");
+    }
+    return page;
+}
+unittest
+{
+    assert(parsePageSpec("feed").tab == Tab.feed);
+    assert(parsePageSpec("inventory:prints").invSection == InvSection.prints);
+    assert(parsePageSpec("tools:muteList").toolsPage == ToolsPage.muteList);
+    assert(parsePageSpec("user:usr_x").userId == "usr_x");
+    assert(parsePageSpec("group:grp_x").toolsPage == ToolsPage.groupDetail);
+
+    foreach (string bad; [ "", "nope", "feed:x", "inventory:nope", "user:",
+        "tools:groupDetail" ])
+    {
+        bool threw;
+        try parsePageSpec(bad);
+        catch (Exception) threw = true;
+        assert(threw, bad);
+    }
+}
+
+/// Open `page`, as the buttons leading there would.
+void openPage(AppState* state, PageSpec page)
+{
+    activeTab = page.tab;
+    state.invSection = page.invSection;
+    if (page.userId.length > 0)
+    {
+        openProfile(state, page.userId);
+        return;
+    }
+    if (page.groupId.length > 0)
+    {
+        openGroup(state, page.groupId, null);
+        return;
+    }
+    state.toolsPage = page.toolsPage;
 }
 
 // Feed filter state

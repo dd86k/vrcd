@@ -17,6 +17,7 @@ import ddlogger;
 
 import client.connection;
 import client.gui;
+import client.ui : parsePageSpec;
 import client.directories;
 
 // Setup file logger
@@ -120,6 +121,7 @@ int startvrcd(string[] args)
     string logFilePath;
     DevOptions dev;
     string size;
+    string page;
 
     GetoptResult opts = void;
     try opts = getopt(args,
@@ -137,7 +139,8 @@ int startvrcd(string[] args)
         "mock",       "Run the embedded server on a scenario file (vrcd_server --mock), saving no settings", &dev.mockScenario,
         "screenshot", "Save one frame to a PNG file once caught up, then quit", &dev.screenshotPath,
         "screenshot-delay", "Milliseconds to wait after catching up before the screenshot (default 1000)", &dev.screenshotDelayMs,
-        "page",       "Tab to open on (feed, online, notifications, inventory, tools, profile, settings)", &dev.page,
+        "page",       "Page to open on: a tab (feed, online, notifications, inventory, tools, profile, settings), " ~
+                      "a sub-page (inventory:prints, tools:muteList), user:<id> or group:<id>", &page,
         "size",       "Window size as WIDTHxHEIGHT", &size,
         "version",    "Show version information and exit", &showVersion,
     );
@@ -161,6 +164,16 @@ int startvrcd(string[] args)
             opts.options,
         );
         return 0;
+    }
+
+    if (page.length > 0)
+    {
+        try dev.page = parsePageSpec(page);
+        catch (Exception ex)
+        {
+            stderr.writeln("error: --page: ", ex.msg);
+            return 1;
+        }
     }
 
     if (size.length > 0)

@@ -83,8 +83,8 @@ struct DevOptions
     string logReplay;
     /// PNG to save one frame to before quitting, or null.
     string screenshotPath;
-    /// Tab the screenshot shows.
-    Tab page;
+    /// Page the UI opens on (see --page).
+    PageSpec page;
     /// Window size in logical pixels, zero for the default.
     int width, height;
     /// How long to let the UI settle after the first catch-up.
@@ -504,7 +504,7 @@ int runGui(string host, ushort port, string secret, long sinceId,
     else
         logWatcher.start();
 
-    selectTab(dev.page);
+    openPage(&appState, dev.page);
 
     // Run main event loop and clean up.
     eventLoop(uictx);

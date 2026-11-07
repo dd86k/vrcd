@@ -30,6 +30,8 @@ vrcd-test-*
 !/server/mock/*.json
 
 *.log
+# tools/screenshots.sh output
+/screenshots/
 *.db
 *.db-shm
 *.db-wal
