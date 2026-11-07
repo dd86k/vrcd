@@ -106,11 +106,25 @@ private enum long TRANSFER_TIMEOUT_MS = 60_000;
 /// HTTPClient default timeout, restored after large transfers.
 private enum long DEFAULT_TIMEOUT_MS = 10_000;
 
+/// The four content listings, trimmed for the front-ends. Implemented against
+/// VRChat by ContentService and against a scenario by server.mock.
+interface ContentListing
+{
+    /// Own files under an image tag (icon, gallery, emoji, sticker).
+    JSONValue listFiles(string tag, int n, int offset);
+    /// Own prints.
+    JSONValue listPrints();
+    /// Own inventory items matching `filter`, with VRChat's count in `totalCount`.
+    JSONValue listInventory(InventoryFilter filter, out long totalCount);
+    /// Inventory drops, as VRChat sends them.
+    JSONValue listInventoryDrops();
+}
+
 /// VRChat user content service.
 ///
 /// All VRChat API access is serialized through the shared API mutex and
 /// checked against the rate limiter, same as every other caller.
-class ContentService
+class ContentService : ContentListing
 {
     private HTTPClient client;
     private RateLimitTracker rateLimiter;
@@ -734,7 +748,7 @@ private void validateFilterList(string list, immutable string[] vocabulary,
 
 /// Whether an item survives the filters it was fetched under. See
 /// `InventoryFilter` for why this is checked a second time.
-private bool passesFilter(ref const(JSONValue) item, ref const(InventoryFilter) filter)
+bool passesFilter(ref const(JSONValue) item, ref const(InventoryFilter) filter)
 {
     string itemType;
     if (const(JSONValue)* v = "itemType" in item)

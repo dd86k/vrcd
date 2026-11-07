@@ -12,6 +12,7 @@ import core.thread : Thread;
 import core.time : Duration, dur;
 import std.algorithm.mutation : SwapStrategy;
 import std.algorithm.sorting : sort;
+import std.algorithm.comparison : clamp, max, min;
 import std.conv : to;
 import std.datetime.systime : SysTime, Clock;
 import std.file : exists, isDir, read, readText;
@@ -21,7 +22,8 @@ import std.json;
 import ddlogger;
 
 import server.api;
-import server.content : ImageResult, isValidFileId, sniffImageMime;
+import server.content : ImageResult, InventoryFilter, isImageTag, isValidFileId,
+    passesFilter, sniffImageMime, trimFile, trimInventoryItem, trimPrint;
 import server.database;
 import server.events;
 import server.friends;
@@ -51,6 +53,10 @@ struct MockEvent
 /// - `moderations`: mutes and blocks, as VRChat's player moderation listing
 /// - `groups`: full group objects. Those you are a member of make your list,
 ///   the rest only answer when their pane is opened.
+/// - `files`: your uploads (icons, gallery, stickers, emoji), as VRChat's file
+///   objects. `tags` picks the section and `versions` the picture.
+/// - `prints`, `inventory`: as VRChat lists them. An inventory item with
+///   `isArchived` only shows under the archive.
 /// - `images`: folder of pictures named `<file id>.png`, relative to the file
 /// - `events`: `{"at": "-5m", "type": "friend-online", "content": {...}}`
 ///
@@ -66,6 +72,9 @@ struct MockScenario
     JSONValue[] notificationsV1;
     JSONValue[] notificationsV2;
     JSONValue[] moderations;
+    JSONValue[] files;
+    JSONValue[] prints;
+    JSONValue[] inventory;
     /// Group objects by group ID.
     JSONValue[string] groups;
     /// Profiles by user ID, `users` winning over the roster and self.
@@ -109,6 +118,9 @@ MockScenario loadScenario(string path)
     s.notificationsV2 = objectArray(root, "notificationsV2");
 
     s.moderations = objectArray(root, "moderations");
+    s.files = objectArray(root, "files");
+    s.prints = objectArray(root, "prints");
+    s.inventory = objectArray(root, "inventory");
     foreach (size_t i, JSONValue entry; objectArray(root, "groups"))
     {
         const(JSONValue)* id = "id" in entry;
@@ -217,7 +229,7 @@ void applyScenario(ref MockScenario s, APIServer server, Database store, SysTime
         store.storeEvent(event);
     }
 
-    server.setStandIn(new MockStandIn(s.users, s.groups, s.imageDir));
+    server.setStandIn(new MockStandIn(s));
     server.setVRChatStatus(true, null);
 
     logInfo("Mock: %d friend(s), %d group(s), %d notification(s), %d event(s), %d live",
@@ -328,28 +340,26 @@ void addUser(ref MockScenario s, JSONValue entry, string where)
     s.users[id.str] = entry;
 }
 
-/// Profiles and pictures from the scenario, for the server to answer with.
+/// Profiles, groups, pictures and content from the scenario, for the server to
+/// answer with.
 class MockStandIn : StandIn
 {
-    /// Serve `users` and `groups` by ID, and pictures from `imageDir`, which
-    /// may be null.
-    this(JSONValue[string] users, JSONValue[string] groups, string imageDir)
+    /// Serve what `s` holds. Pictures come from its image folder, if any.
+    this(ref MockScenario s)
     {
-        this.users = users;
-        this.groups = groups;
-        this.imageDir = imageDir;
+        this.s = s;
     }
 
     JSONValue user(string userId)
     {
-        if (JSONValue* v = userId in users)
+        if (JSONValue* v = userId in s.users)
             return *v;
         return JSONValue.init;
     }
 
     JSONValue group(string groupId)
     {
-        if (JSONValue* v = groupId in groups)
+        if (JSONValue* v = groupId in s.groups)
             return *v;
         return JSONValue.init;
     }
@@ -358,12 +368,12 @@ class MockStandIn : StandIn
     {
         ImageResult result;
         // The ID lands in a path.
-        if (imageDir.length == 0 || isValidFileId(fileId) == false)
+        if (s.imageDir.length == 0 || isValidFileId(fileId) == false)
         {
             result.error = "Not in the mock scenario";
             return result;
         }
-        string path = buildPath(imageDir, fileId ~ ".png");
+        string path = buildPath(s.imageDir, fileId ~ ".png");
         if (exists(path) == false)
         {
             result.error = "Not in the mock scenario";
@@ -375,10 +385,66 @@ class MockStandIn : StandIn
         return result;
     }
 
+    JSONValue listFiles(string tag, int n, int offset)
+    {
+        if (isImageTag(tag) == false)
+            throw new Exception("Invalid tag: " ~ tag);
+
+        JSONValue[] tagged;
+        foreach (JSONValue file; s.files)
+            if (hasString(file, "tags", tag))
+                tagged ~= file;
+
+        size_t from = min(cast(size_t) max(offset, 0), tagged.length);
+        size_t to = min(from + clamp(n, 1, 100), tagged.length);
+        JSONValue files = JSONValue.emptyArray;
+        foreach (JSONValue file; tagged[from .. to])
+            files.array ~= trimFile(file);
+        return files;
+    }
+
+    JSONValue listPrints()
+    {
+        JSONValue prints = JSONValue.emptyArray;
+        foreach (JSONValue print; s.prints)
+            prints.array ~= trimPrint(print);
+        return prints;
+    }
+
+    JSONValue listInventory(InventoryFilter filter, out long totalCount)
+    {
+        JSONValue items = JSONValue.emptyArray;
+        foreach (JSONValue item; s.inventory)
+        {
+            bool archived;
+            if (const(JSONValue)* v = "isArchived" in item)
+                archived = v.type == JSONType.true_;
+            if (archived != filter.archived || passesFilter(item, filter) == false)
+                continue;
+            items.array ~= trimInventoryItem(item);
+        }
+        totalCount = items.array.length;
+        return items;
+    }
+
+    JSONValue listInventoryDrops()
+    {
+        return JSONValue.emptyArray;
+    }
+
 private:
-    JSONValue[string] users;
-    JSONValue[string] groups;
-    string imageDir;
+    MockScenario s;
+}
+
+/// Whether the array under `key` in `obj` holds the string `want`.
+bool hasString(JSONValue obj, string key, string want)
+{
+    if (const(JSONValue)* v = key in obj)
+        if (v.type == JSONType.array)
+            foreach (const(JSONValue) e; v.array)
+                if (e.type == JSONType.string && e.str == want)
+                    return true;
+    return false;
 }
 
 /// Roster name of a notification's sender, or null.

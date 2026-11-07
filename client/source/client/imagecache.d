@@ -47,10 +47,12 @@ string imageKey(string fileId, long fileVersion, int size)
     return format("%s.%d.%d", fileId, fileVersion, size);
 }
 
-/// Prepare the disk cache directory. Call once at startup, after SDL_image
-/// is loaded.
-void initImageCache()
+/// Prepare the disk cache directory, or keep images in RAM only when `disk`
+/// is false (see --mock). Call once at startup, after SDL_image is loaded.
+void initImageCache(bool disk = true)
 {
+    if (disk == false)
+        return;
     cacheDir = vrcdAppDataPath("imagecache");
     try
         mkdirRecurse(cacheDir);

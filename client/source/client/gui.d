@@ -367,8 +367,9 @@ int runGui(string host, ushort port, string secret, long sinceId,
     if (loadSDLLibraries() == false)
         return 1;
 
-    // Content image disk cache (gallery thumbnails, prints, ...).
-    initImageCache();
+    // Content image disk cache (gallery thumbnails, prints, ...). A mock run
+    // keeps its pictures out of it.
+    initImageCache(dev.mockScenario.length == 0);
 
     // NOTE: SDL_HINT_FRAMEBUFFER_ACCELERATION is not set because we use
     //       SDL_CreateRenderer + owned surface instead of SDL_GetWindowSurface

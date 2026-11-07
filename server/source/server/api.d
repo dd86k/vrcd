@@ -88,7 +88,7 @@ private enum int NOTIFICATION_SENDER_LOOKUPS = 12;
 alias ReseedCallback = void delegate();
 
 /// Answers read requests in place of VRChat (see server.mock).
-interface StandIn
+interface StandIn : ContentListing
 {
     /// VRChat user object for `userId`, or JSONValue.init when unknown.
     JSONValue user(string userId);
@@ -4091,7 +4091,7 @@ private class ClientHandler
         ]);
         try
         {
-            JSONValue files = requireContent().listFiles(tag, n, offset);
+            JSONValue files = listings().listFiles(tag, n, offset);
             resp["count"] = JSONValue(cast(long) files.array.length);
             resp["files"] = files;
         }
@@ -4109,7 +4109,7 @@ private class ClientHandler
         JSONValue resp = JSONValue([
             "type": JSONValue("prints"),
         ]);
-        try resp["prints"] = requireContent().listPrints();
+        try resp["prints"] = listings().listPrints();
         catch (Exception e)
         {
             resp["prints"] = JSONValue.emptyArray;
@@ -4154,7 +4154,7 @@ private class ClientHandler
         try
         {
             long totalCount;
-            resp["items"] = requireContent().listInventory(filter, totalCount);
+            resp["items"] = listings().listInventory(filter, totalCount);
             resp["total_count"] = JSONValue(totalCount);
         }
         catch (Exception e)
@@ -4171,7 +4171,7 @@ private class ClientHandler
         JSONValue resp = JSONValue([
             "type": JSONValue("inventory_drops"),
         ]);
-        try resp["items"] = requireContent().listInventoryDrops();
+        try resp["items"] = listings().listInventoryDrops();
         catch (Exception e)
         {
             resp["items"] = JSONValue.emptyArray;
@@ -4411,8 +4411,19 @@ private class ClientHandler
 
     /// Get the content service or throw (caught by the per-message handler
     /// or by tryAction and turned into an error reply).
+    /// Where the content listings come from: the scenario in a mock run,
+    /// VRChat otherwise. Throws when neither is set up.
+    ContentListing listings()
+    {
+        if (server.standIn)
+            return server.standIn;
+        return requireContent();
+    }
+
     ContentService requireContent()
     {
+        if (server.standIn)
+            throw new Exception(server.noClientError());
         if (server.contentService is null)
             throw new Exception("Content service not configured");
         return server.contentService;

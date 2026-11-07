@@ -166,6 +166,54 @@
             "membershipStatus": "invited"
         }
     ],
+    "files": [
+        { "id": "file_00000000-0000-4000-8000-000000000f01", "name": "Harbor at dusk", "mimeType": "image/png", "extension": ".png",
+          "tags": [ "gallery" ],
+          "versions": [ { "version": 0, "status": "complete" }, { "version": 1, "status": "complete" } ] },
+        { "id": "file_00000000-0000-4000-8000-000000000f02", "name": "Two hills", "mimeType": "image/png", "extension": ".png",
+          "tags": [ "gallery" ],
+          "versions": [ { "version": 0, "status": "complete" }, { "version": 1, "status": "complete" } ] },
+        { "id": "file_00000000-0000-4000-8000-000000000f03", "name": "Star", "mimeType": "image/png", "extension": ".png",
+          "tags": [ "icon" ],
+          "versions": [ { "version": 0, "status": "complete" }, { "version": 1, "status": "complete" } ] },
+        { "id": "file_00000000-0000-4000-8000-000000000f04", "name": "Ring", "mimeType": "image/png", "extension": ".png",
+          "tags": [ "icon" ],
+          "versions": [ { "version": 0, "status": "complete" }, { "version": 1, "status": "complete" } ] },
+        { "id": "file_00000000-0000-4000-8000-000000000f05", "name": "Heart", "mimeType": "image/png", "extension": ".png",
+          "tags": [ "sticker" ],
+          "versions": [ { "version": 0, "status": "complete" }, { "version": 1, "status": "complete" } ] },
+        { "id": "file_00000000-0000-4000-8000-000000000f06", "name": "Tile", "mimeType": "image/png", "extension": ".png",
+          "tags": [ "sticker" ],
+          "versions": [ { "version": 0, "status": "complete" }, { "version": 1, "status": "complete" } ] },
+        { "id": "file_00000000-0000-4000-8000-000000000f07", "name": "Grin", "mimeType": "image/png", "extension": ".png",
+          "tags": [ "emoji" ], "animationStyle": "bats", "loopStyle": "linear",
+          "versions": [ { "version": 0, "status": "complete" }, { "version": 1, "status": "complete" } ] },
+        { "id": "file_00000000-0000-4000-8000-000000000f08", "name": "Pulse", "mimeType": "image/png", "extension": ".png",
+          "tags": [ "emoji" ],
+          "versions": [ { "version": 0, "status": "complete" }, { "version": 1, "status": "complete" } ] }
+    ],
+    "prints": [
+        { "id": "prnt_00000000-0000-4000-8000-000000000001", "authorName": "Mock Self", "note": "First day at the market",
+          "timestamp": "2026-10-31T19:00:00.000Z", "createdAt": "2026-10-31T19:00:00.000Z", "worldId": "wrld_00000000-0000-4000-8000-0000000000b2", "worldName": "Lantern Market",
+          "files": { "fileId": "file_00000000-0000-4000-8000-000000000f09", "image": "https://api.vrchat.cloud/api/1/file/file_00000000-0000-4000-8000-000000000f09/1/file" } },
+        { "id": "prnt_00000000-0000-4000-8000-000000000002", "authorName": "Mock Self", "note": "",
+          "timestamp": "2026-11-05T22:15:00.000Z", "createdAt": "2026-11-05T22:15:00.000Z", "worldId": "wrld_00000000-0000-4000-8000-0000000000a1", "worldName": "Quiet Harbor",
+          "files": { "fileId": "file_00000000-0000-4000-8000-000000000f0a", "image": "https://api.vrchat.cloud/api/1/file/file_00000000-0000-4000-8000-000000000f0a/1/file" } }
+    ],
+    "inventory": [
+        { "id": "inv_00000000-0000-4000-8000-000000000001", "name": "Paper Lantern", "description": "Glows a little.",
+          "itemType": "prop", "itemTypeLabel": "Prop", "flags": [ "instantiatable", "trashable" ],
+          "imageUrl": "https://api.vrchat.cloud/api/1/file/file_00000000-0000-4000-8000-000000000f0b/1/file" },
+        { "id": "inv_00000000-0000-4000-8000-000000000002", "name": "Tide Drone", "description": "A drone skin from the harbor event.",
+          "itemType": "droneskin", "itemTypeLabel": "Drone Skin", "flags": [ "equippable" ], "equipSlot": "drone",
+          "imageUrl": "https://api.vrchat.cloud/api/1/file/file_00000000-0000-4000-8000-000000000f0c/1/file" },
+        { "id": "inv_00000000-0000-4000-8000-000000000003", "name": "Event Badge", "description": "Handed out at the opening.",
+          "itemType": "sticker", "itemTypeLabel": "Sticker", "flags": [ "unique" ],
+          "imageUrl": "https://api.vrchat.cloud/api/1/file/file_00000000-0000-4000-8000-000000000f0d/1/file" },
+        { "id": "inv_00000000-0000-4000-8000-000000000004", "name": "Old Crate", "description": "Nothing inside.",
+          "itemType": "bundle", "itemTypeLabel": "Bundle", "flags": [ "consumable" ], "isArchived": true,
+          "imageUrl": "https://api.vrchat.cloud/api/1/file/file_00000000-0000-4000-8000-000000000f0e/1/file" }
+    ],
     "notificationsV2": [
         {
             "id": "not_00000000-0000-4000-8000-000000000003",
