@@ -25,6 +25,8 @@ Rules:
 - Groups (TOOLS > Groups): see your groups, represent one, choose who sees
   you in it, toggle announcements, join or leave. A group notification opens
   its group.
+- Group announcements can be read in full, from the group's page or from the
+  announcement in the inbox.
 - New theme. Text fields no longer blend into the background, and empty ones
   show a hint.
 - Feed filters: All On and All Off moved to the top, and Close is visible
@@ -46,6 +48,7 @@ Rules:
 - Fix a location change being dropped from the log when the same update also
   changed an avatar or profile.
 - Member-side group actions, and a group list kept current from group events.
+- Serves a group's current announcement.
 - Notifications made by rules survive a restart.
 
 ### Web
@@ -68,6 +71,7 @@ Rules:
 - Protocol version 17: `status-change` event, rules take `statuses`.
 - Protocol version 18: groups (`get_groups`, `get_group`, `group_action`,
   `groups`).
+- Protocol version 19: `get_group_announcement`.
 
 ## v0.4.1
 

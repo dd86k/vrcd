@@ -261,6 +261,66 @@ JSONValue buildGroupProfile(ref const(JSONValue) g)
     return p;
 }
 
+/// Build the `group_announcement` payload from
+/// `GET /groups/{id}/announcement`, an empty object when the group has none.
+JSONValue buildGroupAnnouncement(ref const(JSONValue) a)
+{
+    JSONValue p = JSONValue.emptyObject;
+    if (a.type != JSONType.object || text(a, "id").length == 0)
+        return p;
+
+    p["id"]        = JSONValue(text(a, "id"));
+    p["title"]     = JSONValue(text(a, "title"));
+    p["text"]      = JSONValue(text(a, "text"));
+    p["authorId"]  = JSONValue(text(a, "authorId"));
+    p["createdAt"] = JSONValue(text(a, "createdAt"));
+    p["updatedAt"] = JSONValue(text(a, "updatedAt"));
+    putImage(p, "image", a, "imageUrl");
+    return p;
+}
+
+/// Group a `group.announcement` notification is about, or null for any
+/// other notification.
+string announcementGroupId(ref const(JSONValue) notification)
+{
+    if (text(notification, "type") != "group.announcement")
+        return null;
+    if (const(JSONValue)* d = "data" in notification)
+    {
+        string id = text(*d, "groupId");
+        if (isGroupId(id))
+            return id;
+    }
+    string sender = text(notification, "senderUserId");
+    return isGroupId(sender) ? sender : null;
+}
+unittest
+{
+    JSONValue fromData = parseJSON(`{"type":"group.announcement",
+        "data":{"groupId":"grp_a"}}`);
+    assert(announcementGroupId(fromData) == "grp_a");
+    JSONValue fromSender = parseJSON(`{"type":"group.announcement",
+        "senderUserId":"grp_b"}`);
+    assert(announcementGroupId(fromSender) == "grp_b");
+    JSONValue invite = parseJSON(`{"type":"group.invite",
+        "senderUserId":"grp_b"}`);
+    assert(announcementGroupId(invite) is null);
+}
+
+unittest
+{
+    JSONValue none = parseJSON(`{}`);
+    assert(buildGroupAnnouncement(none).object.length == 0);
+
+    JSONValue a = parseJSON(`{"id":"gpos_1","groupId":"grp_x","title":"Hi",
+        "text":"Body","authorId":"usr_a","imageId":null,
+        "imageUrl":"https://api.vrchat.cloud/api/1/file/file_ccc/2/file"}`);
+    JSONValue p = buildGroupAnnouncement(a);
+    assert(p["title"].str == "Hi");
+    assert(p["imageFileId"].str == "file_ccc");
+    assert(p["imageVersion"].integer == 2);
+}
+
 /// The user's group list. Safe to use from any thread.
 class GroupsTracker
 {

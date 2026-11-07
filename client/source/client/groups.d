@@ -62,6 +62,25 @@ struct GroupAction
     string value;  /// Visibility for `visibility`
 }
 
+/// A group's current announcement (`group_announcement` message). All empty
+/// when the group has none.
+struct GroupAnnouncement
+{
+    string id;           /// gpos_..., empty when there is no announcement
+    string title;
+    string text;
+    string authorId;     /// usr_... of whoever posted it
+    string createdAt;
+    string updatedAt;
+    string imageFileId;  /// Picture for the image proxy, or empty
+    long imageVersion;
+}
+
+/// Cache of fetched announcements, keyed by group ID.
+alias AnnouncementCache = CacheOf!GroupAnnouncement;
+/// ditto
+alias AnnouncementLookup = LookupOf!GroupAnnouncement;
+
 /// Cache of fetched group pages, keyed by group ID.
 alias GroupCache = CacheOf!GroupProfile;
 /// ditto
@@ -207,4 +226,30 @@ unittest
 
     JSONValue stranger = parseJSON(`{"id":"grp_b","name":"B"}`);
     assert(parseGroupProfile(stranger).hasMember == false);
+}
+
+/// Parse a `group_announcement` payload.
+GroupAnnouncement parseGroupAnnouncement(ref const(JSONValue) j)
+{
+    GroupAnnouncement a;
+    a.id           = text(j, "id");
+    a.title        = text(j, "title");
+    a.text         = text(j, "text");
+    a.authorId     = text(j, "authorId");
+    a.createdAt    = text(j, "createdAt");
+    a.updatedAt    = text(j, "updatedAt");
+    a.imageFileId  = text(j, "imageFileId");
+    a.imageVersion = number(j, "imageVersion");
+    return a;
+}
+
+unittest
+{
+    JSONValue j = parseJSON(`{"id":"gpos_1","title":"T","text":"Body",
+        "imageFileId":"file_x","imageVersion":3}`);
+    GroupAnnouncement a = parseGroupAnnouncement(j);
+    assert(a.id == "gpos_1" && a.text == "Body" && a.imageVersion == 3);
+
+    JSONValue none = parseJSON(`{}`);
+    assert(parseGroupAnnouncement(none).id.length == 0);
 }

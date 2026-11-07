@@ -166,6 +166,19 @@
             "membershipStatus": "invited"
         }
     ],
+    "announcements": [
+        {
+            "id": "gpos_00000000-0000-4000-8000-000000000001",
+            "groupId": "grp_00000000-0000-4000-8000-0000000000d1",
+            "authorId": "usr_00000000-0000-4000-8000-000000000001",
+            "title": "Regatta this Saturday",
+            "text": "Boats leave the north pier at 20:00 UTC. Bring a lantern, the harbor lights are still out after the storm.\n\nLookouts meet at the lighthouse half an hour early to go over the route. If you cannot make it, say so in the channel so somebody can take your spot.",
+            "imageId": "file_00000000-0000-4000-8000-000000000f01",
+            "imageUrl": "https://api.vrchat.cloud/api/1/file/file_00000000-0000-4000-8000-000000000f01/1/file",
+            "createdAt": "2026-11-06T09:15:00.000Z",
+            "updatedAt": "2026-11-06T09:15:00.000Z"
+        }
+    ],
     "files": [
         { "id": "file_00000000-0000-4000-8000-000000000f01", "name": "Harbor at dusk", "mimeType": "image/png", "extension": ".png",
           "tags": [ "gallery" ],
@@ -215,6 +228,23 @@
           "imageUrl": "https://api.vrchat.cloud/api/1/file/file_00000000-0000-4000-8000-000000000f0e/1/file" }
     ],
     "notificationsV2": [
+        {
+            "id": "not_00000000-0000-4000-8000-000000000004",
+            "type": "group.announcement",
+            "senderUserId": "grp_00000000-0000-4000-8000-0000000000d1",
+            "title": "Harbor Watch",
+            "message": "Regatta this Saturday",
+            "canDelete": true,
+            "createdAt": "2026-11-06T09:15:00.000Z",
+            "data": {
+                "announcementTitle": "Regatta this Saturday",
+                "groupId": "grp_00000000-0000-4000-8000-0000000000d1",
+                "groupName": "Harbor Watch"
+            },
+            "responses": [
+                { "type": "unsubscribe", "text": "Unsubscribe", "icon": "bell-slash", "data": "" }
+            ]
+        },
         {
             "id": "not_00000000-0000-4000-8000-000000000003",
             "type": "group.invite",

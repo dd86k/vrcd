@@ -85,7 +85,8 @@ if [ $# -eq 0 ]; then
         user-friend=user:usr_00000000-0000-4000-8000-000000000001 \
         user-stranger=user:usr_00000000-0000-4000-8000-000000000099 \
         group-member=group:grp_00000000-0000-4000-8000-0000000000d1 \
-        group-invited=group:grp_00000000-0000-4000-8000-0000000000d3
+        group-invited=group:grp_00000000-0000-4000-8000-0000000000d3 \
+        announcement=announcement:grp_00000000-0000-4000-8000-0000000000d1
 fi
 
 REPLAY=

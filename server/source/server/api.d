@@ -58,8 +58,9 @@ import vrcd.vrcx;
 /// 15 = notification promotion (`get_promotions`, `set_promotions`, `promotions`),
 /// 16 = `set_promotions` takes a `request_id`, echoed to the sender only,
 /// 17 = `status-change` synthetic, promotion rules take `statuses`,
-/// 18 = groups (`get_groups`, `get_group`, `group_action`, `groups`).
-private enum int PROTOCOL_VERSION = 18;
+/// 18 = groups (`get_groups`, `get_group`, `group_action`, `groups`),
+/// 19 = group announcements (`get_group_announcement`).
+private enum int PROTOCOL_VERSION = 19;
 
 /// `server_state` key holding the promotion rules as a JSON array.
 private enum string PROMOTION_RULES_KEY = "promotion_rules";
@@ -94,6 +95,9 @@ interface StandIn : ContentListing
     JSONValue user(string userId);
     /// VRChat group object for `groupId`, or JSONValue.init when unknown.
     JSONValue group(string groupId);
+    /// Current announcement for `groupId`, an empty object when it has none,
+    /// or JSONValue.init when the group is unknown.
+    JSONValue announcement(string groupId);
     /// Picture for a file at any version and size, or a failed result.
     ImageResult image(string fileId);
 }
@@ -126,6 +130,7 @@ class APIServer
     private InstanceCache instanceCache;
     private UserProfileCache userProfiles;
     private UserProfileCache groupProfiles; // Group panes, keyed by group ID
+    private UserProfileCache groupAnnouncements; // Current announcement, keyed by group ID
     private BadgeImageService badgeImages;
     private HTTPClient httpClient;
     private ContentService contentService;
@@ -184,6 +189,7 @@ class APIServer
         }
         this.userProfiles = new UserProfileCache();
         this.groupProfiles = new UserProfileCache();
+        this.groupAnnouncements = new UserProfileCache();
         this.badgeImages = new BadgeImageService();
         this.reseedSignalMutex = new Mutex();
         this.reseedSignalCond = new Condition(this.reseedSignalMutex);
@@ -655,6 +661,11 @@ class APIServer
             if (const(JSONValue)* v = "senderUserId" in event.content)
                 if (v.type == JSONType.string)
                     sender = friendsTracker.getDisplayName(v.str);
+
+        // A new announcement replaces the one cached for its group.
+        string announcedGroup = announcementGroupId(event.content);
+        if (announcedGroup.length > 0)
+            groupAnnouncements.forget(announcedGroup);
 
         JSONValue msg = JSONValue([ "content": event.content ]);
         if (notificationsTracker.applyEvent(event.typeRaw, msg, sender,
@@ -1737,6 +1748,14 @@ private class ClientHandler
                         return;
                     }
                     handleGetGroup(msg);
+                    break;
+                case "get_group_announcement":
+                    if (authenticated == false)
+                    {
+                        sendError("Not authenticated");
+                        return;
+                    }
+                    handleGetGroupAnnouncement(msg);
                     break;
                 case "group_action":
                     if (authenticated == false)
@@ -3672,6 +3691,107 @@ private class ClientHandler
         JSONValue profile = buildGroupProfile(group);
         server.groupProfiles.store(groupId, profile);
         sendGroup(profile, null);
+    }
+
+    /// Reply to `get_group_announcement` with the group's current
+    /// announcement, from cache when fresh. An empty object means none.
+    void handleGetGroupAnnouncement(JSONValue msg)
+    {
+        string groupId = stringField(msg, "group_id");
+
+        void sendAnnouncement(JSONValue announcement, string error)
+        {
+            JSONValue result = JSONValue([
+                "type": JSONValue("group_announcement"),
+                "group_id": JSONValue(groupId),
+                "success": JSONValue(error.length == 0),
+            ]);
+            if (error.length > 0)
+                result["error"] = JSONValue(error);
+            else
+                result["announcement"] = announcement;
+            sendLine(result.toString() ~ "\n");
+        }
+
+        if (isGroupId(groupId) == false)
+        {
+            sendAnnouncement(JSONValue.init, "Not a group ID");
+            return;
+        }
+
+        if (server.standIn)
+        {
+            JSONValue a = server.standIn.announcement(groupId);
+            if (a.type == JSONType.object)
+                sendAnnouncement(buildGroupAnnouncement(a), null);
+            else
+                sendAnnouncement(JSONValue.init, "Not in the mock scenario");
+            return;
+        }
+
+        JSONValue cached;
+        string cachedError;
+        if (server.groupAnnouncements.lookup(groupId, cached, cachedError))
+        {
+            sendAnnouncement(cached, cachedError);
+            return;
+        }
+
+        if (server.httpClient is null || server.apiMutex is null)
+        {
+            sendAnnouncement(JSONValue.init, server.noClientError());
+            return;
+        }
+
+        JSONValue raw;
+        string error;
+        {
+            server.apiMutex.lock();
+            scope(exit) server.apiMutex.unlock();
+
+            if (server.rateLimiter && server.rateLimiter.isBlocked())
+                error = "Rate limited by VRChat, try again later";
+            else
+            {
+                try
+                {
+                    HTTPResponse resp = server.httpClient.get(
+                        "/groups/" ~ groupId ~ "/announcement");
+                    logDebugging("getGroupAnnouncement: VRC GET /groups/%s/announcement -> HTTP %d",
+                        groupId, resp.code);
+                    if (server.rateLimiter)
+                    {
+                        server.rateLimiter.update(resp);
+                        server.broadcastStatus();
+                    }
+                    if (resp.code < 200 || resp.code >= 300)
+                        error = vrchatError(resp);
+                    else
+                    {
+                        raw = parseJSON(resp.text);
+                        if (raw.type != JSONType.object)
+                            error = "Unexpected announcement response";
+                    }
+                }
+                catch (Exception e)
+                {
+                    error = e.msg;
+                }
+            }
+        }
+
+        if (error.length > 0)
+        {
+            // A rate limit says nothing about the group.
+            if (server.rateLimiter is null || server.rateLimiter.isBlocked() == false)
+                server.groupAnnouncements.storeFailure(groupId, error);
+            sendAnnouncement(JSONValue.init, error);
+            return;
+        }
+
+        JSONValue announcement = buildGroupAnnouncement(raw);
+        server.groupAnnouncements.store(groupId, announcement);
+        sendAnnouncement(announcement, null);
     }
 
     /// Run one member-side group action. Replies with `group_action_result`,

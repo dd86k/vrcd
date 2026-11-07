@@ -306,6 +306,21 @@ NotificationInfo parseNotificationV2Object(JSONValue content, string fallbackSen
     if (info.senderName.length == 0)
         info.senderName = fallbackSender;
 
+    // Group notifications also name their group in `data`, which keeps the
+    // row a way into the group when VRChat left the sender out.
+    if (info.senderUserId.length == 0)
+        if (const(JSONValue)* d = "data" in content)
+            if (d.type == JSONType.object)
+                if (const(JSONValue)* v = "groupId" in *d)
+                    if (v.type == JSONType.string)
+                    {
+                        info.senderUserId = v.str;
+                        if (info.senderName.length == 0)
+                            if (const(JSONValue)* n = "groupName" in *d)
+                                if (n.type == JSONType.string)
+                                    info.senderName = n.str;
+                    }
+
     // v2 splits what v1 crammed into `message`: the title names the kind of
     // thing ("Group Invite"), the message says what it is about. Both are
     // kept apart so the row can draw them apart.
@@ -711,6 +726,15 @@ unittest
     assert(added.notificationType == "group.announcement");
     assert(added.responses.length == 0); // Nothing to answer, only a dismiss.
     assert(added.canDelete); // Absent `canDelete` means it can go.
+
+    // No sender, so the group comes from `data`.
+    JSONValue fromData = parseJSON(`{"content":{"id":"not_8",` ~
+        `"type":"group.announcement","title":"Hi",` ~
+        `"data":{"groupId":"grp_a","groupName":"A","announcementTitle":"Hi"}}}`);
+    assert(applyNotificationEvent("notification-v2", fromData, null, "",
+        added, removed) == NotificationChange.added);
+    assert(added.senderUserId == "grp_a");
+    assert(added.senderName == "A");
 
     // An update carries only what moved, and merges onto the existing row.
     JSONValue update = parseJSON(`{"content":{"id":"not_3",` ~

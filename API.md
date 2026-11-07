@@ -63,6 +63,7 @@ Protocol versions:
 - `16` = `set_promotions` takes a `request_id`, echoed to the requester only
 - `17` = `status-change` synthetic, promotion rules take `statuses`
 - `18` = groups (`get_groups`, `get_group`, `group_action`, `groups`)
+- `19` = group announcements (`get_group_announcement`)
 
 **Failure:**
 ```json
@@ -224,6 +225,15 @@ Request one group's details (`GET groups/{groupId}?includeRoles=true`, cached 5 
 |------------|--------|----------------------|
 | `type`     | string | `"get_group"`        |
 | `group_id` | string | Group ID (`grp_...`) |
+
+### `get_group_announcement`
+
+Request a group's current announcement (`GET groups/{groupId}/announcement`, cached 5 minutes, dropped when a `group.announcement` notification for the group arrives). Server replies with `group_announcement`. Only the current one: VRChat keeps no history here, so an older notification opens whatever replaced it.
+
+| Field      | Type   | Description                    |
+|------------|--------|--------------------------------|
+| `type`     | string | `"get_group_announcement"`     |
+| `group_id` | string | Group ID (`grp_...`)           |
 
 ### `group_action`
 
@@ -808,6 +818,18 @@ Reply to `get_group`.
 | `success`  | bool   | Whether the fetch succeeded |
 | `group`    | object | `{id, name, shortCode, discriminator, description, rules, links, languages, iconFileId, iconVersion, bannerFileId, bannerVersion, memberCount, onlineMemberCount, privacy, joinState, isVerified, ownerId, createdAt, membershipStatus}`, plus `myMember: {isRepresenting, isSubscribedToAnnouncements, visibility, joinedAt, membershipStatus, roles}` when the user has a membership. `roles` are names. |
 | `error`    | string | Present only on failure |
+
+### `group_announcement`
+
+Reply to `get_group_announcement`.
+
+| Field          | Type   | Description |
+|----------------|--------|-------------|
+| `type`         | string | `"group_announcement"` |
+| `group_id`     | string | Echoed group ID |
+| `success`      | bool   | Whether the fetch succeeded |
+| `announcement` | object | `{id, title, text, authorId, createdAt, updatedAt, imageFileId, imageVersion}`, or `{}` when the group has none |
+| `error`        | string | Present only on failure |
 
 ### `group_action_result`
 

@@ -62,6 +62,9 @@ enum long PROTOCOL_STATUS_RULES = 17;
 /// `group_action`).
 enum long PROTOCOL_GROUPS = 18;
 
+/// Minimum server protocol version for `get_group_announcement`.
+enum long PROTOCOL_ANNOUNCEMENTS = 19;
+
 /// How many events to ask a catch-up for.
 ///
 /// The feed keeps `FEED_CAPACITY` entries and back-fills the rest a page at a
@@ -339,6 +342,17 @@ class ServerConnection
         logDebugging("requestGroup: %s", groupId);
         sendMessage(JSONValue([
             "type": JSONValue("get_group"),
+            "group_id": JSONValue(groupId),
+        ]));
+    }
+
+    /// Request a group's current announcement. Server replies with
+    /// `group_announcement`. Requires PROTOCOL_ANNOUNCEMENTS.
+    void requestGroupAnnouncement(string groupId)
+    {
+        logDebugging("requestGroupAnnouncement: %s", groupId);
+        sendMessage(JSONValue([
+            "type": JSONValue("get_group_announcement"),
             "group_id": JSONValue(groupId),
         ]));
     }

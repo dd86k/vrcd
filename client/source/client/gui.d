@@ -32,7 +32,7 @@ import client.stream : loadTLS, Stream;
 import client.imagecache;
 import client.logwatcher;
 import client.notifications;
-import client.groups : parseGroupEntry, parseGroupProfile;
+import client.groups : parseGroupAnnouncement, parseGroupEntry, parseGroupProfile;
 import client.profiles : parseUserProfile, testProfile;
 import client.renderer;
 import client.settings;
@@ -790,6 +790,7 @@ private void eventLoop(mu_Context* uictx)
                         // those makes an open page fetch again on its own.
                         appState.profiles.dropUnresolved();
                         appState.groupPanes.dropUnresolved();
+                        appState.groupAnnouncements.dropUnresolved();
                         // Don't reset dapPairState here. The server sends its
                         // dap_status snapshot right after auth_ok, so by the
                         // time we observe this `connected` transition the
@@ -835,6 +836,7 @@ private void eventLoop(mu_Context* uictx)
                         appState.groupsLoading = false;
                         appState.groupActionInFlight = false;
                         appState.groupPanes.dropUnresolved();
+                        appState.groupAnnouncements.dropUnresolved();
                     }
                     break;
             }
@@ -1297,6 +1299,24 @@ private void eventLoop(mu_Context* uictx)
                         "Server too old for groups (needs protocol 18)");
             }
             appState.pendingGroupRequests.length = 0;
+        }
+
+        // Same for announcements.
+        if (appState.pendingAnnouncementRequests.length > 0)
+        {
+            bool canFetch = conn && appState.connected
+                && conn.serverVersion >= PROTOCOL_ANNOUNCEMENTS;
+            foreach (string groupId; appState.pendingAnnouncementRequests)
+            {
+                if (canFetch)
+                    conn.requestGroupAnnouncement(groupId);
+                else if (appState.connected == false)
+                    appState.groupAnnouncements.storeFailure(groupId, "Not connected");
+                else
+                    appState.groupAnnouncements.storeFailure(groupId,
+                        "Server too old for announcements (needs protocol 19)");
+            }
+            appState.pendingAnnouncementRequests.length = 0;
         }
 
         // Drain queued content management actions.
@@ -2149,6 +2169,10 @@ private void drainNetworkMessages()
                 applyGroupReply(msg);
                 break;
 
+            case "group_announcement":
+                applyAnnouncementReply(msg);
+                break;
+
             case "group_action_result":
                 applyGroupActionResult(msg);
                 break;
@@ -2558,6 +2582,35 @@ private void applyGroupReply(JSONValue msg)
     }
 
     appState.groupPanes.store(groupId, parseGroupProfile(*jgroup));
+    requestRepaint();
+}
+
+/// Apply a `group_announcement` reply into the announcement cache.
+private void applyAnnouncementReply(JSONValue msg)
+{
+    string groupId;
+    if (const(JSONValue)* v = "group_id" in msg)
+        if (v.type == JSONType.string)
+            groupId = v.str;
+    if (groupId.length == 0)
+        return;
+
+    const(JSONValue)* jok = "success" in msg;
+    const(JSONValue)* ja = "announcement" in msg;
+    if (jok is null || jok.type != JSONType.true_ || ja is null)
+    {
+        string errMsg;
+        if (const(JSONValue)* v = "error" in msg)
+            if (v.type == JSONType.string)
+                errMsg = v.str;
+        logWarn("group announcement %s failed: %s", groupId, errMsg);
+        appState.groupAnnouncements.storeFailure(groupId,
+            errMsg.length > 0 ? errMsg : "Announcement unavailable");
+        requestRepaint();
+        return;
+    }
+
+    appState.groupAnnouncements.store(groupId, parseGroupAnnouncement(*ja));
     requestRepaint();
 }
 

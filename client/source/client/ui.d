@@ -24,7 +24,8 @@ import client.notifications : notifyEventLabels, feedEventLabels, feedFilterSect
 import client.imagecache : imageKey, getIconId;
 import client.renderer : window_width, window_height;
 import client.connection : PROTOCOL_BOOP, PROTOCOL_MODERATION, PROTOCOL_PROFILES,
-    PROTOCOL_PROMOTIONS, PROTOCOL_STATUS_RULES, PROTOCOL_GROUPS;
+    PROTOCOL_PROMOTIONS, PROTOCOL_STATUS_RULES, PROTOCOL_GROUPS,
+    PROTOCOL_ANNOUNCEMENTS;
 import client.gui : wasClick, requestRepaint;
 import client.state;
 import client.stream : tlsAvailable;
@@ -48,7 +49,8 @@ struct PageSpec
 }
 
 /// Parse a --page target: a tab ("feed"), a sub-page ("inventory:prints",
-/// "tools:muteList"), "user:<id>" or "group:<id>". Throws on anything else.
+/// "tools:muteList"), "user:<id>", "group:<id>" or "announcement:<id>". Throws
+/// on anything else.
 PageSpec parsePageSpec(string text)
 {
     import std.conv : to;
@@ -74,6 +76,13 @@ PageSpec parsePageSpec(string text)
             page.toolsPage = ToolsPage.groupDetail;
             page.groupId = rest;
             return page;
+        case "announcement":
+            if (rest.length == 0)
+                throw new Exception("announcement: needs a group ID");
+            page.tab = Tab.tools;
+            page.toolsPage = ToolsPage.groupAnnouncement;
+            page.groupId = rest;
+            return page;
         default:
     }
 
@@ -89,6 +98,8 @@ PageSpec parsePageSpec(string text)
             page.toolsPage = rest.to!ToolsPage;
             if (page.toolsPage == ToolsPage.groupDetail)
                 throw new Exception("tools:groupDetail: use group:<id>");
+            if (page.toolsPage == ToolsPage.groupAnnouncement)
+                throw new Exception("tools:groupAnnouncement: use announcement:<id>");
             break;
         default:
             throw new Exception(head ~ " has no sub-pages");
@@ -102,9 +113,10 @@ unittest
     assert(parsePageSpec("tools:muteList").toolsPage == ToolsPage.muteList);
     assert(parsePageSpec("user:usr_x").userId == "usr_x");
     assert(parsePageSpec("group:grp_x").toolsPage == ToolsPage.groupDetail);
+    assert(parsePageSpec("announcement:grp_x").groupId == "grp_x");
 
     foreach (string bad; [ "", "nope", "feed:x", "inventory:nope", "user:",
-        "tools:groupDetail" ])
+        "tools:groupDetail", "announcement:", "tools:groupAnnouncement" ])
     {
         bool threw;
         try parsePageSpec(bad);
@@ -125,7 +137,10 @@ void openPage(AppState* state, PageSpec page)
     }
     if (page.groupId.length > 0)
     {
-        openGroup(state, page.groupId, null);
+        if (page.toolsPage == ToolsPage.groupAnnouncement)
+            openAnnouncement(state, page.groupId, null);
+        else
+            openGroup(state, page.groupId, null);
         return;
     }
     state.toolsPage = page.toolsPage;
@@ -205,9 +220,20 @@ private void goBack(AppState* state)
         requestRepaint();
         return;
     }
+    // An announcement opened from its group's page goes back there, and
+    // otherwise leaves the way that page would.
+    if (activeTab == Tab.tools && state.toolsPage == ToolsPage.groupAnnouncement
+        && state.announcementFromGroup)
+    {
+        state.toolsPage = ToolsPage.groupDetail;
+        state.announcementFromGroup = false;
+        requestRepaint();
+        return;
+    }
     // A group page goes back to wherever it was opened from: the group list,
     // or another tab when a notification opened it.
-    if (activeTab == Tab.tools && state.toolsPage == ToolsPage.groupDetail)
+    if (activeTab == Tab.tools && (state.toolsPage == ToolsPage.groupDetail
+        || state.toolsPage == ToolsPage.groupAnnouncement))
     {
         state.groupDetailId = null;
         state.armedConfirm = ArmedConfirm.init;
@@ -262,6 +288,29 @@ private void openGroup(AppState* state, string groupId, string name)
     state.armedConfirm = ArmedConfirm.init;
     state.toolsPage = ToolsPage.groupDetail;
     activeTab = Tab.tools;
+    wasClick = false;
+    requestRepaint();
+}
+
+/// Open a group's current announcement under TOOLS. From that group's own
+/// page, Back returns to it. From anywhere else it returns where openGroup's
+/// page would.
+private void openAnnouncement(AppState* state, string groupId, string name)
+{
+    if (groupId.length == 0)
+        return;
+    bool fromGroup = activeTab == Tab.tools
+        && state.toolsPage == ToolsPage.groupDetail
+        && state.groupDetailId == groupId;
+    if (fromGroup == false)
+    {
+        openGroup(state, groupId, name);
+        // Back from here to the group list would skip the group itself.
+        if (state.groupReturnTab == Tab.tools)
+            fromGroup = true;
+    }
+    state.announcementFromGroup = fromGroup;
+    state.toolsPage = ToolsPage.groupAnnouncement;
     wasClick = false;
     requestRepaint();
 }
@@ -2718,7 +2767,18 @@ private void drawNotificationsTab(mu_Context* ctx, AppState* state, int scrollDe
                 else
                     notifLine(ctx, from, ctx.style.colors[MU_COLOR_TEXT]);
             }
-            if (n.info.message.length > 0)
+            // The row holds a line of the post at most, so that line opens
+            // the whole of it.
+            if (isGroup && n.info.notificationType == "group.announcement"
+                && state.serverProtocol >= PROTOCOL_ANNOUNCEMENTS)
+            {
+                mu_layout_row(ctx, 1, fullCol.ptr, 0);
+                if (notifLink(ctx, n.info.message.length > 0
+                    ? n.info.message : "Read announcement"))
+                    openAnnouncement(state, n.info.senderUserId,
+                        from == "View group" ? null : from.idup);
+            }
+            else if (n.info.message.length > 0)
             {
                 mu_layout_row(ctx, 1, fullCol.ptr, 0);
                 notifLine(ctx, n.info.message, ctx.style.colors[MU_COLOR_TEXT]);
@@ -4057,6 +4117,7 @@ private void drawToolsTab(mu_Context* ctx, AppState* state, int scrollDelta)
         case ToolsPage.promotionPickUser: drawPromotionPickUserPage(ctx, state, scrollDelta); return;
         case ToolsPage.groupList:         drawGroupListPage(ctx, state, scrollDelta);         return;
         case ToolsPage.groupDetail:       drawGroupDetailPage(ctx, state, scrollDelta);       return;
+        case ToolsPage.groupAnnouncement: drawAnnouncementPage(ctx, state, scrollDelta);      return;
     }
 
     static immutable int[1] fullCol  = [-1];
@@ -4822,6 +4883,16 @@ private void drawGroupDetailPage(mu_Context* ctx, AppState* state, int scrollDel
         break;
     }
 
+    // A button rather than a section: reading it costs a fetch, and most
+    // visits to a group are not for that.
+    if (state.serverProtocol >= PROTOCOL_ANNOUNCEMENTS)
+    {
+        spacer(ctx);
+        mu_layout_row(ctx, 1, fullCol.ptr, 60);
+        if (clickButton(ctx, "Announcement"))
+            openAnnouncement(state, id, name);
+    }
+
     if (p.description.length > 0)
     {
         spacer(ctx);
@@ -4981,6 +5052,149 @@ private void drawGroupDetailPage(mu_Context* ctx, AppState* state, int scrollDel
     {
         mu_layout_row(ctx, 1, fullCol.ptr, 0);
         mu_label(ctx, "Working...");
+    }
+
+    mu_end_panel(ctx);
+}
+
+/// A group's current announcement: title, date, picture, the post, and who
+/// wrote it. Opened from the group's page or from an announcement in the inbox.
+private void drawAnnouncementPage(mu_Context* ctx, AppState* state, int scrollDelta)
+{
+    static immutable int[1] fullCol = [-1];
+    enum int iconSize = 64;
+
+    string id = state.groupDetailId;
+    AnnouncementLookup found = state.announcementSubject();
+    GroupAnnouncement a = found.profile;
+    GroupEntry* listed = state.findGroup(id);
+
+    // Not fetching the group page for a header: the list or the inbox row
+    // usually has the name already.
+    string name = listed ? listed.name : null;
+    if (name.length == 0)
+        name = state.groupDetailName.length > 0 ? state.groupDetailName : id;
+
+    mu_begin_panel(ctx, "AnnouncementPanel");
+    applyScroll(ctx, scrollDelta);
+
+    int[2] headCols = [iconSize + ctx.style.spacing, -1];
+    mu_layout_row(ctx, 2, headCols.ptr, iconSize);
+    mu_Rect iconCell = mu_layout_next(ctx);
+    drawGroupIcon(ctx, state, listed ? listed.iconFileId : null,
+        listed ? listed.iconVersion : 0, name,
+        mu_Rect(iconCell.x, iconCell.y, iconSize, iconSize), 128);
+    mu_draw_control_text(ctx, name, mu_layout_next(ctx), MU_COLOR_TEXT, 0);
+
+    if (state.announcementFromGroup == false)
+    {
+        mu_layout_row(ctx, 1, fullCol.ptr, 60);
+        if (clickButton(ctx, "View Group"))
+        {
+            state.toolsPage = ToolsPage.groupDetail;
+            requestRepaint();
+        }
+    }
+
+    mu_layout_row(ctx, 1, fullCol.ptr, 1);
+    mu_draw_rect(ctx, mu_layout_next(ctx), divider);
+
+    final switch (found.state) with (ProfileState)
+    {
+    case pending:
+        string why = state.connected ? null : "Not connected.";
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        mu_label(ctx, why ? why : "Loading announcement...");
+        break;
+
+    case failed:
+        char[192] errBuf = void;
+        mu_layout_row(ctx, 1, fullCol.ptr, 0);
+        mu_label(ctx, cast(string) sformat(errBuf, "Announcement unavailable: %s", found.error));
+        mu_layout_row(ctx, 1, fullCol.ptr, 60);
+        if (clickButton(ctx, "Retry"))
+        {
+            state.groupAnnouncements.forget(id);
+            requestRepaint();
+        }
+        break;
+
+    case ready:
+        if (a.id.length == 0)
+        {
+            mu_layout_row(ctx, 1, fullCol.ptr, 0);
+            mu_label(ctx, "This group has no announcement.");
+            break;
+        }
+
+        if (a.title.length > 0)
+            sectionHeader(ctx, a.title);
+
+        // ISO dates, cut to the day.
+        string posted = a.createdAt.length >= 10 ? a.createdAt[0 .. 10] : a.createdAt;
+        string edited = a.updatedAt.length >= 10 ? a.updatedAt[0 .. 10] : a.updatedAt;
+        if (posted.length > 0)
+        {
+            char[64] dateBuf = void;
+            mu_layout_row(ctx, 1, fullCol.ptr, 0);
+            mu_Rect r = mu_layout_next(ctx);
+            drawInk(ctx, edited.length > 0 && edited != posted
+                ? sformat(dateBuf, "Posted %s, edited %s", posted, edited)
+                : sformat(dateBuf, "Posted %s", posted), r, textDim);
+        }
+
+        if (a.imageFileId.length > 0 && a.imageVersion > 0)
+        {
+            int imageH = window_height / 2;
+            if (imageH < 200)
+                imageH = 200;
+            mu_layout_row(ctx, 1, fullCol.ptr, imageH);
+            mu_Rect imgRect = mu_layout_next(ctx);
+            string key = imageKey(a.imageFileId, a.imageVersion, 1024);
+            int iconId = getIconId(key);
+            if (iconId > 0)
+                mu_draw_icon(ctx, iconId, imgRect, white);
+            else if (key in state.failedImages)
+                mu_draw_control_text(ctx, "Image unavailable", imgRect, MU_COLOR_TEXT, MU_OPT_ALIGNCENTER);
+            else
+            {
+                mu_draw_control_text(ctx, "Loading image...", imgRect, MU_COLOR_TEXT, MU_OPT_ALIGNCENTER);
+                state.pendingImageRequests ~= ImageRequest(a.imageFileId, a.imageVersion, 1024);
+            }
+        }
+
+        if (a.text.length > 0)
+        {
+            spacer(ctx, 10);
+            mu_layout_row(ctx, 1, fullCol.ptr, 0);
+            mu_text(ctx, a.text);
+        }
+
+        if (a.authorId.length > 0)
+        {
+            // A friend is named from the roster. Anyone else costs a profile
+            // fetch, which opening their page would have spent anyway.
+            string author;
+            if (FriendInfo* f = state.findFriend(a.authorId))
+                author = f.displayName;
+            else
+            {
+                bool startFetch;
+                ProfileLookup who = state.profiles.lookup(a.authorId, startFetch);
+                if (startFetch)
+                    state.pendingProfileRequests ~= a.authorId;
+                author = who.profile.displayName;
+            }
+            if (author.length == 0)
+                author = a.authorId;
+
+            char[160] byBuf = void;
+            spacer(ctx);
+            mu_layout_row(ctx, 1, fullCol.ptr, 60);
+            if (clickButton(ctx, cast(string) sformat(byBuf, "Posted by %s", author)))
+                openProfile(state, a.authorId);
+        }
+        break;
     }
 
     mu_end_panel(ctx);

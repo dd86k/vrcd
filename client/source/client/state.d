@@ -121,7 +121,8 @@ public import client.profiles : BadgeInfo, ProfileCache, ProfileLookup,
     ProfileState, ProfileView, UserProfile;
 
 /// Groups: the list and the cache of group pages.
-public import client.groups : GroupAction, GroupCache, GroupEntry, GroupLookup,
+public import client.groups : AnnouncementCache, AnnouncementLookup,
+    GroupAction, GroupAnnouncement, GroupCache, GroupEntry, GroupLookup,
     GroupProfile, groupCode;
 
 /// Rules live on the server; the state holds the last set it broadcast.
@@ -154,7 +155,8 @@ struct ArmedConfirm
 
 /// Sub-pages of the TOOLS tab.
 enum ToolsPage { main, stripMetadata, friendList, muteList, blockList,
-    promotionRules, promotionEdit, promotionPickUser, groupList, groupDetail }
+    promotionRules, promotionEdit, promotionPickUser, groupList, groupDetail,
+    groupAnnouncement }
 
 /// Top-level tabs. The active one lives in the UI, but which tab a profile
 /// came from is part of where the app stands, like ToolsPage is.
@@ -433,8 +435,13 @@ struct AppState
     string groupDetailName;
     Tab groupReturnTab;
     GroupCache groupPanes;
+    // Whether the announcement page was opened from the group page, which is
+    // then where Back goes.
+    bool announcementFromGroup;
+    AnnouncementCache groupAnnouncements;
     // Group IDs to fetch and actions to send, drained by gui.d.
     string[] pendingGroupRequests;
+    string[] pendingAnnouncementRequests;
     GroupAction[] pendingGroupActions;
     bool groupActionInFlight;
 
@@ -709,6 +716,10 @@ struct AppState
                 return;
         }
         notifications ~= NotificationEntry(info);
+
+        // A new announcement replaces the one cached for its group.
+        if (info.notificationType == "group.announcement")
+            groupAnnouncements.forget(info.senderUserId);
     }
 
     /// Merge a `notification-v2-update` onto the row it names. Does nothing
@@ -909,6 +920,20 @@ struct AppState
         GroupLookup found = groupPanes.lookup(groupDetailId, startFetch);
         if (startFetch)
             pendingGroupRequests ~= groupDetailId;
+        return found;
+    }
+
+    /// The open group's announcement, queueing a fetch when nothing usable
+    /// is held.
+    AnnouncementLookup announcementSubject()
+    {
+        if (groupDetailId.length == 0)
+            return AnnouncementLookup.init;
+
+        bool startFetch;
+        AnnouncementLookup found = groupAnnouncements.lookup(groupDetailId, startFetch);
+        if (startFetch)
+            pendingAnnouncementRequests ~= groupDetailId;
         return found;
     }
 

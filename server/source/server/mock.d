@@ -53,6 +53,8 @@ struct MockEvent
 /// - `moderations`: mutes and blocks, as VRChat's player moderation listing
 /// - `groups`: full group objects. Those you are a member of make your list,
 ///   the rest only answer when their pane is opened.
+/// - `announcements`: each group's current announcement, as VRChat's
+///   announcement object. `groupId` picks the group.
 /// - `files`: your uploads (icons, gallery, stickers, emoji), as VRChat's file
 ///   objects. `tags` picks the section and `versions` the picture.
 /// - `prints`, `inventory`: as VRChat lists them. An inventory item with
@@ -77,6 +79,8 @@ struct MockScenario
     JSONValue[] inventory;
     /// Group objects by group ID.
     JSONValue[string] groups;
+    /// Announcement objects by group ID.
+    JSONValue[string] announcements;
     /// Profiles by user ID, `users` winning over the roster and self.
     JSONValue[string] users;
     /// Absolute, or null when the file sets none.
@@ -127,6 +131,13 @@ MockScenario loadScenario(string path)
         if (id is null || id.type != JSONType.string || id.str.length == 0)
             throw new Exception("groups[" ~ i.to!string ~ "]: 'id' is missing or not a string");
         s.groups[id.str] = entry;
+    }
+    foreach (size_t i, JSONValue entry; objectArray(root, "announcements"))
+    {
+        const(JSONValue)* id = "groupId" in entry;
+        if (id is null || id.type != JSONType.string || id.str.length == 0)
+            throw new Exception("announcements[" ~ i.to!string ~ "]: 'groupId' is missing or not a string");
+        s.announcements[id.str] = entry;
     }
 
     if (s.self.type == JSONType.object)
@@ -361,6 +372,16 @@ class MockStandIn : StandIn
     {
         if (JSONValue* v = groupId in s.groups)
             return *v;
+        return JSONValue.init;
+    }
+
+    JSONValue announcement(string groupId)
+    {
+        if (JSONValue* v = groupId in s.announcements)
+            return *v;
+        // A known group without one has none.
+        if (groupId in s.groups)
+            return JSONValue.emptyObject;
         return JSONValue.init;
     }
 
