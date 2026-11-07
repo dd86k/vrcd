@@ -3352,75 +3352,91 @@ function dropReplacedAnnouncements() {
     });
 }
 
-/* A group's current announcement: title, date, picture, the post, and who
-   wrote it. */
+/* A group's current announcement, drawn as its inbox card opened up: the
+   group on top (pressing it opens the group), then the headline, a byline,
+   the picture and the post. */
 function detailAnnouncement(body, id, name) {
     var listed = listedGroup(id);
     var held = groupPanes[id] || listed || {};
     var groupName = held.name || name || id;
     var post = announcementFor(id);
+    var ready = post !== null && !!post.id;
 
-    document.getElementById("detailTitle").textContent = groupName;
+    document.getElementById("detailTitle").textContent = "Announcement";
 
-    var hero = el("button", "row gref");
-    hero.appendChild(groupIcon({ name: groupName, iconFileId: held.iconFileId,
+    var card = el("article", "notify post");
+    card.style.setProperty("--spine", notifyAccent("group.announcement"));
+
+    var head = el("button", "head");
+    head.appendChild(groupIcon({ name: groupName, iconFileId: held.iconFileId,
         iconVersion: held.iconVersion }, false));
     var who = el("div", "who");
     who.appendChild(el("div", "n", groupName));
-    who.appendChild(el("div", "d", "View group"));
-    hero.appendChild(who);
-    hero.onclick = function () { select({ kind: "group", id: id, name: groupName }); };
-    body.appendChild(hero);
+    who.appendChild(el("div", "d", "Group announcement"));
+    head.appendChild(who);
+    var posted = ready ? Date.parse(post.createdAt) : NaN;
+    if (isNaN(posted) === false) {
+        var when = el("div", "when", whenText(posted / 1000));
+        when.title = whenDate(post.createdAt);
+        head.appendChild(when);
+    }
+    head.title = "Open " + groupName;
+    head.onclick = function () { select({ kind: "group", id: id, name: groupName }); };
+    card.appendChild(head);
+    body.appendChild(card);
 
     if (post === null) {
-        body.appendChild(el("div", "hint", announcementError(id) || "Loading announcement..."));
+        card.appendChild(el("div", "note", announcementError(id) || "Loading announcement..."));
         return;
     }
-    if (!post.id) {
-        body.appendChild(placeholder("This group has no announcement."));
+    if (ready === false) {
+        card.appendChild(el("div", "note", "This group has no announcement."));
         return;
     }
 
-    if (post.title) body.appendChild(el("div", "section", post.title));
+    if (post.title) card.appendChild(el("h2", "ptitle", post.title));
 
-    var posted = post.createdAt ? whenDate(post.createdAt) : "";
-    var edited = post.updatedAt && post.updatedAt !== post.createdAt
-        ? whenDate(post.updatedAt) : "";
-    if (posted)
-        body.appendChild(el("div", "hint",
-            "Posted " + posted + (edited && edited !== posted ? ", edited " + edited : "")));
-
-    if (post.imageFileId) {
-        var picture = el("div", "gpost");
-        picture.style.background = shotBackground(post.title || groupName);
-        var img = document.createElement("img");
-        img.alt = "";
-        picture.appendChild(img);
-        imageWhenVisible(img, post.imageFileId, post.imageVersion || 1, 1024);
-        viewable(picture, { id: post.imageFileId, version: post.imageVersion || 1 },
-            post.title || groupName, 1024);
-        body.appendChild(picture);
-    }
-
-    if (post.text) body.appendChild(el("div", "bio", post.text));
-
+    var byline = el("div", "byline");
     if (post.authorId) {
         // A friend is named from the roster. Anyone else costs a profile
         // fetch, which opening their pane would have spent anyway.
         var hit = findFriend(post.authorId);
         var full = hit ? null : profileFor(post.authorId);
         var author = hit ? hit.friend.displayName
-            : (full && full.displayName) || post.authorId;
-        var by = el("button", "act", "POSTED BY " + author);
-        by.onclick = function () {
+            : (full && full.displayName) || "someone";
+        byline.appendChild(document.createTextNode("by "));
+        var link = el("button", "who-link", author);
+        link.onclick = function () {
             select(hit
                 ? { kind: "friend", id: post.authorId }
                 : { kind: "person", id: post.authorId, name: author });
         };
-        var actions = el("div", "actions");
-        actions.appendChild(by);
-        body.appendChild(actions);
+        byline.appendChild(link);
     }
+    var edited = Date.parse(post.updatedAt);
+    if (isNaN(edited) === false && isNaN(posted) === false && edited - posted >= 60000) {
+        var note = el("span", null, (byline.childNodes.length ? " · " : "") +
+            "edited " + whenText(edited / 1000));
+        note.title = whenDate(post.updatedAt);
+        byline.appendChild(note);
+    }
+    if (byline.childNodes.length) card.appendChild(byline);
+
+    if (post.imageFileId) {
+        var picture = el("div", "gpost");
+        picture.style.background = shotBackground(post.title || groupName);
+        var img = document.createElement("img");
+        img.alt = "";
+        // The gradient only holds the space until the picture is in.
+        img.onload = function () { picture.classList.add("in"); };
+        picture.appendChild(img);
+        imageWhenVisible(img, post.imageFileId, post.imageVersion || 1, 1024);
+        viewable(picture, { id: post.imageFileId, version: post.imageVersion || 1 },
+            post.title || groupName, 1024);
+        card.appendChild(picture);
+    }
+
+    if (post.text) card.appendChild(el("div", "ptext", post.text));
 }
 
 function renderGroups(body) {

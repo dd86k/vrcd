@@ -72,6 +72,8 @@ struct GroupAnnouncement
     string authorId;     /// usr_... of whoever posted it
     string createdAt;
     string updatedAt;
+    long createdAtUnix;  /// 0 when VRChat gave none or it did not parse
+    long updatedAtUnix;  /// ditto
     string imageFileId;  /// Picture for the image proxy, or empty
     long imageVersion;
 }
@@ -228,6 +230,19 @@ unittest
     assert(parseGroupProfile(stranger).hasMember == false);
 }
 
+/// UNIX time of an ISO 8601 timestamp, or 0 when it does not parse.
+private long unixTime(string iso)
+{
+    import std.datetime.systime : SysTime;
+
+    if (iso.length == 0)
+        return 0;
+    try
+        return SysTime.fromISOExtString(iso).toUnixTime!long();
+    catch (Exception)
+        return 0;
+}
+
 /// Parse a `group_announcement` payload.
 GroupAnnouncement parseGroupAnnouncement(ref const(JSONValue) j)
 {
@@ -238,6 +253,8 @@ GroupAnnouncement parseGroupAnnouncement(ref const(JSONValue) j)
     a.authorId     = text(j, "authorId");
     a.createdAt    = text(j, "createdAt");
     a.updatedAt    = text(j, "updatedAt");
+    a.createdAtUnix = unixTime(a.createdAt);
+    a.updatedAtUnix = unixTime(a.updatedAt);
     a.imageFileId  = text(j, "imageFileId");
     a.imageVersion = number(j, "imageVersion");
     return a;
@@ -249,6 +266,11 @@ unittest
         "imageFileId":"file_x","imageVersion":3}`);
     GroupAnnouncement a = parseGroupAnnouncement(j);
     assert(a.id == "gpos_1" && a.text == "Body" && a.imageVersion == 3);
+
+    JSONValue dated = parseJSON(`{"createdAt":"2026-11-06T09:15:00.000Z","updatedAt":"bad"}`);
+    GroupAnnouncement d = parseGroupAnnouncement(dated);
+    assert(d.createdAtUnix == 1_793_956_500);
+    assert(d.updatedAtUnix == 0);
 
     JSONValue none = parseJSON(`{}`);
     assert(parseGroupAnnouncement(none).id.length == 0);

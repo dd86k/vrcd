@@ -430,13 +430,18 @@ button.head { cursor: pointer; }
 .gbanner img { position: absolute; inset: 0; width: 100%; height: 100%;
     object-fit: cover; display: block; }
 
-/* The group an announcement belongs to, standing alone at the top of the pane. */
-.row.gref { border: 1px solid var(--line); border-radius: 10px; margin-bottom: .9rem; }
-
-/* An announcement's picture, at its own shape. The gradient holds the space
-   until it loads. */
-.gpost { border-radius: 10px; border: 1px solid var(--line); overflow: hidden;
-    min-height: 8rem; margin-bottom: .9rem; }
+/* An announcement, drawn as its inbox card opened up. */
+.post .ptitle { margin: .9rem 0 0; font-size: 1.3rem; line-height: 1.3;
+    font-weight: 700; overflow-wrap: anywhere; }
+.post .byline { margin-top: .3rem; color: var(--dim); font-size: .8rem; }
+.post .who-link { padding: 0; background: none; border: 0; color: var(--text);
+    font: inherit; cursor: pointer; text-decoration: underline;
+    text-underline-offset: .2em; }
+.post .ptext { margin-top: .9rem; font-size: .95rem; line-height: 1.55;
+    white-space: pre-wrap; overflow-wrap: anywhere; }
+/* At its own shape. The gradient holds the space until the picture is in. */
+.gpost { margin-top: .9rem; border-radius: 8px; overflow: hidden; min-height: 8rem; }
+.gpost.in { min-height: 0; }
 .gpost img { display: block; width: 100%; height: auto; }
 
 .pills { display: flex; gap: .35rem; flex-wrap: wrap; margin-bottom: .9rem; }

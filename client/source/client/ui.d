@@ -5057,17 +5057,21 @@ private void drawGroupDetailPage(mu_Context* ctx, AppState* state, int scrollDel
     mu_end_panel(ctx);
 }
 
-/// A group's current announcement: title, date, picture, the post, and who
-/// wrote it. Opened from the group's page or from an announcement in the inbox.
+/// A group's current announcement, drawn as its inbox entry opened up: the
+/// group on top (pressing it opens the group page), then the headline, a
+/// byline, the picture and the post, with the inbox's spine down the side.
 private void drawAnnouncementPage(mu_Context* ctx, AppState* state, int scrollDelta)
 {
     static immutable int[1] fullCol = [-1];
+    static immutable int[2] insetCols = [notifSpineGap, -1];
     enum int iconSize = 64;
+    enum int lineStep = 26;
 
     string id = state.groupDetailId;
     AnnouncementLookup found = state.announcementSubject();
     GroupAnnouncement a = found.profile;
     GroupEntry* listed = state.findGroup(id);
+    bool ready = found.state == ProfileState.ready && a.id.length > 0;
 
     // Not fetching the group page for a header: the list or the inbox row
     // usually has the name already.
@@ -5078,69 +5082,135 @@ private void drawAnnouncementPage(mu_Context* ctx, AppState* state, int scrollDe
     mu_begin_panel(ctx, "AnnouncementPanel");
     applyScroll(ctx, scrollDelta);
 
-    int[2] headCols = [iconSize + ctx.style.spacing, -1];
-    mu_layout_row(ctx, 2, headCols.ptr, iconSize);
+    // Header, as the inbox draws a sender: icon, name, and what this is.
+    int[3] headCols = [notifSpineGap, iconSize + ctx.style.spacing, -1];
+    mu_layout_row(ctx, 3, headCols.ptr, iconSize);
+    int top = mu_layout_next(ctx).y;
     mu_Rect iconCell = mu_layout_next(ctx);
+    mu_Rect textCell = mu_layout_next(ctx);
+    mu_Rect head = mu_Rect(iconCell.x, iconCell.y,
+        textCell.x + textCell.w - iconCell.x, iconSize);
+    bool overHead = mu_mouse_over(ctx, head) != 0;
+    if (overHead && ctx.mouse_down == 0)
+        mu_draw_rect(ctx, head, hoverBg);
     drawGroupIcon(ctx, state, listed ? listed.iconFileId : null,
         listed ? listed.iconVersion : 0, name,
         mu_Rect(iconCell.x, iconCell.y, iconSize, iconSize), 128);
-    mu_draw_control_text(ctx, name, mu_layout_next(ctx), MU_COLOR_TEXT, 0);
 
-    if (state.announcementFromGroup == false)
+    char[32] relBuf = void;
+    char[64] kindBuf = void;
+    const(char)[] rel = ready ? formatRelative(a.createdAtUnix, relBuf[]) : null;
+    int nameY = textCell.y + (iconSize - 2 * lineStep) / 2;
+    mu_draw_control_text(ctx, name,
+        mu_Rect(textCell.x, nameY, textCell.w, lineStep), MU_COLOR_TEXT, 0);
+    drawInk(ctx, rel.length > 0
+        ? sformat(kindBuf, "Group announcement . %s", rel)
+        : "Group announcement",
+        mu_Rect(textCell.x, nameY + lineStep, textCell.w, lineStep), textDim);
+    if (wasClick && overHead)
     {
-        mu_layout_row(ctx, 1, fullCol.ptr, 60);
-        if (clickButton(ctx, "View Group"))
-        {
-            state.toolsPage = ToolsPage.groupDetail;
-            requestRepaint();
-        }
+        wasClick = false;
+        state.toolsPage = ToolsPage.groupDetail;
+        requestRepaint();
     }
-
-    mu_layout_row(ctx, 1, fullCol.ptr, 1);
-    mu_draw_rect(ctx, mu_layout_next(ctx), divider);
 
     final switch (found.state) with (ProfileState)
     {
     case pending:
-        string why = state.connected ? null : "Not connected.";
         mu_layout_row(ctx, 1, fullCol.ptr, 0);
-        mu_label(ctx, why ? why : "Loading announcement...");
+        notifLine(ctx, state.connected ? "Loading announcement..." : "Not connected.", textDim);
         break;
 
     case failed:
         char[192] errBuf = void;
         mu_layout_row(ctx, 1, fullCol.ptr, 0);
-        mu_label(ctx, cast(string) sformat(errBuf, "Announcement unavailable: %s", found.error));
-        mu_layout_row(ctx, 1, fullCol.ptr, 60);
-        if (clickButton(ctx, "Retry"))
-        {
-            state.groupAnnouncements.forget(id);
-            requestRepaint();
-        }
+        notifLine(ctx, sformat(errBuf, "Announcement unavailable: %s", found.error), textDim);
         break;
 
     case ready:
-        if (a.id.length == 0)
+        if (ready == false)
         {
             mu_layout_row(ctx, 1, fullCol.ptr, 0);
-            mu_label(ctx, "This group has no announcement.");
+            notifLine(ctx, "This group has no announcement.", textDim);
             break;
         }
 
+        // There is one size of type, so the headline stands out by weight:
+        // drawn twice a pixel apart when it fits a line, wrapped when not.
         if (a.title.length > 0)
-            sectionHeader(ctx, a.title);
-
-        // ISO dates, cut to the day.
-        string posted = a.createdAt.length >= 10 ? a.createdAt[0 .. 10] : a.createdAt;
-        string edited = a.updatedAt.length >= 10 ? a.updatedAt[0 .. 10] : a.updatedAt;
-        if (posted.length > 0)
         {
-            char[64] dateBuf = void;
-            mu_layout_row(ctx, 1, fullCol.ptr, 0);
-            mu_Rect r = mu_layout_next(ctx);
-            drawInk(ctx, edited.length > 0 && edited != posted
-                ? sformat(dateBuf, "Posted %s, edited %s", posted, edited)
-                : sformat(dateBuf, "Posted %s", posted), r, textDim);
+            spacer(ctx, 10);
+            int titleW = ctx.text_width(ctx.style.font, a.title.ptr, cast(int) a.title.length);
+            int room = mu_get_current_container(ctx).body_.w - notifSpineGap
+                - ctx.style.spacing - 2 * ctx.style.padding;
+            mu_layout_row(ctx, 2, insetCols.ptr, 0);
+            mu_layout_next(ctx);
+            if (titleW + 1 < room)
+            {
+                // Back by the padding, to line up with the wrapped text below.
+                mu_Rect cell = mu_layout_next(ctx);
+                cell.x -= ctx.style.padding;
+                drawInk(ctx, a.title, cell, white);
+                drawInk(ctx, a.title, mu_Rect(cell.x + 1, cell.y, cell.w, cell.h), white);
+            }
+            else
+            {
+                mu_Color saved = ctx.style.colors[MU_COLOR_TEXT];
+                ctx.style.colors[MU_COLOR_TEXT] = white;
+                mu_text(ctx, a.title);
+                ctx.style.colors[MU_COLOR_TEXT] = saved;
+            }
+        }
+
+        // "by Aster . edited 2d ago", the name a link to their profile.
+        string author;
+        if (a.authorId.length > 0)
+        {
+            // A friend is named from the roster. Anyone else costs a profile
+            // fetch, which opening their page would have spent anyway.
+            if (FriendInfo* f = state.findFriend(a.authorId))
+                author = f.displayName;
+            else
+            {
+                bool startFetch;
+                ProfileLookup who = state.profiles.lookup(a.authorId, startFetch);
+                if (startFetch)
+                    state.pendingProfileRequests ~= a.authorId;
+                author = who.profile.displayName;
+            }
+            if (author.length == 0)
+                author = "someone";
+        }
+        char[32] editBuf = void;
+        char[48] editedBuf = void;
+        const(char)[] edited;
+        if (a.updatedAtUnix - a.createdAtUnix >= 60)
+            edited = sformat(editedBuf, "%sedited %s", author.length > 0 ? " . " : "",
+                formatRelative(a.updatedAtUnix, editBuf[]));
+        if (author.length > 0 || edited.length > 0)
+        {
+            mu_layout_row(ctx, 2, insetCols.ptr, 0);
+            mu_layout_next(ctx);
+            mu_Rect line = mu_layout_next(ctx);
+            int pad = ctx.style.padding;
+            int x = line.x - pad;
+            if (author.length > 0)
+            {
+                enum string by = "by ";
+                int byW = ctx.text_width(ctx.style.font, by.ptr, cast(int) by.length);
+                drawInk(ctx, by, mu_Rect(x, line.y, byW + pad, line.h), textDim);
+                x += byW;
+                int nameW = ctx.text_width(ctx.style.font, author.ptr, cast(int) author.length);
+                mu_Rect link = mu_Rect(x, line.y, nameW + 2 * pad, line.h);
+                bool over = mu_mouse_over(ctx, link) != 0;
+                if (over && ctx.mouse_down == 0)
+                    mu_draw_rect(ctx, link, hoverBg);
+                drawUnderlined(ctx, author, link, linkText);
+                if (wasClick && over)
+                    openProfile(state, a.authorId);
+                x += nameW;
+            }
+            drawInk(ctx, edited, mu_Rect(x, line.y, line.x + line.w - x, line.h), textDim);
         }
 
         if (a.imageFileId.length > 0 && a.imageVersion > 0)
@@ -5148,7 +5218,9 @@ private void drawAnnouncementPage(mu_Context* ctx, AppState* state, int scrollDe
             int imageH = window_height / 2;
             if (imageH < 200)
                 imageH = 200;
-            mu_layout_row(ctx, 1, fullCol.ptr, imageH);
+            spacer(ctx, 10);
+            mu_layout_row(ctx, 2, insetCols.ptr, imageH);
+            mu_layout_next(ctx);
             mu_Rect imgRect = mu_layout_next(ctx);
             string key = imageKey(a.imageFileId, a.imageVersion, 1024);
             int iconId = getIconId(key);
@@ -5166,35 +5238,39 @@ private void drawAnnouncementPage(mu_Context* ctx, AppState* state, int scrollDe
         if (a.text.length > 0)
         {
             spacer(ctx, 10);
-            mu_layout_row(ctx, 1, fullCol.ptr, 0);
+            mu_layout_row(ctx, 2, insetCols.ptr, 0);
+            mu_layout_next(ctx);
             mu_text(ctx, a.text);
         }
-
-        if (a.authorId.length > 0)
-        {
-            // A friend is named from the roster. Anyone else costs a profile
-            // fetch, which opening their page would have spent anyway.
-            string author;
-            if (FriendInfo* f = state.findFriend(a.authorId))
-                author = f.displayName;
-            else
-            {
-                bool startFetch;
-                ProfileLookup who = state.profiles.lookup(a.authorId, startFetch);
-                if (startFetch)
-                    state.pendingProfileRequests ~= a.authorId;
-                author = who.profile.displayName;
-            }
-            if (author.length == 0)
-                author = a.authorId;
-
-            char[160] byBuf = void;
-            spacer(ctx);
-            mu_layout_row(ctx, 1, fullCol.ptr, 60);
-            if (clickButton(ctx, cast(string) sformat(byBuf, "Posted by %s", author)))
-                openProfile(state, a.authorId);
-        }
         break;
+    }
+
+    // The spine, once the rows above have given it a height.
+    mu_layout_row(ctx, 1, fullCol.ptr, 1);
+    mu_Rect bottom = mu_layout_next(ctx);
+    mu_draw_rect(ctx, mu_Rect(bottom.x, top, notifSpineWidth, bottom.y - top),
+        notifAccent("group.announcement"));
+
+    if (found.state == ProfileState.failed)
+    {
+        mu_layout_row(ctx, 1, fullCol.ptr, 60);
+        if (clickButton(ctx, "Retry"))
+        {
+            state.groupAnnouncements.forget(id);
+            requestRepaint();
+        }
+    }
+
+    // The header does the same, but a headset wants a target this size.
+    if (state.announcementFromGroup == false)
+    {
+        spacer(ctx);
+        mu_layout_row(ctx, 1, fullCol.ptr, 60);
+        if (clickButton(ctx, "View Group"))
+        {
+            state.toolsPage = ToolsPage.groupDetail;
+            requestRepaint();
+        }
     }
 
     mu_end_panel(ctx);
