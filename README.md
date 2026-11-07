@@ -45,29 +45,39 @@ future:
 
 ## Client Screenshots
 
+Taken from the mock scenario (see [Mocking and Screenshots](#mocking-and-screenshots)).
+
 ### Feed Page
 
 ![Feed with event's date, type, user, and detail columns](packaging/flatpak/screenshots/1-main.png)
 
 ### Online Page
 
-![List of instances (current and capacity) and friends in each of them with color indicators](packaging/flatpak/screenshots/2-online.png)
+![List of instances and friends in each of them with status color indicators](packaging/flatpak/screenshots/2-online.png)
 
 ### Inbox
 
-![Notification inbox](packaging/flatpak/screenshots/3-inbox.png)
+![Notification inbox with a friend request, an invite, and a group invite](packaging/flatpak/screenshots/3-inbox.png)
 
-### Inventory
+### Stuff
 
-![Inventory showing gallery](packaging/flatpak/screenshots/4-stuff.png)
+![Gallery section of the user content page](packaging/flatpak/screenshots/4-stuff.png)
 
 ### Tools
 
-![Tools: screenshot folder, etc.](packaging/flatpak/screenshots/5-tools.png)
+![Tools: friend, mute, block, and group lists, notification rules, picture folders](packaging/flatpak/screenshots/5-tools.png)
 
 ### Profile
 
-![My profile with bio, links, langs](packaging/flatpak/screenshots/6-profile.png)
+![Own profile with bio, languages, and join date](packaging/flatpak/screenshots/6-profile.png)
+
+### Friend Profile
+
+![Friend profile with bio, links, location, and languages](packaging/flatpak/screenshots/7-user.png)
+
+### Group
+
+![Group page with description, rules, links, and membership details](packaging/flatpak/screenshots/8-group.png)
 
 ## Web Screenshots
 
@@ -181,6 +191,11 @@ change something there answers "Read-only in mock".
 tools/screenshots.sh
 # Only some pages, named or not
 tools/screenshots.sh feed inbox=notifications tools:groupList
+# Refresh the README pictures
+tools/screenshots.sh -o packaging/flatpak/screenshots 1-main=feed 2-online=online \
+    3-inbox=notifications 4-stuff=inventory:gallery 5-tools=tools 6-profile=profile \
+    7-user=user:usr_00000000-0000-4000-8000-000000000001 \
+    8-group=group:grp_00000000-0000-4000-8000-0000000000d1
 
 # Click around in a real window, settings are left alone
 client/vrcd_client --mock server/mock/basic.json --log-replay server/mock/basic_log.txt
