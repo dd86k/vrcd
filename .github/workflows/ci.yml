@@ -245,6 +245,57 @@ jobs:
           path: vrcd-server_*.deb
           if-no-files-found: error
 
+  # AppImage only. Same image version as package-linux,
+  # for the same libsdl3-dev floor. Native runner: see package-appimage.sh.
+  package-linux-arm64:
+    name: Package (Linux AArch64)
+    runs-on: ubuntu-26.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libsdl3-dev libsdl3-ttf-dev libsdl3-image-dev libsqlite3-dev \
+            patchelf desktop-file-utils file lld
+
+      - uses: dlang-community/setup-dlang@a6f7969b8b5dc3ff448c30f2c6749150795814f3 # v2
+        with:
+          compiler: ldc-latest
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.dub
+          key: dub-${{ runner.os }}-${{ runner.arch }}-package-${{ hashFiles('dub.sdl', '*/dub.sdl') }}
+
+      - name: Fetch dub packages
+        run: dub upgrade --missing-only -s -v
+
+      - name: Install AppImage tooling
+        run: |
+          cd /tmp
+          curl -fsSLO https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-aarch64.AppImage
+          curl -fsSLO https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-aarch64.AppImage
+          chmod +x linuxdeploy-aarch64.AppImage appimagetool-aarch64.AppImage
+          sudo mv linuxdeploy-aarch64.AppImage appimagetool-aarch64.AppImage /usr/local/bin/
+
+      # Still the x86_64 Windows helper: Proton runs it, under FEX on AArch64.
+      # Not uploaded, package-linux already does.
+      - name: Build pipehelper
+        run: ./pipehelper/build.sh
+
+      - name: Build AppImage
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: 1
+        run: ./packaging/package-appimage.sh
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: vrcd-client-appimage-aarch64
+          path: '*.AppImage'
+          if-no-files-found: error
+
   test-alpine:
     name: Test (musl)
     # There is no Alpine runner image, only Windows, macOS and Ubuntu, so the
@@ -313,7 +364,7 @@ jobs:
   release:
     name: Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [test-linux, test-windows, package-windows, package-linux, test-alpine]
+    needs: [test-linux, test-windows, package-windows, package-linux, package-linux-arm64, test-alpine]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

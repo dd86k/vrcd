@@ -9,7 +9,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION="$(cat "${SCRIPT_DIR}/VERSION")"
 BINARY="${SCRIPT_DIR}/client/vrcd_client"
 SERVER_BINARY="${SCRIPT_DIR}/server/vrcd_server"
-OUTPUT="${SCRIPT_DIR}/vrcd-client-${VERSION}-x86_64.AppImage"
+# Host architecture: dub builds natively and linuxdeploy inspects what it
+# bundles, so there is no cross-build. uname -m names match the tooling's.
+ARCH="$(uname -m)"
+case "${ARCH}" in
+    x86_64|aarch64) ;;
+    *) echo "error: unsupported architecture: ${ARCH}" >&2; exit 1 ;;
+esac
+OUTPUT="${SCRIPT_DIR}/vrcd-client-${VERSION}-${ARCH}.AppImage"
 # Desktop entry, icon, and AppStream metadata are the Flatpak's: one app ID,
 # the one the client sets as SDL_HINT_APP_ID.
 APP_ID="io.github.dd86k.vrcd"
@@ -30,8 +37,8 @@ done
 
 # Check for required tools
 for tool in appimagetool linuxdeploy; do
-    if ! command -v "${tool}" &>/dev/null && ! command -v "${tool}-x86_64.AppImage" &>/dev/null; then
-        echo "error: ${tool} not found in PATH (or as ${tool}-x86_64.AppImage)" >&2
+    if ! command -v "${tool}" &>/dev/null && ! command -v "${tool}-${ARCH}.AppImage" &>/dev/null; then
+        echo "error: ${tool} not found in PATH (or as ${tool}-${ARCH}.AppImage)" >&2
         echo "  appimagetool: https://github.com/AppImage/AppImageKit/releases" >&2
         echo "  linuxdeploy:  https://github.com/linuxdeploy/linuxdeploy/releases" >&2
         exit 1
@@ -43,7 +50,7 @@ run_tool() {
     if command -v "${name}" &>/dev/null; then
         "${name}" "$@"
     else
-        "${name}-x86_64.AppImage" "$@"
+        "${name}-${ARCH}.AppImage" "$@"
     fi
 }
 
@@ -146,17 +153,17 @@ chmod +x "${APPDIR}/AppRun"
 # time and gives up on the first failure, so an upstream hiccup (a 500, a
 # rate limit) fails a build that is otherwise complete. Fetch it here instead:
 # curl retries, and the result is kept so later runs need no network at all.
-RUNTIME="${APPIMAGE_RUNTIME_FILE:-${SCRIPT_DIR}/packaging/deps/cache/runtime-x86_64}"
+RUNTIME="${APPIMAGE_RUNTIME_FILE:-${SCRIPT_DIR}/packaging/deps/cache/runtime-${ARCH}}"
 if [[ ! -s "${RUNTIME}" ]]; then
     echo "==> Fetching AppImage runtime..."
     mkdir -p "$(dirname "${RUNTIME}")"
     if ! curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors --connect-timeout 20 \
         -o "${RUNTIME}.part" \
-        https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-x86_64
+        https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-${ARCH}
     then
         rm -f "${RUNTIME}.part"
         echo "error: could not download the AppImage runtime" >&2
-        echo "  download it manually and pass APPIMAGE_RUNTIME_FILE=/path/to/runtime-x86_64" >&2
+        echo "  download it manually and pass APPIMAGE_RUNTIME_FILE=/path/to/runtime-${ARCH}" >&2
         exit 1
     fi
     # A forge error page served as the asset would be saved just as happily.
@@ -169,7 +176,7 @@ if [[ ! -s "${RUNTIME}" ]]; then
 fi
 
 echo "==> Packaging AppImage..."
-ARCH=x86_64 run_tool appimagetool --runtime-file "${RUNTIME}" "${APPDIR}" "${WORKDIR}/out.AppImage"
+ARCH="${ARCH}" run_tool appimagetool --runtime-file "${RUNTIME}" "${APPDIR}" "${WORKDIR}/out.AppImage"
 
 echo "==> Copying result to ${OUTPUT}..."
 cp "${WORKDIR}/out.AppImage" "${OUTPUT}"

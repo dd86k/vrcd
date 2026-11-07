@@ -63,6 +63,7 @@ Rules:
 - The AppImage ships AppStream metadata.
 - The pipehelper is cross-built from Linux, so the AppImage bundles it and it
   is available as its own download.
+- AArch64 AppImage (untested).
 
 ### API
 

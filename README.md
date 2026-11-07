@@ -110,6 +110,17 @@ it to the wineserver holding the launch pipe.
 If the helper is missing, or the IPC attempt fails, the client falls back
 to a server-side self-invite.
 
+### Linux: AArch64
+
+An AArch64 AppImage is built alongside the x86_64 one. It is untested.
+VRChat runs there as x86_64 Proton under an emulator like FEX. Known caveats:
+
+- "Open in VRChat" finds Proton's wine through `/proc/<pid>/exe` of the game
+  process. Under FEX that is likely the FEX interpreter, in which case the
+  client falls back to a self-invite.
+- Log and Pictures folders come from the Steam library layout
+  (`steamapps/compatdata/438100`), assumed unchanged.
+
 # For Developers
 
 ## Architecture
@@ -230,7 +241,7 @@ own shapes for `self`, `friends`, `users`, `notifications`, `groups`,
 ### Packaging
 
 ```bash
-./packaging/package-appimage.sh   # client AppImage, with the server (client builds with -c static)
+./packaging/package-appimage.sh   # client AppImage, with the server (client builds with -c static), host arch
 ./packaging/package-deb.sh all    # client and server .deb
 ./packaging/package-deb.sh --static server # Package server as static build
 ```
