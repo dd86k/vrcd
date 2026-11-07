@@ -56,6 +56,7 @@ Rules:
 - Notification rules (TOOLS > RULES), and NOTIFY WHEN ONLINE on a friend.
 - Browser alerts for rule notifications while the page is open (needs HTTPS).
 - Groups (TOOLS > GROUPS), same as the client.
+- Group announcements can be read in full, same as the client.
 
 ### Packaging
 

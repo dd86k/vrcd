@@ -73,6 +73,9 @@ private enum long PROTOCOL_STATUS_RULES = 17;
 /// Protocol version that added groups (`get_groups`, `get_group`, `group_action`).
 private enum long PROTOCOL_GROUPS = 18;
 
+/// Protocol version that added `get_group_announcement`.
+private enum long PROTOCOL_ANNOUNCEMENTS = 19;
+
 /// Byte budget for proxied images. Thumbnails run tens of kilobytes each, so
 /// this holds a few hundred of them; past that the oldest are dropped and
 /// re-fetched if they are looked at again.
@@ -427,6 +430,7 @@ class ServerLink
         this.images = new ImageCache(IMAGE_CACHE_BYTES);
         this.profiles = new ProfileCache();
         this.groupPanes = new ProfileCache();
+        this.groupAnnouncements = new ProfileCache();
     }
 
     /// Set the callback fired after any state change worth re-rendering.
@@ -847,6 +851,47 @@ class ServerLink
             if (found.state == ProfileState.ready)
                 return found;
             groupPanes.storeFailure(groupId, "Not connected to vrcd-server");
+            return ProfileLookup(ProfileState.failed, null,
+                "Not connected to vrcd-server");
+        }
+        return found;
+    }
+
+    /// Look a group's announcement up, asking vrcd-server for it when it is
+    /// not held. Never blocks, on the same terms as `group`.
+    ProfileLookup announcement(string groupId)
+    {
+        bool startFetch;
+        ProfileLookup found = groupAnnouncements.lookup(groupId, startFetch);
+        if (startFetch == false)
+            return found;
+
+        LinkStatus current = status();
+        string unavailable;
+        if (current.connected == false)
+            unavailable = "Not connected to vrcd-server";
+        else if (current.serverVersion < PROTOCOL_ANNOUNCEMENTS)
+            unavailable = "This vrcd-server is too old for announcements (needs protocol v19)";
+
+        if (unavailable.length > 0)
+        {
+            if (found.state == ProfileState.ready)
+                return found;
+            groupAnnouncements.forget(groupId);
+            return ProfileLookup(ProfileState.failed, null, unavailable);
+        }
+
+        logDebugging("Fetching announcement for %s", groupId);
+        bool sent = sendMessage(JSONValue([
+            "type":     JSONValue("get_group_announcement"),
+            "group_id": JSONValue(groupId),
+        ]));
+
+        if (sent == false)
+        {
+            if (found.state == ProfileState.ready)
+                return found;
+            groupAnnouncements.storeFailure(groupId, "Not connected to vrcd-server");
             return ProfileLookup(ProfileState.failed, null,
                 "Not connected to vrcd-server");
         }
@@ -1566,6 +1611,8 @@ private:
     ProfileCache profiles;
     /// Fetched group panes, keyed by group ID.
     ProfileCache groupPanes;
+    /// Fetched group announcements, keyed by group ID.
+    ProfileCache groupAnnouncements;
     GroupSnapshot groupList;
     GroupActionResult lastGroupAction;
 
@@ -1861,6 +1908,7 @@ private:
             // stay readable, a request that died with the socket does not.
             profiles.dropUnresolved();
             groupPanes.dropUnresolved();
+            groupAnnouncements.dropUnresolved();
             notifyChange();
 
             logInfo("Reconnecting in %d second(s)", backoff.total!"seconds");
@@ -2275,6 +2323,10 @@ private:
             applyGroup(message);
             break;
 
+        case "group_announcement":
+            applyAnnouncement(message);
+            break;
+
         case "group_action_result":
             applyGroupActionResult(message);
             break;
@@ -2488,6 +2540,10 @@ private:
             notifyChange();
             return;
         }
+
+        // A new announcement replaces the one held for its group.
+        if (added.notificationType == "group.announcement")
+            groupAnnouncements.forget(added.senderUserId);
 
         synchronized (stateMutex)
         {
@@ -2892,6 +2948,31 @@ private:
         }
 
         groupPanes.store(groupId, group.toString());
+    }
+
+    /// Take in one `group_announcement` reply. The JSON kept is the
+    /// announcement itself, `{}` when the group has none.
+    void applyAnnouncement(ref JSONValue message)
+    {
+        string groupId = jsonString(message, "group_id");
+        if (groupId.length == 0)
+            return;
+
+        bool success;
+        if (const(JSONValue) *v = "success" in message)
+            success = v.type == JSONType.true_;
+
+        const(JSONValue) *announcement = "announcement" in message;
+        if (success == false || announcement is null || announcement.type != JSONType.object)
+        {
+            string error = jsonString(message, "error");
+            groupAnnouncements.storeFailure(groupId,
+                error.length > 0 ? error : "Announcement unavailable");
+            logDebugging("Announcement for %s failed: %s", groupId, error);
+            return;
+        }
+
+        groupAnnouncements.store(groupId, announcement.toString());
     }
 
     /// Fold a `group_action_result` in. A success drops the cached pane,

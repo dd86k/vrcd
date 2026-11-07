@@ -560,6 +560,36 @@ int main(string[] args)
             }
             return REQUEST_OK;
         })
+        .get(`/api/announcement/:group_id`, (ref HTTPRequest req)
+        {
+            if (authorized(req, true) == false)
+                return REQUEST_OK;
+
+            string *groupId = "group_id" in req.params;
+            if (groupId is null || isGroupId(*groupId) == false)
+            {
+                req.replyJSON(HTTPStatus.badRequest, `{"error":"bad group id"}`);
+                return REQUEST_OK;
+            }
+
+            // Same terms as /api/group, and `{}` when the group has none.
+            ProfileLookup found = link.announcement(*groupId);
+            final switch (found.state) with (ProfileState)
+            {
+            case ready:
+                req.addHeader("Cache-Control", "no-store");
+                req.replyJSON(HTTPStatus.ok, found.json);
+                break;
+            case pending:
+                req.replyJSON(202, `{"pending":true}`);
+                break;
+            case failed:
+                req.replyJSON(502,
+                    JSONValue([ "error": JSONValue(found.error) ]).toString());
+                break;
+            }
+            return REQUEST_OK;
+        })
         .post(`/api/debug`, (ref HTTPRequest req)
         {
             if (authorized(req, true) == false)

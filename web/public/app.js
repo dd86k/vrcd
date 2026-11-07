@@ -893,7 +893,16 @@ function notifyCard(entry) {
     // titles are often just the type over again ("Group Invite").
     if (entry.title && entry.title !== who && entry.title !== kind.label)
         card.appendChild(el("div", "ntitle", entry.title));
-    if (entry.message) card.appendChild(el("div", "msg", entry.message));
+    // The row holds a line of the post at most, so that line opens the whole
+    // of it.
+    if (fromGroup && entry.notification_type === "group.announcement" &&
+        state.server_version >= 19) {
+        var read = el("button", "msg read", entry.message || "Read announcement");
+        read.onclick = function () {
+            openAnnouncement(entry.sender_user_id, who);
+        };
+        card.appendChild(read);
+    } else if (entry.message) card.appendChild(el("div", "msg", entry.message));
     if (kind.note) card.appendChild(el("div", "note", kind.note));
 
     /* A v2 notification names its own buttons, and they are the only ones
@@ -3263,6 +3272,157 @@ function groupPaneDone(id, pane, error) {
     if (view.sel && view.sel.kind === "group" && view.sel.id === id) renderDetail();
 }
 
+/* Group announcements from /api/announcement/:id, on the same terms as group
+   panes. A held one is `{}` when the group has none. */
+var announcements = {};
+var announcementErrors = {};
+var announcementWaiting = {};
+/* Inbox announcement IDs already seen, so a new one drops the copy held for
+   its group. */
+var announcementNotices = {};
+
+/* Held announcement for this group, or null with a fetch started. */
+function announcementFor(id) {
+    if (announcements[id]) return announcements[id];
+    if (announcementWaiting[id]) return null;
+
+    var failed = announcementErrors[id];
+    if (failed && Date.now() - failed.at < PROFILE_ERROR_MS) return null;
+
+    announcementWaiting[id] = true;
+    fetchAnnouncement(id, PROFILE_TRIES);
+    return null;
+}
+
+/* Last fetch error for this announcement, or "" while one is on its way. */
+function announcementError(id) {
+    if (announcementWaiting[id]) return "";
+    var failed = announcementErrors[id];
+    return failed ? failed.error : "";
+}
+
+function fetchAnnouncement(id, tries) {
+    fetch("/api/announcement/" + encodeURIComponent(id)).then(function (r) {
+        if (r.status === 401) { location.href = "/login"; return null; }
+        if (r.status === 202) {
+            if (tries > 0)
+                setTimeout(function () { fetchAnnouncement(id, tries - 1); }, PROFILE_RETRY_MS);
+            else
+                announcementDone(id, null, "vrcd-server did not answer in time");
+            return null;
+        }
+        return r.json().then(function (body) {
+            if (r.ok) announcementDone(id, body, null);
+            else announcementDone(id, null, body.error || "Announcement unavailable");
+            return null;
+        });
+    }).catch(function () {
+        announcementDone(id, null, "Could not reach the vrcd web server");
+    });
+}
+
+function announcementDone(id, post, error) {
+    delete announcementWaiting[id];
+    if (post) {
+        announcements[id] = post;
+        delete announcementErrors[id];
+    } else {
+        announcementErrors[id] = { error: error, at: Date.now() };
+    }
+    if (view.sel && view.sel.kind === "announcement" && view.sel.id === id) renderDetail();
+}
+
+/* Open a group's announcement, asking again rather than drawing the copy
+   held: an edit sends no notification, and the link and vrcd-server already
+   absorb a quick second look. */
+function openAnnouncement(id, name) {
+    delete announcements[id];
+    delete announcementErrors[id];
+    select({ kind: "announcement", id: id, name: name });
+}
+
+/* Drop the held announcement of any group with a new one in the inbox. */
+function dropReplacedAnnouncements() {
+    state.notifications.forEach(function (entry) {
+        if (entry.notification_type !== "group.announcement") return;
+        if (announcementNotices[entry.id]) return;
+        announcementNotices[entry.id] = true;
+        delete announcements[entry.sender_user_id];
+        delete announcementErrors[entry.sender_user_id];
+    });
+}
+
+/* A group's current announcement: title, date, picture, the post, and who
+   wrote it. */
+function detailAnnouncement(body, id, name) {
+    var listed = listedGroup(id);
+    var held = groupPanes[id] || listed || {};
+    var groupName = held.name || name || id;
+    var post = announcementFor(id);
+
+    document.getElementById("detailTitle").textContent = groupName;
+
+    var hero = el("button", "row gref");
+    hero.appendChild(groupIcon({ name: groupName, iconFileId: held.iconFileId,
+        iconVersion: held.iconVersion }, false));
+    var who = el("div", "who");
+    who.appendChild(el("div", "n", groupName));
+    who.appendChild(el("div", "d", "View group"));
+    hero.appendChild(who);
+    hero.onclick = function () { select({ kind: "group", id: id, name: groupName }); };
+    body.appendChild(hero);
+
+    if (post === null) {
+        body.appendChild(el("div", "hint", announcementError(id) || "Loading announcement..."));
+        return;
+    }
+    if (!post.id) {
+        body.appendChild(placeholder("This group has no announcement."));
+        return;
+    }
+
+    if (post.title) body.appendChild(el("div", "section", post.title));
+
+    var posted = post.createdAt ? whenDate(post.createdAt) : "";
+    var edited = post.updatedAt && post.updatedAt !== post.createdAt
+        ? whenDate(post.updatedAt) : "";
+    if (posted)
+        body.appendChild(el("div", "hint",
+            "Posted " + posted + (edited && edited !== posted ? ", edited " + edited : "")));
+
+    if (post.imageFileId) {
+        var picture = el("div", "gpost");
+        picture.style.background = shotBackground(post.title || groupName);
+        var img = document.createElement("img");
+        img.alt = "";
+        picture.appendChild(img);
+        imageWhenVisible(img, post.imageFileId, post.imageVersion || 1, 1024);
+        viewable(picture, { id: post.imageFileId, version: post.imageVersion || 1 },
+            post.title || groupName, 1024);
+        body.appendChild(picture);
+    }
+
+    if (post.text) body.appendChild(el("div", "bio", post.text));
+
+    if (post.authorId) {
+        // A friend is named from the roster. Anyone else costs a profile
+        // fetch, which opening their pane would have spent anyway.
+        var hit = findFriend(post.authorId);
+        var full = hit ? null : profileFor(post.authorId);
+        var author = hit ? hit.friend.displayName
+            : (full && full.displayName) || post.authorId;
+        var by = el("button", "act", "POSTED BY " + author);
+        by.onclick = function () {
+            select(hit
+                ? { kind: "friend", id: post.authorId }
+                : { kind: "person", id: post.authorId, name: author });
+        };
+        var actions = el("div", "actions");
+        actions.appendChild(by);
+        body.appendChild(actions);
+    }
+}
+
 function renderGroups(body) {
     var groups = state.groups;
     var entries = groupList().filter(function (g) {
@@ -3381,6 +3541,18 @@ function detailGroup(body, id, name) {
 
     if (full === null)
         body.appendChild(el("div", "hint", groupPaneError(id) || "Loading group..."));
+
+    // A button rather than a section: reading it costs a fetch, and most
+    // visits to a group are not for that.
+    if (state.server_version >= 19) {
+        var news = el("div", "actions");
+        var read = el("button", "act", "ANNOUNCEMENT");
+        read.onclick = function () {
+            openAnnouncement(id, g.name);
+        };
+        news.appendChild(read);
+        body.appendChild(news);
+    }
 
     if (g.description) {
         body.appendChild(el("div", "section", "About"));
@@ -4240,6 +4412,10 @@ function profileDone(userId, profile, error) {
     // Only the pane that is waiting on it, and only when it still is: a
     // profile that landed after the user moved on redraws nothing.
     if (view.sel && view.sel.id === userId) renderDetail();
+    // The author line of an open announcement.
+    else if (view.sel && view.sel.kind === "announcement" &&
+        announcements[view.sel.id] && announcements[view.sel.id].authorId === userId)
+        renderDetail();
     else if (view.tab === "profile" && state.self && state.self.id === userId)
         renderList();
 }
@@ -5129,6 +5305,11 @@ function renderDetailBody(body) {
         return;
     }
 
+    if (view.sel.kind === "announcement") {
+        detailAnnouncement(body, view.sel.id, view.sel.name);
+        return;
+    }
+
     if (view.sel.kind === "rule") {
         detailRule(body);
         return;
@@ -5614,6 +5795,7 @@ function applyState(message) {
         linkWasDown = false;
         forgetProfileErrors();
         groupPaneErrors = {};
+        announcementErrors = {};
         // Pictures the same way, and this is the common case rather than the
         // odd one: a proxied image asked for while the link was down is
         // refused on the spot, and a roster is hundreds of faces. The render
@@ -5635,6 +5817,7 @@ function applyState(message) {
     reportGroupAction(seeding);
     reportRules(seeding);
     reportStatus(seeding);
+    dropReplacedAnnouncements();
     reportProfile();
     syncContent();
     alertPromoted();

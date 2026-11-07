@@ -247,6 +247,10 @@ button.head { cursor: pointer; }
    part of what they wrote, same as a bio. */
 .notify .msg { margin-top: .6rem; font-size: .9rem; overflow-wrap: anywhere;
     white-space: pre-wrap; }
+/* An announcement's line opens the whole post. */
+.notify button.msg { display: block; width: 100%; text-align: left; padding: 0;
+    background: none; border: 0; color: inherit; font-family: inherit;
+    cursor: pointer; text-decoration: underline; text-underline-offset: .2em; }
 .notify .note { margin-top: .6rem; color: var(--dim); font-size: .8rem; }
 /* Side by side while there is room. A v2 notification names its own buttons
    and can offer three or four, so they wrap onto a second line rather than
@@ -425,6 +429,15 @@ button.head { cursor: pointer; }
 }
 .gbanner img { position: absolute; inset: 0; width: 100%; height: 100%;
     object-fit: cover; display: block; }
+
+/* The group an announcement belongs to, standing alone at the top of the pane. */
+.row.gref { border: 1px solid var(--line); border-radius: 10px; margin-bottom: .9rem; }
+
+/* An announcement's picture, at its own shape. The gradient holds the space
+   until it loads. */
+.gpost { border-radius: 10px; border: 1px solid var(--line); overflow: hidden;
+    min-height: 8rem; margin-bottom: .9rem; }
+.gpost img { display: block; width: 100%; height: auto; }
 
 .pills { display: flex; gap: .35rem; flex-wrap: wrap; margin-bottom: .9rem; }
 .pill { font-size: .7rem; font-weight: 600; letter-spacing: .05em; color: var(--muted);
