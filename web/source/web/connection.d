@@ -100,6 +100,9 @@ struct SelfInfo
     /// friend's, since the profile tab draws both through one path.
     string imageFileId;
     long imageVersion;
+    /// Last instance VRChat put us in, kept after leaving it, and its world.
+    string lastLocation;
+    string lastWorldName;
 }
 
 /// Snapshot of the link to vrcd-server itself.
@@ -2139,6 +2142,8 @@ private:
             if (const(JSONValue) *v = "imageVersion" in message)
                 if (v.type == JSONType.integer)
                     info.imageVersion = v.integer;
+            info.lastLocation  = jsonString(message, "lastLocation");
+            info.lastWorldName = jsonString(message, "lastWorldName");
 
             synchronized (stateMutex)
                 selfInfo = info;

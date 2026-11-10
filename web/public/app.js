@@ -4544,7 +4544,10 @@ function renderProfile(body, person, opts) {
     // is the reason the tab is open. It comes before the two things below that
     // arrive late, so neither can push the picker down under a thumb already
     // on its way to it.
-    if (opts.editStatus) statusEditor(body, person);
+    if (opts.editStatus) {
+        statusEditor(body, person);
+        lastInstance(body, person);
+    }
 
     // Not on your own profile: nothing there is waiting on the fetch, and a
     // line that appears and then goes is only a shift.
@@ -5102,6 +5105,19 @@ function renderProfileTab(body) {
         pair(db, "Size", sizeText(state.database.size_bytes));
         body.appendChild(db);
     }
+}
+
+/* Where VRChat last put you, kept after leaving it. A self-invite back is how
+   to return to an invite-only instance after the game closes or crashes. */
+function lastInstance(body, self) {
+    if (!self.lastLocation) return;
+    body.appendChild(el("div", "section", "Last instance"));
+    var kv = el("dl", "kv");
+    pair(kv, "World", self.lastWorldName || self.lastLocation);
+    body.appendChild(kv);
+    var actions = el("div", "actions");
+    actions.appendChild(joinButton(self.lastLocation, "REJOIN"));
+    body.appendChild(actions);
 }
 
 /* Thousands separators, since these run to six figures and a wall of digits is

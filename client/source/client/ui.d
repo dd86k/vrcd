@@ -2207,6 +2207,9 @@ private void drawProfileTab(mu_Context* ctx, AppState* state, int scrollDelta)
         break;
     }
 
+    if (view.self)
+        drawRejoin(ctx, state);
+
     if (view.bio.length > 0)
     {
         spacer(ctx);
@@ -2294,6 +2297,34 @@ private void drawProfileTab(mu_Context* ctx, AppState* state, int scrollDelta)
         drawProfileActions(ctx, state, view);
 
     mu_end_panel(ctx);
+}
+
+/// The last instance VRChat put us in, with a self-invite back to it. The
+/// server remembers it past leaving and restarts, the local log only while
+/// the client runs, so the log is the fallback.
+private void drawRejoin(mu_Context* ctx, AppState* state)
+{
+    static immutable int[1] fullCol = [-1];
+    static immutable int[2] labelValCols = [120, -1];
+
+    string location = state.selfLastLocation.length > 0
+        ? state.selfLastLocation : state.currentLocation;
+    if (location.length == 0)
+        return;
+    string world = state.selfLastLocation.length > 0 && state.selfLastWorldName.length > 0
+        ? state.selfLastWorldName : location;
+
+    spacer(ctx);
+    sectionHeader(ctx, "Last instance");
+    mu_layout_row(ctx, 2, labelValCols.ptr, 0);
+    mu_label(ctx, "World");
+    clickableValue(ctx, state, world);
+    mu_layout_row(ctx, 1, fullCol.ptr, 60);
+    if (clickButton(ctx, "Rejoin"))
+    {
+        state.pendingJoins ~= location;
+        setStatusFlash(state, "  Sending invite...");
+    }
 }
 
 /// The header block: face on the left, up to four lines of who this is on

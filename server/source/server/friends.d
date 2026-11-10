@@ -61,6 +61,9 @@ class FriendsTracker
     private string selfUserId;           // also stored in `friends`, filtered from snapshots
     private VRCEvent[] pendingSynthetics; // derived events (e.g. avatar-change)
     private bool pendingSelfChange;       // self snapshot fields moved; broadcast a fresh `self`
+    private string selfLastLocation;     // last instance self was in, kept after leaving it
+    private string selfLastWorldName;    // its world name, when the event carried one
+    private bool pendingLastLocation;    // selfLastLocation moved; caller persists it
 
     this()
     {
@@ -116,6 +119,29 @@ class FriendsTracker
         }
     }
 
+    /// Restore the last instance self was in, as saved by the caller.
+    void setSelfLastLocation(string location)
+    {
+        import std.string : startsWith;
+        if (startsWith(location, "wrld_") == false)
+            return;
+        synchronized (friendsMutex)
+            selfLastLocation = location;
+    }
+
+    /// The last instance self was in, once per move, or null when it has not
+    /// moved since the last call. Caller persists it.
+    string takeLastLocationChange()
+    {
+        synchronized (friendsMutex)
+        {
+            if (pendingLastLocation == false)
+                return null;
+            pendingLastLocation = false;
+            return selfLastLocation;
+        }
+    }
+
     /// Return the logged-in user's id, or empty string if not set.
     string getSelfUserId()
     {
@@ -145,8 +171,22 @@ class FriendsTracker
                 "bioLinks":          JSONValue(f.bioLinks),
                 "imageFileId":       JSONValue(f.imageFileId),
                 "imageVersion":      JSONValue(f.imageVersion),
+                "lastLocation":      JSONValue(selfLastLocation),
+                "lastWorldName":     JSONValue(lastWorldName()),
             ]);
         }
+    }
+
+    /// World name of the last instance self was in, or empty when unknown.
+    /// Caller holds friendsMutex.
+    private string lastWorldName()
+    {
+        if (selfLastWorldName.length > 0 || selfLastLocation.length == 0)
+            return selfLastWorldName;
+        if (worldCache is null)
+            return null;
+        // Cache only. After a restart the event that carried the name is gone.
+        return worldCache.tryGet(WorldCache.extractWorldId(selfLastLocation));
     }
 
     /// Apply a status / statusDescription change to the self entry. Used after
@@ -403,6 +443,8 @@ class FriendsTracker
             // fresh `self` push (e.g. user toggled status from the VRChat menu).
             if (userId.length > 0 && selfUserId.length > 0 && userId == selfUserId)
             {
+                if (event.type == EventType.userLocation)
+                    noteSelfLocation(event.content);
                 if (before != after)
                     pendingSelfChange = true;
                 logDebugging("processEvent: type=%s self-update selfChanged=%s",
@@ -423,6 +465,27 @@ class FriendsTracker
                 event.typeRaw, changes.snapshot, changes.loggable, friends.length);
             return changes;
         }
+    }
+
+    /// Remember a real instance from a self user-location event, so a rejoin
+    /// after the game closes or crashes still knows where to go. Caller holds
+    /// friendsMutex.
+    private void noteSelfLocation(JSONValue c)
+    {
+        import std.string : startsWith;
+
+        string location;
+        if (const(JSONValue)* v = "location" in c)
+            if (v.type == JSONType.string)
+                location = v.str;
+        // "offline", "traveling" and "private" are not somewhere to go back to.
+        if (startsWith(location, "wrld_") == false || location == selfLastLocation)
+            return;
+
+        selfLastLocation = location;
+        selfLastWorldName = extractWorldName(c);
+        pendingSelfChange = true;
+        pendingLastLocation = true;
     }
 
     /// Fingerprint of the per-friend fields clients actually see in
@@ -1541,4 +1604,47 @@ unittest
     EventChange gone = tracker.processEvent(parseNewVrcEvent(friendUpdate("offline", "file_bbb")));
     assert(gone.loggable);
     assert(tracker.takePendingSynthetics().length == 0);
+}
+
+// The last instance self was in survives leaving it, so a rejoin after the
+// game closes still has somewhere to go.
+unittest
+{
+    static VRCEvent userLocation(string location, string worldName)
+    {
+        JSONValue content = JSONValue([
+            "userId":    JSONValue("usr_me"),
+            "location":  JSONValue(location),
+            "worldName": JSONValue(worldName),
+        ]);
+        return parseNewVrcEvent(JSONValue([
+            "type":    JSONValue("user-location"),
+            "content": JSONValue(content.toString()),
+        ]).toString());
+    }
+
+    FriendsTracker tracker = new FriendsTracker();
+    tracker.setSelf("usr_me", "me", null, null, null, null, null, null, UserImage.init);
+    assert(tracker.takeLastLocationChange() is null);
+
+    enum string inst = "wrld_a:123~private(usr_me)~region(eu)";
+    tracker.processEvent(userLocation(inst, "Home"));
+    assert(tracker.takeLastLocationChange() == inst);
+    assert(tracker.takeLastLocationChange() is null);
+    assert(tracker.takePendingSelfChange());
+
+    // Leaving keeps it.
+    tracker.processEvent(userLocation("offline", ""));
+    assert(tracker.takeLastLocationChange() is null);
+    JSONValue self = tracker.buildSelfMessage();
+    assert(self["lastLocation"].str == inst);
+    assert(self["lastWorldName"].str == "Home");
+
+    // Restored after a restart, with no name until a cache has one.
+    FriendsTracker restarted = new FriendsTracker();
+    restarted.setSelf("usr_me", "me", null, null, null, null, null, null, UserImage.init);
+    restarted.setSelfLastLocation(inst);
+    restarted.setSelfLastLocation("offline");
+    assert(restarted.buildSelfMessage()["lastLocation"].str == inst);
+    assert(restarted.takeLastLocationChange() is null);
 }

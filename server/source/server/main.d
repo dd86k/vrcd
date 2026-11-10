@@ -328,6 +328,7 @@ void cmdRun(ref Config config)
         authState.status, authState.statusDescription,
         authState.bio, authState.pronouns, authState.bioLinks,
         authState.picture);
+    tracker.setSelfLastLocation(store.getState(SELF_LAST_LOCATION_KEY));
 
     apiServer.setWorldCache(worldCache);
     apiServer.setInstanceCache(instanceCache);
@@ -552,6 +553,9 @@ void cliVersion()
     
     exit(0);
 }
+
+/// server_state key of the last instance the logged-in user was in.
+private enum string SELF_LAST_LOCATION_KEY = "self_last_location";
 
 /// Maximum number of individual GET /users/{id} calls per re-seed pass.
 /// Bounds the repair work to avoid spamming the VRChat API.
@@ -1008,6 +1012,11 @@ void ingestEvent(VRCEvent event, APIServer apiServer, Database store,
 
     if (tracker.takePendingSelfChange())
         apiServer.broadcastSelf();
+
+    // Saved so a server restart does not forget it.
+    string lastLocation = tracker.takeLastLocationChange();
+    if (lastLocation.length > 0)
+        store.setState(SELF_LAST_LOCATION_KEY, lastLocation);
 }
 
 // As per tradition, keep main() at the end of module

@@ -726,7 +726,8 @@ State snapshot, sent on every change and also returned by `/api/state`:
   "self": {
     "id": "usr_...", "displayName": "...", "status": "active",
     "statusDescription": "...", "bio": "...", "pronouns": "...",
-    "bioLinks": ["https://..."]
+    "bioLinks": ["https://..."],
+    "lastLocation": "wrld_...:12345~private(usr_...)", "lastWorldName": "..."
   },
   "roster": {
     "instances": [{

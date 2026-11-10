@@ -1836,6 +1836,12 @@ private void drainNetworkMessages()
                 if (const(JSONValue)* v = "imageVersion" in msg)
                     if (v.type == JSONType.integer || v.type == JSONType.uinteger)
                         appState.selfImageVersion = v.integer;
+                if (const(JSONValue)* v = "lastLocation" in msg)
+                    if (v.type == JSONType.string)
+                        appState.selfLastLocation = v.str;
+                if (const(JSONValue)* v = "lastWorldName" in msg)
+                    if (v.type == JSONType.string)
+                        appState.selfLastWorldName = v.str;
                 break;
 
             case "set_status_result":

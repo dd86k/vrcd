@@ -53,6 +53,8 @@ string buildStateJSON(ServerLink link)
             "bioLinks":          JSONValue(info.bioLinks),
             "imageFileId":       JSONValue(info.imageFileId),
             "imageVersion":      JSONValue(info.imageVersion),
+            "lastLocation":      JSONValue(info.lastLocation),
+            "lastWorldName":     JSONValue(info.lastWorldName),
         ]);
     }
 

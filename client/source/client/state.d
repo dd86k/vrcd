@@ -522,6 +522,9 @@ struct AppState
     string[] selfBioLinks;
     string selfImageFileId;
     long selfImageVersion;
+    // Last instance VRChat put us in, kept after leaving it, and its world.
+    string selfLastLocation;
+    string selfLastWorldName;
     // UI textbox buffer for the custom status message. Synced from
     // selfStatusDescription whenever the server pushes a new snapshot
     // and the user isn't actively editing.

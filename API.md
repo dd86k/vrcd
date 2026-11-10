@@ -761,6 +761,10 @@ Snapshot of the logged-in user's own status. Sent after auth (immediately follow
 | `bioLinks`          | array  | Profile URLs the user pinned                               |
 | `imageFileId`       | string | Own profile picture file, same rules as a friend entry      |
 | `imageVersion`      | int    | Version of that file                                       |
+| `lastLocation`      | string | Last instance VRChat put you in (full location), kept after leaving it and across restarts. Empty until one is seen |
+| `lastWorldName`     | string | Its world name, empty when unknown                         |
+
+The server takes `lastLocation` from your own `user-location` events. Front-ends offer a self-invite back to it (`join_instance`), which is how to return to an invite-only instance after VRChat closes or crashes.
 
 ### `set_status_result`
 
