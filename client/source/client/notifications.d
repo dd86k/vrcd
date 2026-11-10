@@ -53,6 +53,7 @@ immutable FeedFilterSection[] feedFilterSections = [
         labelIdx("Update"), labelIdx("Location"),
         labelIdx("Profile Change"), labelIdx("Avatar Change"),
         labelIdx("Badge Assigned"), labelIdx("Badge Unassigned"),
+        labelIdx("Credits"),
     ]),
     FeedFilterSection("Friends", [
         labelIdx("Online"), labelIdx("Offline"), labelIdx("Active"),
@@ -75,6 +76,7 @@ immutable FeedFilterSection[] feedFilterSections = [
         labelIdx("Queue Joined"), labelIdx("Queue Position"),
         labelIdx("Queue Ready"), labelIdx("Queue Left"),
         labelIdx("Instance Closed"), labelIdx("Content Refresh"),
+        labelIdx("Image Update"),
     ]),
     FeedFilterSection("In-Game", [
         labelIdx("Player Joining"), labelIdx("Player Joined"),

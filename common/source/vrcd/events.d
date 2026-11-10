@@ -82,6 +82,8 @@ immutable FeedEventType[] feedEventTypes = [
     FeedEventType("Error",             ["error"],                                         true),
     FeedEventType("Promoted",          ["notification-promoted"],                         true),
     FeedEventType("Status Change",     ["status-change"],                                 true),
+    FeedEventType("Image Update",      ["modified-image-update"],                         false),
+    FeedEventType("Credits",           ["economy-update"],                                true),
 ];
 
 /// Display labels, derived from feedEventTypes. Kept as a separate symbol
@@ -246,19 +248,54 @@ void extractEventFields(string eventType, JSONValue msg, out string user, out st
                         detail = v.str;
                 return;
 
+            case "instance-queue-joined":
             case "instance-queue-position":
+                import std.conv : text;
                 if (const(JSONValue)* v = "position" in c)
-                    if (v.str.length > 0)
-                        detail = "Position " ~ v.str;
+                    if (v.type == JSONType.integer)
+                        detail = text("Position ", v.integer);
+                if (detail.length > 0)
+                    if (const(JSONValue)* v = "queueSize" in c)
+                        if (v.type == JSONType.integer)
+                            detail ~= text(" of ", v.integer);
                 return;
 
-            case "instance-queue-joined":
             case "instance-queue-ready":
             case "instance-queue-left":
             case "instance-closed":
-                if (const(JSONValue)* v = "instanceId" in c)
-                    if (v.str.length > 0)
+                if (const(JSONValue)* v = "instanceLocation" in c)
+                    if (v.type == JSONType.string)
+                        detail = shortLocation(v.str);
+                return;
+
+            case "user-badge-assigned":
+                if (const(JSONValue)* badge = "badge" in c)
+                    if (badge.type == JSONType.object)
+                        if (const(JSONValue)* v = "badgeName" in *badge)
+                            if (v.type == JSONType.string)
+                                detail = v.str;
+                return;
+
+            case "user-badge-unassigned":
+                if (const(JSONValue)* v = "badgeId" in c)
+                    if (v.type == JSONType.string)
                         detail = v.str;
+                return;
+
+            case "modified-image-update":
+                if (const(JSONValue)* v = "fileId" in c)
+                    if (v.type == JSONType.string)
+                        detail = v.str;
+                if (const(JSONValue)* v = "needsProcessing" in c)
+                    if (v.type == JSONType.true_)
+                        detail ~= " (processing)";
+                return;
+
+            case "economy-update":
+                import std.conv : text;
+                if (const(JSONValue)* v = "walletBalance" in c)
+                    if (v.type == JSONType.integer)
+                        detail = text(v.integer, " credits");
                 return;
 
             case "avatar-change":
@@ -357,7 +394,24 @@ string prettyNotifType(string notifType)
         case "group.joinRequest":         return "Group Join Request";
         case "group.transfer":            return "Group Transfer";
         case "group.queueReady":          return "Queue Ready";
+        case "group.event.created":       return "Group Event";
+        case "group.event.starting":      return "Group Event Starting";
+        case "group.post":                return "Group Post";
         case "instance.closed":           return "Instance Closed";
+        case "instance.announcement":     return "Instance Announcement";
+        case "event.announcement":        return "Event Announcement";
+        case "badge.earned":              return "Badge Earned";
+        case "avatarreview.success":      return "Avatar Approved";
+        case "avatarreview.failure":      return "Avatar Rejected";
+        case "economy.alert":             return "Economy Alert";
+        case "economy.received.gift":     return "Gift Received";
+        case "vrcplus.gift":              return "VRC+ Gift";
+        case "promo.redeem":              return "Promo Redeemed";
+        case "invite.instance.contentGated": return "Gated Invite";
+        case "moderation.contentrestriction": return "Content Restriction";
+        case "moderation.notice":         return "Moderation Notice";
+        case "moderation.report.closed":  return "Report Closed";
+        case "moderation.warning.group":  return "Group Warning";
         case "vrcd.promoted":             return "Rule";
         default:                          return notifType;
     }
@@ -384,6 +438,46 @@ string shortAvatarId(string s)
     }
 
     return s;
+}
+
+/// World and instance number of a location, without its `~` tags.
+string shortLocation(string location)
+{
+    import std.string : indexOf;
+
+    ptrdiff_t i = location.indexOf('~');
+    return i >= 0 ? location[0 .. i] : location;
+}
+
+unittest
+{
+    string user, detail;
+
+    JSONValue msg = parseJSON(`{"content":"{\"instanceLocation\":` ~
+        `\"wrld_a:86081~group(grp_b)~region(eu)\",\"position\":2,\"queueSize\":2}"}`);
+    extractEventFields("instance-queue-position", msg, user, detail);
+    assert(detail == "Position 2 of 2");
+
+    msg = parseJSON(`{"content":"{\"instanceLocation\":` ~
+        `\"wrld_a:86081~group(grp_b)~region(eu)\"}"}`);
+    extractEventFields("instance-queue-left", msg, user, detail);
+    assert(detail == "wrld_a:86081");
+
+    msg = parseJSON(`{"content":"{\"badge\":{\"badgeId\":\"bdg_a\",` ~
+        `\"badgeName\":\"9 Years\"}}"}`);
+    extractEventFields("user-badge-assigned", msg, user, detail);
+    assert(detail == "9 Years");
+
+    msg = parseJSON(`{"content":"{\"fileId\":\"file_a\",\"pixelSize\":256,` ~
+        `\"versionNumber\":1,\"needsProcessing\":true}"}`);
+    extractEventFields("modified-image-update", msg, user, detail);
+    assert(detail == "file_a (processing)");
+
+    msg = parseJSON(`{"content":"{\"type\":\"instance.announcement\",` ~
+        `\"senderUsername\":\"carol\"}"}`);
+    extractEventFields("notification-v2", msg, user, detail);
+    assert(user == "carol");
+    assert(detail == "Instance Announcement");
 }
 
 unittest

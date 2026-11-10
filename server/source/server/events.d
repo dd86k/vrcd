@@ -50,7 +50,11 @@ enum EventType : string
     instanceClosed        = "instance-closed",
 
     // Content events
-    contentRefresh = "content-refresh",
+    contentRefresh      = "content-refresh",
+    modifiedImageUpdate = "modified-image-update",
+
+    // Economy events
+    economyUpdate = "economy-update",
 
     // Synthesized (not from VRChat; derived by the server from other events)
     avatarChange    = "avatar-change",
