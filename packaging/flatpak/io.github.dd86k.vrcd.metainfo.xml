@@ -47,6 +47,29 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.5.0" date="2026-11-10">
+      <description>
+        <p>Notification rules and groups.</p>
+        <ul>
+          <li>Notification rules: get notified when a friend comes online, unfriends you, and other events VRChat does not notify about.</li>
+          <li>Groups: see your groups, represent one, read announcements, join or leave.</li>
+          <li>Send or cancel a friend request from a profile.</li>
+          <li>Rejoin your last instance from your own profile.</li>
+          <li>The inbox counts unread notifications and can be sorted newest first.</li>
+          <li>A new theme, emoji in text, and an optional system tray icon.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.4.0" date="2026-10-21">
+      <description>
+        <p>Boops and high-DPI support.</p>
+        <ul>
+          <li>Boops can be answered with a boop, optionally with an emoji.</li>
+          <li>Supports high-DPI displays.</li>
+          <li>A missing SDL3 is reported instead of failing silently.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.3.0" date="2026-09-18">
       <description>
         <p>The client moves from SDL2 to SDL3.</p>

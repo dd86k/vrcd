@@ -80,8 +80,8 @@ modules:
       # separately and there is no flag to suppress that. Rewrite them as path
       # deps pointing at the pre-extracted archives, then drop the git entries
       # from selections.json so there is no version conflict.
-      - sed -i 's|dependency "ddlogger" repository=.*|dependency "ddlogger" path="../.dub/packages/ddlogger/4397d8e57a88bd6b3a3e5e4c846ba97ac3bfd364/ddlogger"|' client/dub.sdl
-      - sed -i 's|dependency "ddui" repository=.*|dependency "ddui" path="../.dub/packages/ddui/b89172370942af639af8625a3f5a3978166f47a4/ddui"|' client/dub.sdl
+      - sed -i 's|dependency "ddlogger" repository=.*|dependency "ddlogger" path="../.dub/packages/ddlogger/dcab663a80d496c1d3c7fee4c406ed7f763e5fdb/ddlogger"|' client/dub.sdl
+      - sed -i 's|dependency "ddui" repository=.*|dependency "ddui" path="../.dub/packages/ddui/c9bff8942f85fbb282e5b9e3a3f74db213031ccf/ddui"|' client/dub.sdl
       - |
         cat > client/dub.selections.json <<'EOF'
         {
@@ -109,7 +109,7 @@ modules:
       # Building a tag is more predictable than a commit
       - type: git
         url: https://github.com/dd86k/vrcd.git
-        tag: v0.3.0
+        tag: v0.5.0
 
       ## dub registry packages
       # Each archive is extracted (strip-components:1 drops the top-level
@@ -138,15 +138,15 @@ modules:
       ## dub git packages
       # Pinned to the exact commits in client/dub.selections.json.
       - type: archive
-        url: https://github.com/dd86k/ddlogger/archive/4397d8e57a88bd6b3a3e5e4c846ba97ac3bfd364.tar.gz
-        sha256: a0e6cb463102d30080b789fecc851584ef4485a803237e8da72458615c6212df
-        dest: .dub/packages/ddlogger/4397d8e57a88bd6b3a3e5e4c846ba97ac3bfd364/ddlogger
+        url: https://github.com/dd86k/ddlogger/archive/dcab663a80d496c1d3c7fee4c406ed7f763e5fdb.tar.gz
+        sha256: 11093f551952db947a317a4bed2bb0c23329d2b421ad603857d191b01fc76b23
+        dest: .dub/packages/ddlogger/dcab663a80d496c1d3c7fee4c406ed7f763e5fdb/ddlogger
         strip-components: 1
 
       - type: archive
-        url: https://github.com/dd86k/ddui/archive/b89172370942af639af8625a3f5a3978166f47a4.tar.gz
-        sha256: 3da336395cbe4896fc9af79cb351dbd88a46b32da29dbf172d68418c156fe39d
-        dest: .dub/packages/ddui/b89172370942af639af8625a3f5a3978166f47a4/ddui
+        url: https://github.com/dd86k/ddui/archive/c9bff8942f85fbb282e5b9e3a3f74db213031ccf.tar.gz
+        sha256: 134255229f328f7bc15a863d600c53895c25c065c6f293eecd6d737e6f65eec7
+        dest: .dub/packages/ddui/c9bff8942f85fbb282e5b9e3a3f74db213031ccf/ddui
         strip-components: 1
 
   ## vrcd server, for "Use local server": the client looks beside itself
@@ -162,9 +162,9 @@ modules:
 
       # Same git-to-path rewrite as the client, ddcurl's own included: every
       # reference to ddlogger has to land on the one copy or dub sees two.
-      - sed -i 's|dependency "ddlogger" repository=.*|dependency "ddlogger" path="../.dub/packages/ddlogger/4397d8e57a88bd6b3a3e5e4c846ba97ac3bfd364/ddlogger"|' server/dub.sdl
+      - sed -i 's|dependency "ddlogger" repository=.*|dependency "ddlogger" path="../.dub/packages/ddlogger/dcab663a80d496c1d3c7fee4c406ed7f763e5fdb/ddlogger"|' server/dub.sdl
       - sed -i 's|dependency "ddcurl" repository=.*|dependency "ddcurl" path="../.dub/packages/ddcurl/f9598ff6c8f146966143bedcdd0c205fd477da99/ddcurl"|' server/dub.sdl
-      - sed -i 's|dependency "ddlogger" repository=.*|dependency "ddlogger" path="../../../ddlogger/4397d8e57a88bd6b3a3e5e4c846ba97ac3bfd364/ddlogger"|' .dub/packages/ddcurl/f9598ff6c8f146966143bedcdd0c205fd477da99/ddcurl/dub.sdl
+      - sed -i 's|dependency "ddlogger" repository=.*|dependency "ddlogger" path="../../../ddlogger/dcab663a80d496c1d3c7fee4c406ed7f763e5fdb/ddlogger"|' .dub/packages/ddcurl/f9598ff6c8f146966143bedcdd0c205fd477da99/ddcurl/dub.sdl
       - sed -i 's|dependency "ddloader" repository=.*|dependency "ddloader" path="../../../ddloader/c3eb54d31a17e63a7722f8449033ce13764b7636/ddloader"|' .dub/packages/ddcurl/f9598ff6c8f146966143bedcdd0c205fd477da99/ddcurl/dub.sdl
       # Kept rather than emptied: the server string-imports it for --version.
       - |
@@ -186,7 +186,7 @@ modules:
     sources:
       - type: git
         url: https://github.com/dd86k/vrcd.git
-        tag: v0.3.0
+        tag: v0.5.0
 
       - type: archive
         url: https://codeload.github.com/adamdruppe/arsd/tar.gz/refs/tags/v12.1.2
@@ -197,9 +197,9 @@ modules:
 
       # Pinned to the exact commits in server/dub.selections.json.
       - type: archive
-        url: https://github.com/dd86k/ddlogger/archive/4397d8e57a88bd6b3a3e5e4c846ba97ac3bfd364.tar.gz
-        sha256: a0e6cb463102d30080b789fecc851584ef4485a803237e8da72458615c6212df
-        dest: .dub/packages/ddlogger/4397d8e57a88bd6b3a3e5e4c846ba97ac3bfd364/ddlogger
+        url: https://github.com/dd86k/ddlogger/archive/dcab663a80d496c1d3c7fee4c406ed7f763e5fdb.tar.gz
+        sha256: 11093f551952db947a317a4bed2bb0c23329d2b421ad603857d191b01fc76b23
+        dest: .dub/packages/ddlogger/dcab663a80d496c1d3c7fee4c406ed7f763e5fdb/ddlogger
         strip-components: 1
 
       - type: archive

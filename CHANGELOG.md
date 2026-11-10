@@ -8,7 +8,10 @@ Rules:
 - Better to keep entries closest to the actual intent: "Server supports standard I/O"
   is clearer than "Client can start server" (37b843ed1d2d4bca6011a69dcb5e64fa581cf235).
 
-## Unreleased
+## v0.5.0
+
+User notification promotion rules, improved yt-dlp toggle, new theme, better
+notification layouts, and world rejoin option in PROFILE.
 
 ### Client
 
@@ -39,6 +42,10 @@ Rules:
 - Inbox: the tab badge counts unread notifications, cleared on viewing.
 - Inbox: newest or oldest first, remembered.
 - Send or cancel a friend request from a stranger's profile.
+- Rejoin your last instance from your own profile, even after VRChat closed.
+- Feed: credit and image update events have their own filters, and queue,
+  badge and instance closure events show their details.
+- Adds `--mock`, `--log-replay` and `--screenshot` for testing without VRChat.
 
 ### Server
 
@@ -52,6 +59,8 @@ Rules:
 - Serves a group's current announcement.
 - Notifications made by rules survive a restart.
 - Sends and cancels friend requests.
+- Remembers your last instance across restarts.
+- Adds a `--mock` option that serves a scenario file without VRChat.
 
 ### Web
 
@@ -60,6 +69,7 @@ Rules:
 - Groups (TOOLS > GROUPS), same as the client.
 - Group announcements can be read in full, same as the client.
 - ADD FRIEND and CANCEL REQUEST on a stranger's pane.
+- Rejoin your last instance from the PROFILE tab.
 
 ### Packaging
 
@@ -78,6 +88,7 @@ Rules:
   `groups`).
 - Protocol version 19: `get_group_announcement`.
 - Protocol version 20: `friend_request`, `friend_request_result`.
+- `self` carries `lastLocation` and `lastWorldName`.
 
 ## v0.4.1
 
