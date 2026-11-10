@@ -28,21 +28,6 @@ Feel free to join the official [VRCD VRChat group](https://vrc.group/VRCD.7796) 
 Related projects:
 - [vrcd-server-container](https://github.com/ArcaneDisgea/vrcd-server-container) by ArcaneDisgea.
 
-## Roadmap
-
-May change at any time.
-
-0.4: Released!
-- [x] Reply to boops
-- [x] client: Notification badge
-
-future:
-- [ ] Group management
-- [ ] Submit to Flathub
-- [ ] Handle `instance.announcement`
-- [ ] Handle `modified-image-update` (inventory item modified)
-- [ ] Notify filter system
-
 ## Client Screenshots
 
 Taken from the mock scenario (see [Mocking and Screenshots](#mocking-and-screenshots)).
@@ -281,6 +266,7 @@ VRChat's launch pipe is in-process on Windows.
 I'm unsure how I want to handle contributions at this moment, sorry.
 
 However, feel free to submit bugs in Issues and feature suggestions in Discussions, thanks.
+It is apprciated.
 
 # Disclaimer
 
