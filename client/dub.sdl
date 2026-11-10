@@ -12,7 +12,7 @@ dependency "ddui" repository="git+https://github.com/dd86k/ddui.git" version="c9
 # Needed when adding configurations
 mainSourceFile "source/client/main.d"
 
-# ".." for VERSION
+# "..": VERSION, and pipehelper/vrcd-pipehelper.exe when built (embedded)
 stringImportPaths ".."
 
 # Minimum SDL_ttf and SDL_image versions the bindings expose. SDL itself needs

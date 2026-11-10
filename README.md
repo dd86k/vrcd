@@ -85,8 +85,9 @@ To make it work, you need a Windows build of it.
   `pipehelper/vrcd-pipehelper.exe` with LDC and lld-link (no Windows SDK needed).
 - On Windows, `dub build :pipehelper` does the same.
 
-Then, place `vrcd-pipehelper.exe` next to the `vrcd_client` executable or in
-`~/.config/vrcd`.
+Then build the client: it embeds `pipehelper/vrcd-pipehelper.exe` when the
+file exists, and writes it to `~/.config/vrcd` when first needed. A copy placed
+next to the `vrcd_client` executable takes precedence.
 
 No Steam launch options are needed: the client runs the helper with the Proton
 build VRChat itself is running under, against the game's prefix, which attaches

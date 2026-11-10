@@ -37,11 +37,11 @@ instance instead.
 On Windows this works out of the box. On Linux the pipe lives in the game's
 wineserver, which runs inside a pressure-vessel container, so the write has
 to come from a Wine process attached to that same wineserver. Only one extra
-piece is needed for that: place a Windows build of `vrcd-pipehelper.exe` (the
-`pipehelper` subpackage, cross-built from Linux with `pipehelper/build.sh`) next
-to the client binary, or in `~/.config/vrcd/`.
-The AppImage bundles the helper and installs it to `~/.config/vrcd/` on
-launch.
+piece is needed for that: a Windows build of `vrcd-pipehelper.exe` (the
+`pipehelper` subpackage, cross-built from Linux with `pipehelper/build.sh`).
+The client embeds it when built after it, and writes it to `~/.config/vrcd/`
+before running it, since Wine needs a file. A copy next to the client binary
+takes precedence. The AppImage and .deb packages embed it.
 
 No Steam launch options are involved. A wineserver's socket directory
 (`/tmp/.wine-<uid>/server-<dev>-<inode>`) is shared with the host, so Wine

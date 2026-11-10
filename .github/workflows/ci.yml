@@ -197,15 +197,14 @@ jobs:
           sudo mv linuxdeploy-x86_64.AppImage appimagetool-x86_64.AppImage /usr/local/bin/
 
       # The Windows build of the pipe helper, for "Open in VRChat" on Linux.
-      # Cross-built here so the AppImage bundles it without a Windows job.
+      # Cross-built here, before the packages, so their clients embed it.
       - name: Build pipehelper
         run: ./pipehelper/build.sh
 
       # Named for the platform it runs on, not the one that needs it: the file
       # is a Windows executable, and a Linux client is what runs it (inside the
-      # game's Proton prefix). Downloading it on its own is for a .deb install,
-      # where it goes next to vrcd_client or in ~/.config/vrcd. The AppImage
-      # carries its own copy.
+      # game's Proton prefix). Downloading it on its own is for a client built
+      # without it, where it goes next to vrcd_client.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: vrcd-pipehelper-windows-x86_64

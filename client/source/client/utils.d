@@ -189,6 +189,52 @@ private __gshared MonoTime ipcJoinStart;
 /// startup against the game's wineserver).
 private enum ipcJoinTimeout = dur!"seconds"(15);
 
+/// Windows build of the pipe helper, empty when pipehelper/build.sh had not
+/// run before the client was built.
+static if (__traits(compiles, import("pipehelper/vrcd-pipehelper.exe")))
+    private immutable(ubyte)[] embeddedHelper =
+        cast(immutable(ubyte)[]) import("pipehelper/vrcd-pipehelper.exe");
+else
+    private immutable(ubyte)[] embeddedHelper;
+
+/// Path of the pipe helper to run, or null when there is none. One next to
+/// the client wins over the embedded one, which is written to the config dir
+/// first since Wine runs files, not memory.
+private string findPipeHelper()
+{
+    import std.file : exists, mkdirRecurse, read, rename, thisExePath, write;
+    import std.path : buildPath, dirName;
+
+    import client.directories : vrcdConfigPath;
+
+    string helper = buildPath(dirName(thisExePath()), "vrcd-pipehelper.exe");
+    if (exists(helper))
+        return helper;
+
+    helper = vrcdConfigPath("vrcd-pipehelper.exe");
+    if (embeddedHelper.length)
+    {
+        try
+        {
+            if (exists(helper) == false ||
+                cast(const(ubyte)[]) read(helper) != embeddedHelper)
+            {
+                // Renamed into place so a helper Wine is still running is
+                // never seen half written.
+                string tmp = helper ~ ".tmp";
+                mkdirRecurse(dirName(helper));
+                write(tmp, embeddedHelper);
+                rename(tmp, helper);
+            }
+        }
+        catch (Exception ex)
+        {
+            logWarn("IPC join: writing %s: %s", helper, ex.msg);
+        }
+    }
+    return exists(helper) ? helper : null;
+}
+
 /// A running VRChat process, with what is needed to attach a second Wine
 /// process to the wineserver it lives in.
 private struct ProtonProcess
@@ -342,12 +388,8 @@ bool isVRChatRunning()
 /// of /proc. No Steam launch options are involved.
 IPCJoinStart startVRChatIPCJoin(string location)
 {
-    import std.file : exists, thisExePath;
-    import std.path : buildPath, dirName;
     import std.process : spawnProcess;
     import std.stdio : File;
-
-    import client.directories : vrcdConfigPath;
 
     if (ipcJoinPid)
         return IPCJoinStart.busy;
@@ -359,14 +401,10 @@ IPCJoinStart startVRChatIPCJoin(string location)
         return IPCJoinStart.unavailable;
     }
 
-    // The helper is a Windows build dropped next to the client binary, or
-    // in the config dir for read-only installs (AppImage).
-    string helper = buildPath(dirName(thisExePath()), "vrcd-pipehelper.exe");
-    if (exists(helper) == false)
-        helper = vrcdConfigPath("vrcd-pipehelper.exe");
-    if (exists(helper) == false)
+    string helper = findPipeHelper();
+    if (helper is null)
     {
-        logWarn("IPC join: vrcd-pipehelper.exe not found next to client or in config dir");
+        logWarn("IPC join: vrcd-pipehelper.exe not embedded, nor next to client or in config dir");
         return IPCJoinStart.unavailable;
     }
 

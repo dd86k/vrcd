@@ -21,10 +21,6 @@ OUTPUT="${SCRIPT_DIR}/vrcd-client-${VERSION}-${ARCH}.AppImage"
 # the one the client sets as SDL_HINT_APP_ID.
 APP_ID="io.github.dd86k.vrcd"
 META_DIR="${SCRIPT_DIR}/packaging/flatpak"
-# Windows build of the :pipehelper subpackage ("Open in VRChat" IPC on
-# Linux). Built by pipehelper/build.sh, bundled when present.
-PIPEHELPER_EXE="${PIPEHELPER_EXE:-${SCRIPT_DIR}/pipehelper/vrcd-pipehelper.exe}"
-
 # CLI flag for compiler; env var DC is also respected natively by dub
 COMPILER=""
 while [[ $# -gt 0 ]]; do
@@ -74,6 +70,13 @@ fi
 #
 # Needs the SDL3 development libraries on the build host:
 #   apt install libsdl3-dev libsdl3-ttf-dev libsdl3-image-dev
+
+# The client embeds the Windows build of :pipehelper ("Open in VRChat" on
+# Linux) when pipehelper/build.sh has run first.
+if [[ ! -f "${SCRIPT_DIR}/pipehelper/vrcd-pipehelper.exe" ]]; then
+    echo "warning: pipehelper/vrcd-pipehelper.exe not found, run pipehelper/build.sh," >&2
+    echo "         \"Open in VRChat\" IPC will fall back to self-invite" >&2
+fi
 dub build :client -c static --build=release "${DUB_COMPILER_ARG[@]}"
 
 # The server rides along for "Use local server", which looks beside the client
@@ -88,18 +91,6 @@ mkdir -p "${APPDIR}/usr/bin"
 
 cp "${BINARY}" "${APPDIR}/usr/bin/vrcd_client"
 cp "${SERVER_BINARY}" "${APPDIR}/usr/bin/vrcd_server"
-
-# Bundle the pipe helper away from usr/bin, and let AppRun install it to
-# ~/.config/vrcd/ where the client's fallback lookup finds it: the AppImage
-# mount is a fresh directory under /tmp on every run, so a copy in the mount
-# is not something anything else can be pointed at.
-if [[ -f "${PIPEHELPER_EXE}" ]]; then
-    mkdir -p "${APPDIR}/usr/share/vrcd"
-    cp "${PIPEHELPER_EXE}" "${APPDIR}/usr/share/vrcd/vrcd-pipehelper.exe"
-else
-    echo "warning: ${PIPEHELPER_EXE} not found (set PIPEHELPER_EXE=...)," >&2
-    echo "         \"Open in VRChat\" IPC will fall back to self-invite" >&2
-fi
 
 # appimagetool looks for <desktop file name>.appdata.xml only.
 mkdir -p "${APPDIR}/usr/share/metainfo"
@@ -137,14 +128,6 @@ rm -f "${APPDIR}/AppRun"
 cat > "${APPDIR}/AppRun" <<'EOF'
 #!/bin/bash
 HERE="$(dirname "$(readlink -f "${0}")")"
-# Install/refresh the "Open in VRChat" pipe helper at a stable path (the
-# AppImage mount itself is a new /tmp directory on every run).
-HELPER="${HERE}/usr/share/vrcd/vrcd-pipehelper.exe"
-# Matches the client's vrcdConfigPath, which hardcodes ~/.config.
-CONFDIR="${HOME}/.config/vrcd"
-if [[ -f "${HELPER}" ]] && ! cmp -s "${HELPER}" "${CONFDIR}/vrcd-pipehelper.exe"; then
-    mkdir -p "${CONFDIR}" && cp "${HELPER}" "${CONFDIR}/vrcd-pipehelper.exe" || true
-fi
 exec "${HERE}/usr/bin/vrcd_client" "$@"
 EOF
 chmod +x "${APPDIR}/AppRun"
