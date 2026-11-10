@@ -25,7 +25,7 @@ import client.imagecache : imageKey, getIconId;
 import client.renderer : window_width, window_height;
 import client.connection : PROTOCOL_BOOP, PROTOCOL_MODERATION, PROTOCOL_PROFILES,
     PROTOCOL_PROMOTIONS, PROTOCOL_STATUS_RULES, PROTOCOL_GROUPS,
-    PROTOCOL_ANNOUNCEMENTS;
+    PROTOCOL_ANNOUNCEMENTS, PROTOCOL_FRIEND_REQUESTS;
 import client.gui : wasClick, requestRepaint;
 import client.state;
 import client.stream : tlsAvailable;
@@ -2415,7 +2415,8 @@ private void drawFace(mu_Context* ctx, AppState* state, string fileId,
     mu_draw_control_text(ctx, name[0 .. n], r, MU_COLOR_TEXT, MU_OPT_ALIGNCENTER);
 }
 
-/// Mute, block and unfriend, plus the one way to reach somebody in-game.
+/// Mute, block, unfriend and friend requests, plus the one way to reach
+/// somebody in-game.
 ///
 /// The same buttons the TOOLS friend list carries, and armed the same way:
 /// mute is one tap either way, block and unfriend arm first with Cancel where
@@ -2515,6 +2516,33 @@ private void drawProfileActions(mu_Context* ctx, AppState* state, ref ProfileVie
             state.pendingModerationActions ~=
                 ModerationAction(userId, displayName, "unfriend");
             setStatusFlash(state, "  Unfriending...");
+        }
+    }
+
+    // A stranger: only the fetched profile says whether a request is already
+    // out. An incoming one is answered from the inbox.
+    if (view.hasSnapshot == false && view.state == ProfileState.ready &&
+        state.serverProtocol >= PROTOCOL_FRIEND_REQUESTS)
+    {
+        if (view.profile.friendRequestStatus == "outgoing")
+        {
+            mu_layout_row(ctx, 1, fullCol.ptr, 60);
+            if (clickButton(ctx, "Cancel Friend Request") &&
+                state.moderationActionInFlight == false)
+            {
+                state.pendingModerationActions ~=
+                    ModerationAction(userId, displayName, "cancel_friend_request");
+                setStatusFlash(state, "  Cancelling friend request...");
+            }
+        }
+        // Armed like block: the other side sees it.
+        else if (view.profile.friendRequestStatus.length == 0 &&
+            confirmButton(ctx, state, "friend", userId, "Add Friend", "Confirm Add Friend") &&
+            state.moderationActionInFlight == false)
+        {
+            state.pendingModerationActions ~=
+                ModerationAction(userId, displayName, "friend_request");
+            setStatusFlash(state, "  Sending friend request...");
         }
     }
 

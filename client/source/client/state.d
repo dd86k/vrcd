@@ -142,7 +142,8 @@ struct ModerationAction
 {
     string userId;
     string displayName; // for status flash wording
-    string action;      // "mute", "unmute", "block", "unblock", "unfriend"
+    string action;      // "mute", "unmute", "block", "unblock", "unfriend",
+                        // "friend_request", "cancel_friend_request"
 }
 
 /// Armed state for two-tap destructive buttons. kind+id identify the

@@ -1382,6 +1382,10 @@ private void eventLoop(mu_Context* uictx)
 
                     if (act.action == "unfriend")
                         conn.sendUnfriend(act.userId);
+                    else if (act.action == "friend_request" ||
+                        act.action == "cancel_friend_request")
+                        conn.sendFriendRequest(act.userId,
+                            act.action == "cancel_friend_request");
                     else
                         conn.sendModerateUser(act.userId, act.action);
                     appState.moderationActionInFlight = true;
@@ -1870,7 +1874,7 @@ private void drainNetworkMessages()
                 applyPromotionsMessage(msg);
                 break;
 
-            case "moderate_result", "unfriend_result":
+            case "moderate_result", "unfriend_result", "friend_request_result":
                 appState.moderationActionInFlight = false;
                 bool modOk;
                 if (const(JSONValue) *jsuccess = "success" in msg)
@@ -1879,6 +1883,16 @@ private void drainNetworkMessages()
                 if (modAction is null)
                     if (const(JSONValue)* v = "action" in msg)
                         modAction = v.str;
+                if (msgType == "friend_request_result")
+                {
+                    modAction = modAction == "cancel"
+                        ? "cancel_friend_request" : "friend_request";
+                    // The page draws its button from `friendRequestStatus`,
+                    // which vrcd-server just dropped too.
+                    if (const(JSONValue)* v = "user_id" in msg)
+                        if (v.type == JSONType.string)
+                            appState.profiles.forget(v.str);
+                }
                 string modUser;
                 if (const(JSONValue)* v = "display_name" in msg)
                     modUser = v.str;
@@ -2892,6 +2906,8 @@ private string moderationDoneLabel(string action)
         case "block":    return "Blocked";
         case "unblock":  return "Unblocked";
         case "unfriend": return "Unfriended";
+        case "friend_request":        return "Friend request sent";
+        case "cancel_friend_request": return "Friend request cancelled";
         default:         return "Moderation done";
     }
 }
@@ -2906,6 +2922,8 @@ private string moderationVerbLabel(string action)
         case "block":    return "Block";
         case "unblock":  return "Unblock";
         case "unfriend": return "Unfriend";
+        case "friend_request":        return "Friend request";
+        case "cancel_friend_request": return "Cancel friend request";
         default:         return "Moderation";
     }
 }

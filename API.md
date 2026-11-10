@@ -64,6 +64,7 @@ Protocol versions:
 - `17` = `status-change` synthetic, promotion rules take `statuses`
 - `18` = groups (`get_groups`, `get_group`, `group_action`, `groups`)
 - `19` = group announcements (`get_group_announcement`)
+- `20` = friend requests (`friend_request`, `friend_request_result`)
 
 **Failure:**
 ```json
@@ -208,6 +209,16 @@ Remove a friend. The server calls `DELETE auth/user/friends/{userId}`, replies w
 |-----------|--------|-----------------------------|
 | `type`    | string | `"unfriend"`                |
 | `user_id` | string | Target user ID (`usr_...`)  |
+
+### `friend_request`
+
+Send or cancel a friend request. The server calls `POST user/{userId}/friendRequest` (`send`) or `DELETE user/{userId}/friendRequest` (`cancel`, outgoing requests only) and replies with `friend_request_result`. Sending to somebody who already sent you one accepts theirs, and the roster moves on the `friend-add` event that follows. Either way the cached profile is dropped, since its `friendRequestStatus` is now stale.
+
+| Field     | Type   | Description                  |
+|-----------|--------|------------------------------|
+| `type`    | string | `"friend_request"`           |
+| `user_id` | string | Target user ID (`usr_...`)   |
+| `action`  | string | `"send"` or `"cancel"`       |
 
 ### `get_groups`
 
@@ -862,6 +873,10 @@ Reply to a `moderate_user` request, sent only to the requesting client. On succe
 ### `unfriend_result`
 
 Reply to an `unfriend` request, sent only to the requesting client. On success, a `friends` broadcast for all clients follows. Same fields as `moderate_result`, without `action`.
+
+### `friend_request_result`
+
+Reply to a `friend_request`, sent only to the requesting client. Same fields as `moderate_result`, with `action` echoed. On failure `error` carries VRChat's own message when it gave one ("This user has already been sent a friend request").
 
 ### `notifications`
 

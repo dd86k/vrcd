@@ -1128,7 +1128,8 @@ private bool moderationAction(ubyte[] payload, out string action, out string use
     case "refresh":
         return true;
 
-    case "mute", "unmute", "block", "unblock", "unfriend":
+    case "mute", "unmute", "block", "unblock", "unfriend",
+        "friend_request", "cancel_friend_request":
         break;
 
     default:

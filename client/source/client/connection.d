@@ -65,6 +65,9 @@ enum long PROTOCOL_GROUPS = 18;
 /// Minimum server protocol version for `get_group_announcement`.
 enum long PROTOCOL_ANNOUNCEMENTS = 19;
 
+/// Minimum server protocol version for `friend_request`.
+enum long PROTOCOL_FRIEND_REQUESTS = 20;
+
 /// How many events to ask a catch-up for.
 ///
 /// The feed keeps `FEED_CAPACITY` entries and back-fills the rest a page at a
@@ -432,6 +435,18 @@ class ServerConnection
         sendMessage(JSONValue([
             "type": JSONValue("unfriend"),
             "user_id": JSONValue(userId),
+        ]));
+    }
+
+    /// Send a friend request, or cancel an outgoing one when `cancel` is set.
+    /// Server replies with `friend_request_result`.
+    void sendFriendRequest(string userId, bool cancel)
+    {
+        logDebugging("sendFriendRequest: user=%s cancel=%s", userId, cancel);
+        sendMessage(JSONValue([
+            "type": JSONValue("friend_request"),
+            "user_id": JSONValue(userId),
+            "action": JSONValue(cancel ? "cancel" : "send"),
         ]));
     }
 

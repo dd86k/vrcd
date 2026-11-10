@@ -76,6 +76,9 @@ private enum long PROTOCOL_GROUPS = 18;
 /// Protocol version that added `get_group_announcement`.
 private enum long PROTOCOL_ANNOUNCEMENTS = 19;
 
+/// Protocol version that added `friend_request`.
+private enum long PROTOCOL_FRIEND_REQUESTS = 20;
+
 /// Byte budget for proxied images. Thumbnails run tens of kilobytes each, so
 /// this holds a few hundred of them; past that the oldest are dropped and
 /// re-fetched if they are looked at again.
@@ -351,12 +354,14 @@ struct ModerationSnapshot
     string error;
 }
 
-/// Outcome of the most recent moderation: a mute, a block, or an unfriend.
+/// Outcome of the most recent moderation: a mute, a block, an unfriend, or a
+/// friend request.
 struct ModerationActionResult
 {
     /// False until one has been taken this session.
     bool attempted;
-    /// "mute", "unmute", "block", "unblock" or "unfriend".
+    /// "mute", "unmute", "block", "unblock", "unfriend", "friend_request" or
+    /// "cancel_friend_request".
     string action;
     string userId;
     /// Who that was, for the page's toast. vrcd-server fills it in from the
@@ -671,10 +676,11 @@ class ServerLink
         failModerations("Not connected to vrcd-server");
     }
 
-    /// Mute, unmute, block, unblock or unfriend someone.
+    /// Mute, unmute, block, unblock, unfriend or friend request someone.
     ///
     /// Params:
-    ///   action = "mute", "unmute", "block", "unblock" or "unfriend".
+    ///   action = "mute", "unmute", "block", "unblock", "unfriend",
+    ///            "friend_request" or "cancel_friend_request".
     ///   userId = Who it is aimed at. Not necessarily a friend: a moderation
     ///            outlives the friendship it started in.
     void requestModeration(string action, string userId)
@@ -698,11 +704,27 @@ class ServerLink
             return;
         }
 
-        // Unfriending is not a player moderation and has its own call, but it
-        // reaches the page through the same result slot: both are "something
-        // was done to a person", and one at a time is all the page offers.
+        bool friendRequest = action == "friend_request" ||
+            action == "cancel_friend_request";
+        if (friendRequest && current.serverVersion < PROTOCOL_FRIEND_REQUESTS)
+        {
+            failModeration(action, userId, "This vrcd-server is too old to " ~
+                "send friend requests (needs protocol v20)");
+            return;
+        }
+
+        // Unfriending and friend requests are not player moderations and have
+        // their own calls, but they reach the page through the same result
+        // slot: all are "something was done to a person", and one at a time is
+        // all the page offers.
         JSONValue message;
-        if (action == "unfriend")
+        if (friendRequest)
+            message = JSONValue([
+                "type":    JSONValue("friend_request"),
+                "action":  JSONValue(action == "friend_request" ? "send" : "cancel"),
+                "user_id": JSONValue(userId),
+            ]);
+        else if (action == "unfriend")
             message = JSONValue([
                 "type":    JSONValue("unfriend"),
                 "user_id": JSONValue(userId),
@@ -2245,6 +2267,15 @@ private:
 
         case "unfriend_result":
             applyModerationResult(message, "unfriend");
+            break;
+
+        case "friend_request_result":
+            // vrcd-server dropped its copy of the profile, whose
+            // `friendRequestStatus` is what the page draws the button from.
+            profiles.forget(jsonString(message, "user_id"));
+            applyModerationResult(message,
+                jsonString(message, "action") == "cancel"
+                    ? "cancel_friend_request" : "friend_request");
             break;
 
         case "inventory":

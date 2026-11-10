@@ -60,7 +60,7 @@ import vrcd.vrcx;
 /// 17 = `status-change` synthetic, promotion rules take `statuses`,
 /// 18 = groups (`get_groups`, `get_group`, `group_action`, `groups`),
 /// 19 = group announcements (`get_group_announcement`).
-private enum int PROTOCOL_VERSION = 19;
+private enum int PROTOCOL_VERSION = 20;
 
 /// `server_state` key holding the promotion rules as a JSON array.
 private enum string PROMOTION_RULES_KEY = "promotion_rules";
@@ -1732,6 +1732,14 @@ private class ClientHandler
                         return;
                     }
                     handleUnfriend(msg);
+                    break;
+                case "friend_request":
+                    if (authenticated == false)
+                    {
+                        sendError("Not authenticated");
+                        return;
+                    }
+                    handleFriendRequest(msg);
                     break;
                 case "get_groups":
                     if (authenticated == false)
@@ -3541,6 +3549,92 @@ private class ClientHandler
             {
                 sendResult(false, displayName, "HTTP " ~ resp.code.to!string);
             }
+        }
+        catch (Exception e)
+        {
+            sendResult(false, displayName, e.msg);
+        }
+    }
+
+    /// Send (`send`) or cancel (`cancel`) a friend request. Replies with
+    /// `friend_request_result`. Sending to somebody who already asked you
+    /// accepts theirs, and the `friend-add` event that follows moves the roster.
+    void handleFriendRequest(JSONValue msg)
+    {
+        string userId, action;
+        if (const(JSONValue)* v = "user_id" in msg)
+            if (v.type == JSONType.string)
+                userId = v.str;
+        if (const(JSONValue)* v = "action" in msg)
+            if (v.type == JSONType.string)
+                action = v.str;
+
+        if (isUserId(userId) == false)
+        {
+            sendError("Bad user_id");
+            return;
+        }
+        if (action != "send" && action != "cancel")
+        {
+            sendError("Unknown friend_request action: " ~ action);
+            return;
+        }
+
+        void sendResult(bool success, string displayName, string error)
+        {
+            JSONValue result = JSONValue([
+                "type": JSONValue("friend_request_result"),
+                "success": JSONValue(success),
+                "action": JSONValue(action),
+                "user_id": JSONValue(userId),
+                "display_name": JSONValue(displayName),
+            ]);
+            if (error.length > 0)
+                result["error"] = JSONValue(error);
+            sendLine(result.toString() ~ "\n");
+        }
+
+        string displayName = server.friendsTracker.getDisplayName(userId);
+        if (displayName.length == 0)
+            displayName = server.moderationsTracker.getDisplayName(userId);
+
+        if (server.httpClient is null || server.apiMutex is null)
+        {
+            sendResult(false, displayName, server.noClientError());
+            return;
+        }
+
+        server.apiMutex.lock();
+        scope(exit) server.apiMutex.unlock();
+
+        if (server.rateLimiter && server.rateLimiter.isBlocked())
+        {
+            sendResult(false, displayName, "Rate limited by VRChat, try again later");
+            return;
+        }
+
+        try
+        {
+            string path = "/user/" ~ userId ~ "/friendRequest";
+            HTTPResponse resp = action == "send"
+                ? server.httpClient.postJSON(path, "{}")
+                : server.httpClient.del(path);
+            logDebugging("handleFriendRequest: %s user=%s -> HTTP %d",
+                action, userId, resp.code);
+            if (server.rateLimiter)
+            {
+                server.rateLimiter.update(resp);
+                server.broadcastStatus();
+            }
+
+            // Whatever came back, the cached `friendRequestStatus` is now
+            // either wrong or in doubt.
+            server.userProfiles.forget(userId);
+
+            if (resp.code >= 200 && resp.code < 300)
+                sendResult(true, displayName, null);
+            else
+                sendResult(false, displayName, vrchatError(resp));
         }
         catch (Exception e)
         {

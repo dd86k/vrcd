@@ -38,6 +38,7 @@ Rules:
   links to their profile or group.
 - Inbox: the tab badge counts unread notifications, cleared on viewing.
 - Inbox: newest or oldest first, remembered.
+- Send or cancel a friend request from a stranger's profile.
 
 ### Server
 
@@ -50,6 +51,7 @@ Rules:
 - Member-side group actions, and a group list kept current from group events.
 - Serves a group's current announcement.
 - Notifications made by rules survive a restart.
+- Sends and cancels friend requests.
 
 ### Web
 
@@ -57,6 +59,7 @@ Rules:
 - Browser alerts for rule notifications while the page is open (needs HTTPS).
 - Groups (TOOLS > GROUPS), same as the client.
 - Group announcements can be read in full, same as the client.
+- ADD FRIEND and CANCEL REQUEST on a stranger's pane.
 
 ### Packaging
 
@@ -74,6 +77,7 @@ Rules:
 - Protocol version 18: groups (`get_groups`, `get_group`, `group_action`,
   `groups`).
 - Protocol version 19: `get_group_announcement`.
+- Protocol version 20: `friend_request`, `friend_request_result`.
 
 ## v0.4.1
 

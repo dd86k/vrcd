@@ -77,6 +77,8 @@ struct UserProfile
     string trustRank;
     string[] languages;
     bool isFriend;
+    /// "outgoing", "incoming", or empty when no request is pending.
+    string friendRequestStatus;
     bool moderator;
     bool troll;
     string imageFileId;
@@ -135,6 +137,7 @@ UserProfile parseUserProfile(ref JSONValue user)
     profile.trustRank         = text("trustRank");
     profile.languages         = strings("languages");
     profile.isFriend          = flag("isFriend");
+    profile.friendRequestStatus = text("friendRequestStatus");
     profile.moderator         = flag("moderator");
     profile.troll             = flag("troll");
     profile.imageFileId       = text("imageFileId");
@@ -408,7 +411,7 @@ unittest
         "bioLinks": ["https://example.com", ""], "pronouns": "they/them",
         "platform": "standalonewindows", "dateJoined": "2019-04-01",
         "trustRank": "Known User", "languages": ["eng","fra"],
-        "isFriend": true, "moderator": false, "troll": false,
+        "isFriend": true, "friendRequestStatus": "outgoing", "moderator": false, "troll": false,
         "note": "met at the pug", "imageFileId": "file_av", "imageVersion": 3,
         "badges": [
             {"id":"bdg_1","name":"Early","showcased":false},
@@ -425,6 +428,7 @@ unittest
     assert(profile.dateJoined == "2019-04-01");
     assert(profile.note == "met at the pug");
     assert(profile.isFriend);
+    assert(profile.friendRequestStatus == "outgoing");
     assert(profile.troll == false);
     assert(profile.imageFileId == "file_av");
     assert(profile.imageVersion == 3);

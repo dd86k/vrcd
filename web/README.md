@@ -125,7 +125,7 @@ appears.
 | GET | `/api/content/:section` | cookie | One section's entries, and the fetch that fills them. `?refresh=1` re-lists, `?more=1` asks for the next page |
 | POST | `/api/content` | cookie | `{"action":"...","id":"...","slot":"drone"}` -- see below |
 | POST | `/api/upload` | cookie | `{"tag":"gallery"\|"icon"\|"sticker"\|"emoji"\|"print","data_base64":"...","note":"..."}` |
-| POST | `/api/moderation` | cookie | `{"action":"mute"\|"unmute"\|"block"\|"unblock"\|"unfriend","user_id":"usr_..."}`, or `{"action":"refresh"}` to re-list |
+| POST | `/api/moderation` | cookie | `{"action":"mute"\|"unmute"\|"block"\|"unblock"\|"unfriend"\|"friend_request"\|"cancel_friend_request","user_id":"usr_..."}`, or `{"action":"refresh"}` to re-list |
 | GET | `/api/user/:user_id` | cookie | One person's full profile, and the fetch that fills it |
 | GET | `/api/badge?url=` | cookie | One proxied badge image, by the URL a profile carries |
 | GET | `/api/image/:file_id` | cookie | One proxied VRChat image, `?v=` version and `?size=` edge |
@@ -177,15 +177,16 @@ behind.
 blocks and names nobody; the rest name a `user_id`, which is checked for shape
 here because it lands in a path vrcd-server builds. Only the characters are
 checked, not the `usr_` prefix: VRChat accounts old enough predate it and can
-still be muted. `unfriend` is not a player moderation and takes a different call
-on the other side, but it comes back through the same result slot: both are
-"something was done to a person", and the page offers one at a time.
+still be muted. `unfriend`, `friend_request` and `cancel_friend_request` are
+not player moderations and take different calls on the other side, but they
+come back through the same result slot: all are "something was done to a
+person", and the page offers one at a time.
 
 Browser-to-server actions go over plain HTTP rather than up the socket, which
 keeps the WebSocket unidirectional. They are fire and forget: the outcome comes
 back from vrcd-server as a `join_instance_result`, a
 `notification_action_result`, a `set_status_result`, a `moderate_result`, an
-`unfriend_result` or one of the content results, and reaches the page in the
+`unfriend_result`, a `friend_request_result` or one of the content results, and reaches the page in the
 next state broadcast, which is also what drops an answered notification from the
 inbox. An action other than the ones listed is refused here rather than
 travelling down to vrcd-server to be refused there.
@@ -628,7 +629,7 @@ TCP client for the vrcd-server JSON-L API, on its own thread.
   `inventory_action_result`, `delete_file_result`, `delete_print_result`,
   `set_user_icon_result`, `upload_image_result`, `upload_print_result`,
   `image`, `set_status_result`, `moderations`, `moderate_result`,
-  `unfriend_result`, `auth_request`, `auth_cancelled`, `ping`, `error`.
+  `unfriend_result`, `friend_request_result`, `auth_request`, `auth_cancelled`, `ping`, `error`.
   Everything else is logged and dropped.
 - `self()`, `status()`, `roster()`, `joinResult()`, `notifications()`,
   `notifyResult()`, `statusResult()`, `authPrompt()`, `content(section)`,
@@ -801,8 +802,8 @@ there, empty lists included, for the same reason `notifications` is: "nobody is
 blocked" and "the link has not answered yet" are different things, and `loaded`
 is what tells them apart. Its entries do ride along, unlike the content
 sections: a name and an ID each, against a roster in the same message that is
-many times their size. `moderation_action` is absent until a mute, block or
-unfriend has been asked for this session, and carries the display name because
+many times their size. `moderation_action` is absent until a mute, block,
+unfriend or friend request has been asked for this session, and carries the display name because
 the toast names whoever it was aimed at -- vrcd-server fills that in from its
 roster or from VRChat's answer, so it survives a name this side never had.
 `debug` is there only when the debugging
@@ -892,6 +893,14 @@ none of them are aimed at yourself. `friend` tells the pane whether UNFRIEND
 belongs in that set, and is read from the roster rather than from the profile's
 `isFriend`, so accepting a request promotes the pane within a snapshot instead
 of waiting on a fetch.
+
+A stranger's pane offers ADD FRIEND in place of UNFRIEND, or CANCEL REQUEST
+when one is already out. That one is read from the profile's
+`friendRequestStatus`, since the roster has nothing to say about a request, so
+the button waits for the fetch, and every result drops the profile at all three
+levels for the next look to see where the request now stands. Add arms first
+like block: the other side sees it. Cancel is one tap. An incoming request gets
+neither, since the inbox already offers its accept.
 
 ### Status
 

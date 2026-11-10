@@ -274,7 +274,8 @@ function toolSections() {
    name of whoever it was aimed at is appended. */
 var MOD_DONE = {
     mute: "Muted", unmute: "Unmuted", block: "Blocked", unblock: "Unblocked",
-    unfriend: "Unfriended"
+    unfriend: "Unfriended", friend_request: "Friend request sent to",
+    cancel_friend_request: "Friend request cancelled for"
 };
 
 /* The STUFF sections, in the order the switcher shows them. The first four are
@@ -3100,6 +3101,28 @@ function moderationActions(actions, id, canUnfriend) {
             busy, function (label) { return modButton(id, "unfriend", label, busy); });
 }
 
+/* ADD FRIEND for a stranger, or CANCEL REQUEST when one is already out. Only
+   the profile knows which, so nothing is drawn until it lands. An incoming
+   request gets neither: the inbox already offers its accept. */
+function friendRequestAction(actions, id, full) {
+    if (full === null) return;
+    var busy = pendingModerations[id] === true;
+
+    switch (full.friendRequestStatus || "") {
+    case "outgoing":
+        actions.appendChild(modButton(id, "cancel_friend_request",
+            "CANCEL REQUEST", busy));
+        break;
+    case "":
+        // Armed like block: the other side sees it.
+        appendArmed(actions, "friend|" + id, "ADD FRIEND", "CONFIRM ADD FRIEND",
+            busy, function (label) {
+                return modButton(id, "friend_request", label, busy);
+            });
+        break;
+    }
+}
+
 function modButton(id, action, label, busy) {
     var button = el("button", "act", label);
     button.disabled = busy || state.connected === false;
@@ -4587,6 +4610,7 @@ function renderProfile(body, person, opts) {
         if (watch) actions.appendChild(watch);
     }
     actions.appendChild(copyButton("Copy user ID", p.id));
+    if (opts.moderate && opts.friend === false) friendRequestAction(actions, p.id, full);
     // Last, and only for someone else: nothing here is aimed at yourself, and
     // the pane's own order is what keeps a block away from a self-invite.
     if (opts.moderate) moderationActions(actions, p.id, opts.friend === true);
@@ -5979,6 +6003,11 @@ function reportModeration(seeding) {
 
     delete pendingModerations[result.user_id];
     armedAction = "";
+    // Its `friendRequestStatus` is what the button is drawn from, and the
+    // link and vrcd-server have both dropped their copies already.
+    if (result.action === "friend_request" ||
+        result.action === "cancel_friend_request")
+        delete profiles[result.user_id];
     // The pane redraws whichever tab it is on: a friend's buttons are the same
     // ones under online as under tools.
     if (view.tab === "tools") renderList();
